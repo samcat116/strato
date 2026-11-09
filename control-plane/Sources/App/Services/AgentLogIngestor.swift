@@ -15,15 +15,15 @@ protocol AgentLoggedResourceMessage: Sendable {
 
 extension SandboxLogMessage: AgentLoggedResourceMessage {
     static var resourceKind: String { "sandbox" }
-    var owningResourceID: String { sandboxId }
-    var retainedLogBytes: Int { requestId.utf8.count + sandboxId.utf8.count + stream.utf8.count + message.utf8.count }
+    var owningResourceID: String { sandboxID }
+    var retainedLogBytes: Int { requestId.utf8.count + sandboxID.utf8.count + stream.utf8.count + message.utf8.count }
 }
 
 extension VMLogMessage: AgentLoggedResourceMessage {
     static var resourceKind: String { "vm" }
-    var owningResourceID: String { vmId }
+    var owningResourceID: String { vmID }
     var retainedLogBytes: Int {
-        requestId.utf8.count + vmId.utf8.count + message.utf8.count + (operation?.utf8.count ?? 0)
+        requestId.utf8.count + vmID.utf8.count + message.utf8.count + (hasOperation ? operation.utf8.count : 0)
     }
 }
 

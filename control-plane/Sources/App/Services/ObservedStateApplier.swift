@@ -216,25 +216,33 @@ struct ObservedStateApplier {
         at instant: ClusterInstant,
         on database: (any Database)? = nil
     ) async throws -> UnrecognizedOutcome {
+        try report.validateProtocol()
+        var normalized = report
+        try normalized.normalizeProtocolIdentifiers()
+        let report = normalized
         let db = database ?? app.db
 
         // Network observations are independent of the workload manifest. A
         // host can fail to enumerate its local VM store while its site's OVN
         // author still has a valid view of shared load-balancer rows.
-        if let loadBalancers = report.loadBalancers {
-            try await applyObservedLoadBalancers(loadBalancers, reportedBy: report.agentId, on: db)
+        if report.hasLoadBalancers {
+            let loadBalancers = report.loadBalancers.values
+            try await applyObservedLoadBalancers(loadBalancers, reportedBy: report.agentID, on: db)
         }
-        if let networks = report.networks {
+        if report.hasNetworks {
+            let networks = report.networks.values
             try await applyObservedNetworks(
-                networks, reportedBy: report.agentId, at: instant, on: db)
+                networks, reportedBy: report.agentID, at: instant, on: db)
         }
-        if let securityGroups = report.securityGroups {
+        if report.hasSecurityGroups {
+            let securityGroups = report.securityGroups.values
             try await applyObservedSecurityGroups(
-                securityGroups, reportedBy: report.agentId, at: instant, on: db)
+                securityGroups, reportedBy: report.agentID, at: instant, on: db)
         }
-        if let portMemberships = report.portMemberships {
+        if report.hasPortMemberships {
+            let portMemberships = report.portMemberships.values
             try await applyObservedPortMemberships(
-                portMemberships, reportedBy: report.agentId, at: instant, on: db)
+                portMemberships, reportedBy: report.agentID, at: instant, on: db)
         }
 
         // A report from an agent that cannot read its own workload manifest
@@ -247,18 +255,19 @@ struct ObservedStateApplier {
         // `.error`. Nothing here may run against a blind report; the agent's
         // resources and the condition itself are folded in by the caller,
         // which is the whole useful content of such a report.
-        if let manifest = report.manifestStatus, !manifest.inventoryComplete {
+        if report.hasManifestStatus, !report.manifestStatus.inventoryComplete {
+            let manifest = report.manifestStatus
             app.logger.warning(
                 "Ignoring the workload half of an observed-state report: the agent cannot enumerate its own workloads",
                 metadata: [
-                    "strato.agent.id": .string(report.agentId),
+                    "strato.agent.id": .string(report.agentID),
                     "reason": .string(manifest.reason),
                 ])
             return UnrecognizedOutcome()
         }
 
         let reported = Dictionary(
-            report.vms.map { ($0.vmId, $0) },
+            try report.vms.values.map { (try UUID(protocolString: $0.vmID), $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
@@ -270,19 +279,19 @@ struct ObservedStateApplier {
         var unrecognizedOutcome = try await applyUnrecognizedWorkloads(report, on: db)
 
         let dbVMs = try await VM.query(on: db)
-            .filter(\.$hypervisorId == report.agentId)
+            .filter(\.$hypervisorId == report.agentID)
             .all()
 
         // Sandboxes apply with the same shape as VMs: settled observations
         // update the row and resolve pending operations; absence either
         // confirms a deletion or escalates a lost sandbox.
         let reportedSandboxes = Dictionary(
-            report.sandboxes.map { ($0.sandboxId, $0) },
+            try report.sandboxes.values.map { (try UUID(protocolString: $0.sandboxID), $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
         let dbSandboxes = try await Sandbox.query(on: db)
-            .filter(\.$hypervisorId == report.agentId)
+            .filter(\.$hypervisorId == report.agentID)
             .all()
 
         // Only a workload no agent has ever confirmed can still own a placement
@@ -306,7 +315,7 @@ struct ObservedStateApplier {
             }
         if !accountedReservationIDs.isEmpty {
             await app.coordination.releaseReservations(
-                agentId: report.agentId,
+                agentId: report.agentID,
                 vmIds: accountedReservationIDs
             )
         }
@@ -316,8 +325,8 @@ struct ObservedStateApplier {
         // without QGA payloads pay no NIC query at all.
         let interfaceVMIDs = dbVMs.compactMap { vm -> UUID? in
             guard let vmID = vm.id, let observed = reported[vmID] else { return nil }
-            if observed.appliedNetworkInterfaceIds != nil { return vmID }
-            if observed.guestInfo != nil {
+            if observed.hasAppliedNetworkInterfaceIds { return vmID }
+            if observed.hasGuestInfo {
                 return vmID
             }
             if Self.guestInfoClearedByStatus.contains(observed.status),
@@ -348,55 +357,56 @@ struct ObservedStateApplier {
         // omits `volumes` entirely, and treating that silence as an empty,
         // authoritative inventory would reap terminating rows and error live
         // ones.
-        if let reportedVolumeList = report.volumes {
+        if report.hasVolumes {
+            let reportedVolumeList = report.volumes.values
             let reportedVolumes = Dictionary(
-                reportedVolumeList.map { ($0.volumeId, $0) },
+                try reportedVolumeList.map { (try UUID(protocolString: $0.volumeID), $0) },
                 uniquingKeysWith: { first, _ in first }
             )
-            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentID, on: db)
             let accountedVolumeReservationIDs = dbVolumes.compactMap { volume -> String? in
                 guard let id = volume.id, volume.observedGeneration == 0,
                     let observed = reportedVolumes[id]
                 else { return nil }
                 let terminalCreateFailure =
-                    observed.lastError != nil
+                    observed.hasLastError
                     && observed.failedGeneration == volume.generation
-                    && (observed.failureClassification == nil
+                    && (!observed.hasFailureClassification
                         || observed.failureClassification == .permanent)
                 guard observed.present || terminalCreateFailure else { return nil }
                 return VolumeService.volumeReservationID(id)
             }
             if !accountedVolumeReservationIDs.isEmpty {
                 await app.coordination.releaseReservations(
-                    agentId: report.agentId,
+                    agentId: report.agentID,
                     vmIds: accountedVolumeReservationIDs)
             }
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
                     let desiredStateChanged = try await withLockedCurrent(
-                        volume, reportedBy: report.agentId, on: db
+                        volume, reportedBy: report.agentID, on: db
                     ) {
                         volume, tx in
                         return try await applyObservedVolumeState(
-                            volume: volume, observed: observed, agentId: report.agentId,
+                            volume: volume, observed: observed, agentId: report.agentID,
                             at: instant, on: tx)
                     }
                     unrecognizedOutcome.desiredStateChanged =
                         unrecognizedOutcome.desiredStateChanged || desiredStateChanged == true
                 } else {
                     let abandonedCreate = try await withLockedCurrent(
-                        volume, reportedBy: report.agentId, on: db
+                        volume, reportedBy: report.agentID, on: db
                     ) {
                         volume, tx in
                         let wasTerminating = volume.isTerminating
                         try await handleReportedVolumeAbsence(
-                            volume: volume, agentId: report.agentId, on: tx)
+                            volume: volume, agentId: report.agentID, on: tx)
                         return wasTerminating
                     }
                     if abandonedCreate == true {
                         await app.coordination.releaseReservation(
-                            agentId: report.agentId,
+                            agentId: report.agentID,
                             vmId: VolumeService.volumeReservationID(volumeID))
                     }
                 }
@@ -407,7 +417,7 @@ struct ObservedStateApplier {
         // application so the snapshot includes this heartbeat's observed size,
         // phase, and attachment.
         let bootVolumesByVMID: [UUID: [BootVolumeDependency]]
-        if report.volumes != nil {
+        if report.hasVolumes {
             let vmIDs = dbVMs.compactMap(\.id)
             if vmIDs.isEmpty {
                 bootVolumesByVMID = [:]
@@ -428,16 +438,16 @@ struct ObservedStateApplier {
             guard let vmID = vm.id else { continue }
             if let observed = reported[vmID] {
                 let interfaces = interfacesByVMID[vmID] ?? []
-                try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
+                try await withLockedCurrent(vm, reportedBy: report.agentID, on: db) { vm, tx in
                     try await applyObservedVMState(
                         vm: vm, observed: observed, interfaces: interfaces,
-                        bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
+                        bootVolumes: !report.hasVolumes ? nil : bootVolumesByVMID[vmID] ?? [],
                         at: instant, on: tx)
                 }
             } else {
-                try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
+                try await withLockedCurrent(vm, reportedBy: report.agentID, on: db) { vm, tx in
                     try await handleReportedAbsence(
-                        vm: vm, agentId: report.agentId, at: instant, on: tx)
+                        vm: vm, agentId: report.agentID, at: instant, on: tx)
                 }
             }
         }
@@ -445,16 +455,16 @@ struct ObservedStateApplier {
         for sandbox in dbSandboxes {
             guard let sandboxID = sandbox.id else { continue }
             if let observed = reportedSandboxes[sandboxID] {
-                try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
+                try await withLockedCurrent(sandbox, reportedBy: report.agentID, on: db) {
                     sandbox, tx in
                     try await applyObservedSandboxState(
                         sandbox: sandbox, observed: observed, at: instant, on: tx)
                 }
             } else {
-                try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
+                try await withLockedCurrent(sandbox, reportedBy: report.agentID, on: db) {
                     sandbox, tx in
                     try await handleReportedSandboxAbsence(
-                        sandbox: sandbox, agentId: report.agentId, at: instant, on: tx)
+                        sandbox: sandbox, agentId: report.agentID, at: instant, on: tx)
                 }
             }
         }
@@ -464,19 +474,20 @@ struct ObservedStateApplier {
         // empty list the control plane believed would reap every checkpoint row
         // it holds for this agent, and a checkpoint is a point in time nothing
         // can recreate.
-        if let reportedSnapshotList = report.snapshots {
+        if report.hasSnapshots {
+            let reportedSnapshotList = report.snapshots.values
             let reported = Dictionary(
-                reportedSnapshotList.map { ($0.snapshotId, $0) },
+                try reportedSnapshotList.map { (try UUID(protocolString: $0.snapshotID), $0) },
                 uniquingKeysWith: { first, _ in first }
             )
             try await applyObservedSnapshots(
-                VolumeSnapshot.self, reported: reported, agentId: report.agentId,
+                VolumeSnapshot.self, reported: reported, agentId: report.agentID,
                 at: instant, on: db)
             try await applyObservedSnapshots(
-                VMSnapshot.self, reported: reported, agentId: report.agentId,
+                VMSnapshot.self, reported: reported, agentId: report.agentID,
                 at: instant, on: db)
             try await applyObservedSnapshots(
-                SandboxSnapshot.self, reported: reported, agentId: report.agentId,
+                SandboxSnapshot.self, reported: reported, agentId: report.agentID,
                 at: instant, on: db)
         }
 
@@ -506,7 +517,7 @@ struct ObservedStateApplier {
 
         guard let authority, !networkIDs.isEmpty else {
             for observed in observations {
-                recordUnauthorizedLoadBalancerObservation(observed.id, reportedBy: agentId)
+                recordUnauthorizedLoadBalancerObservation((try UUID(protocolString: observed.id)), reportedBy: agentId)
             }
             return
         }
@@ -514,7 +525,7 @@ struct ObservedStateApplier {
         // missing rows distinct: a recently deleted LB is ordinary stale
         // inventory, not evidence of an unauthorized reporter.
         let candidates = try await LoadBalancer.query(on: db)
-            .filter(\.$id ~~ observations.map(\.id))
+            .filter(\.$id ~~ (try observations.map { try UUID(protocolString: $0.id) }))
             .field(\.$id)
             .field(\.$logicalNetwork.$id)
             .all()
@@ -522,14 +533,17 @@ struct ObservedStateApplier {
             uniqueKeysWithValues: candidates.map { (try $0.requireID(), $0.$logicalNetwork.id) })
 
         for observed in observations {
-            guard let networkID = candidateNetworks[observed.id] else { continue }
+            guard let networkID = candidateNetworks[(try UUID(protocolString: observed.id))] else { continue }
             guard networkIDs.contains(networkID) else {
                 recordUnauthorizedLoadBalancerObservation(
-                    observed.id, logicalNetworkID: networkID, reportedBy: agentId)
+                    (try UUID(protocolString: observed.id)), logicalNetworkID: networkID, reportedBy: agentId)
                 continue
             }
             try await db.transaction { tx in
-                guard let loadBalancer = try await LoadBalancer.lockAndFetch(observed.id, on: tx) else {
+                guard
+                    let loadBalancer = try await LoadBalancer.lockAndFetch(
+                        (try UUID(protocolString: observed.id)), on: tx)
+                else {
                     return
                 }
                 // The scope is a report-level candidate set, not a lease on
@@ -540,7 +554,8 @@ struct ObservedStateApplier {
                     try await retainsLoadBalancerAuthority(authority, on: tx)
                 else {
                     recordUnauthorizedLoadBalancerObservation(
-                        observed.id, logicalNetworkID: loadBalancer.$logicalNetwork.id, reportedBy: agentId)
+                        (try UUID(protocolString: observed.id)), logicalNetworkID: loadBalancer.$logicalNetwork.id,
+                        reportedBy: agentId)
                     return
                 }
                 // A delayed report may describe a superseded desired row; it
@@ -557,26 +572,33 @@ struct ObservedStateApplier {
                     case .pending: .pending
                     case .active: .active
                     case .error: .error
+                    case .unspecified, .UNRECOGNIZED:
+                        throw Abort(.unprocessableEntity, reason: "Unknown load balancer status")
                     }
-                loadBalancer.lastError = observed.lastError
+                loadBalancer.lastError = observed.hasLastError ? observed.lastError : nil
                 try await loadBalancer.save(on: tx)
 
-                for backendObservation in observed.backends {
+                for backendObservation in observed.backends.values {
                     let health: LoadBalancerBackendHealth =
                         switch backendObservation.healthStatus {
                         case .unknown: .unknown
                         case .online: .online
                         case .offline: .offline
                         case .error: .error
+                        case .unspecified, .UNRECOGNIZED:
+                            throw Abort(.unprocessableEntity, reason: "Unknown backend health")
                         }
                     // Health reports own only these columns. Keep that
                     // ownership explicit and scope the write to this LB;
                     // missing or concurrently deleted backends stay absent.
                     try await LoadBalancerBackend.query(on: tx)
-                        .filter(\.$id == backendObservation.id)
-                        .filter(\.$loadBalancer.$id == observed.id)
+                        .filter(\.$id == (try UUID(protocolString: backendObservation.id)))
+                        .filter(\.$loadBalancer.$id == (try UUID(protocolString: observed.id)))
                         .set(\.$healthStatus, to: health)
-                        .set(\.$lastHealthCheckAt, to: backendObservation.lastCheckedAt)
+                        .set(
+                            \.$lastHealthCheckAt,
+                            to: (backendObservation.hasLastCheckedAt ? backendObservation.lastCheckedAt.date : nil)
+                        )
                         .update()
                 }
             }
@@ -625,11 +647,11 @@ struct ObservedStateApplier {
             try await db.transaction { tx in
                 guard
                     case .applied = try await DesiredStateGenerationWriter.lockCurrent(
-                        schema: LogicalNetwork.schema, id: observed.id, on: tx)
+                        schema: LogicalNetwork.schema, id: (try UUID(protocolString: observed.id)), on: tx)
                 else { return }
                 guard
                     let network = try await LogicalNetwork.query(on: tx)
-                        .filter(\.$id == observed.id)
+                        .filter(\.$id == (try UUID(protocolString: observed.id)))
                         .with(\.$site)
                         .first(),
                     network.site.$networkControllerAgent.id == reporterID
@@ -646,9 +668,9 @@ struct ObservedStateApplier {
                 applyFabricObservation(
                     observedGeneration: observed.observedGeneration,
                     status: observed.status,
-                    lastError: observed.lastError,
-                    failedGeneration: observed.failedGeneration,
-                    failureClassification: observed.failureClassification,
+                    lastError: observed.hasLastError ? observed.lastError : nil,
+                    failedGeneration: observed.hasFailedGeneration ? observed.failedGeneration : nil,
+                    failureClassification: observed.hasFailureClassification ? observed.failureClassification : nil,
                     at: instant,
                     to: network)
                 try await network.save(on: tx)
@@ -738,7 +760,7 @@ struct ObservedStateApplier {
         for observed in observations {
             try await db.transaction { tx in
                 if let nic = try await VMNetworkInterface.query(on: tx)
-                    .filter(\.$id == observed.interfaceId)
+                    .filter(\.$id == (try UUID(protocolString: observed.interfaceID)))
                     .with(\.$vm)
                     .first()
                 {
@@ -748,31 +770,35 @@ struct ObservedStateApplier {
                     // invalidating status. Whichever side commits last has
                     // therefore validated the membership it persists.
                     try await SecurityGroupService.lockMembership(
-                        interfaceID: observed.interfaceId, on: tx)
+                        interfaceID: (try UUID(protocolString: observed.interfaceID)), on: tx)
                     let current = try await VMInterfaceSecurityGroup.query(on: tx)
-                        .filter(\.$interface.$id == observed.interfaceId)
+                        .filter(\.$interface.$id == (try UUID(protocolString: observed.interfaceID)))
                         .all()
                         .map { $0.$securityGroup.id }
                         .sorted { $0.uuidString < $1.uuidString }
-                    guard current == observed.securityGroupIds else { return }
+                    guard current == (try observed.securityGroupIds.values.map { try UUID(protocolString: $0) }) else {
+                        return
+                    }
                     recordMembership(observed, at: instant, on: nic)
                     try await nic.save(on: tx)
                     return
                 }
                 if let nic = try await SandboxNetworkInterface.query(on: tx)
-                    .filter(\.$id == observed.interfaceId)
+                    .filter(\.$id == (try UUID(protocolString: observed.interfaceID)))
                     .with(\.$sandbox)
                     .first()
                 {
                     guard nic.sandbox.hypervisorId == agentId else { return }
                     try await SecurityGroupService.lockMembership(
-                        interfaceID: observed.interfaceId, on: tx)
+                        interfaceID: (try UUID(protocolString: observed.interfaceID)), on: tx)
                     let current = try await SandboxInterfaceSecurityGroup.query(on: tx)
-                        .filter(\.$interface.$id == observed.interfaceId)
+                        .filter(\.$interface.$id == (try UUID(protocolString: observed.interfaceID)))
                         .all()
                         .map { $0.$securityGroup.id }
                         .sorted { $0.uuidString < $1.uuidString }
-                    guard current == observed.securityGroupIds else { return }
+                    guard current == (try observed.securityGroupIds.values.map { try UUID(protocolString: $0) }) else {
+                        return
+                    }
                     recordMembership(observed, at: instant, on: nic)
                     try await nic.save(on: tx)
                 }
@@ -785,9 +811,9 @@ struct ObservedStateApplier {
         at instant: ClusterInstant,
         on nic: VMNetworkInterface
     ) {
-        nic.securityGroupStatus = observed.status.rawValue
-        nic.securityGroupLastError = observed.lastError
-        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
+        nic.securityGroupStatus = observed.status.protocolValue
+        nic.securityGroupLastError = observed.hasLastError ? observed.lastError : nil
+        nic.securityGroupLastErrorAt = !observed.hasLastError ? nil : instant.date
     }
 
     private func recordMembership(
@@ -795,9 +821,9 @@ struct ObservedStateApplier {
         at instant: ClusterInstant,
         on nic: SandboxNetworkInterface
     ) {
-        nic.securityGroupStatus = observed.status.rawValue
-        nic.securityGroupLastError = observed.lastError
-        nic.securityGroupLastErrorAt = observed.lastError == nil ? nil : instant.date
+        nic.securityGroupStatus = observed.status.protocolValue
+        nic.securityGroupLastError = observed.hasLastError ? observed.lastError : nil
+        nic.securityGroupLastErrorAt = !observed.hasLastError ? nil : instant.date
     }
 
     // MARK: - Unrecognized workloads (STR-98)
@@ -827,18 +853,20 @@ struct ObservedStateApplier {
         on db: Database
     ) async throws -> UnrecognizedOutcome {
         let existingClaims = try await AgentWorkloadClaim.query(on: db)
-            .filter(\.$agentId == report.agentId)
+            .filter(\.$agentId == report.agentID)
             .all()
 
         // Everything this report mentions at all: an id that has dropped out
         // of both lists is gone from the host, which retires its claim.
         var mentioned: Set<ResourceKey> = []
-        for vm in report.vms { mentioned.insert(ResourceKey(kind: .virtualMachine, id: vm.vmId)) }
-        for sandbox in report.sandboxes {
-            mentioned.insert(ResourceKey(kind: .sandbox, id: sandbox.sandboxId))
+        for vm in report.vms.values {
+            mentioned.insert(ResourceKey(kind: .virtualMachine, id: try UUID(protocolString: vm.vmID)))
         }
-        for entry in report.unrecognized {
-            mentioned.insert(ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId))
+        for sandbox in report.sandboxes.values {
+            mentioned.insert(ResourceKey(kind: .sandbox, id: try UUID(protocolString: sandbox.sandboxID)))
+        }
+        for entry in report.unrecognized.values {
+            mentioned.insert(ResourceKey(kind: entry.kind.resourceKind, id: try UUID(protocolString: entry.workloadID)))
         }
 
         var claimsByKey = Dictionary(
@@ -857,7 +885,9 @@ struct ObservedStateApplier {
         // the tombstone anyway; leaving the claim would ship a contradictory
         // "keep this / destroy this" pair on every sync forever.
         let reportedUnrecognized = Set(
-            report.unrecognized.map { ResourceKey(kind: $0.kind.resourceKind, id: $0.workloadId) })
+            try report.unrecognized.values.map {
+                ResourceKey(kind: $0.kind.resourceKind, id: try UUID(protocolString: $0.workloadID))
+            })
         let revivable = claimsByKey.filter {
             $0.value.disposition == .tombstoned && !reportedUnrecognized.contains($0.key)
                 && !staleClaims.keys.contains($0.key)
@@ -895,7 +925,7 @@ struct ObservedStateApplier {
                 app.logger.info(
                     "Agent no longer holds a workload it claimed; claim retired",
                     metadata: [
-                        "strato.agent.id": .string(report.agentId),
+                        "strato.agent.id": .string(report.agentID),
                         "resourceKind": .string(key.kind.rawValue),
                         "resourceId": .string(key.id.uuidString),
                         "disposition": .string(claim.disposition.rawValue),
@@ -912,12 +942,16 @@ struct ObservedStateApplier {
         where claim.disposition == .held && !reportedUnrecognized.contains(key) {
             outcome.heldByReason[claim.reasonBucket, default: 0] += 1
         }
-        guard !report.unrecognized.isEmpty else { return outcome }
+        guard !report.unrecognized.values.isEmpty else { return outcome }
 
         // One query per kind for the rows behind the reported ids — including
         // rows placed on *other* agents, which is the whole re-point signal.
-        let vmIDs = report.unrecognized.filter { $0.kind == .vm }.map(\.workloadId)
-        let sandboxIDs = report.unrecognized.filter { $0.kind == .sandbox }.map(\.workloadId)
+        let vmIDs = try report.unrecognized.values.filter { $0.kind == .vm }.map {
+            try UUID(protocolString: $0.workloadID)
+        }
+        let sandboxIDs = try report.unrecognized.values.filter { $0.kind == .sandbox }.map {
+            try UUID(protocolString: $0.workloadID)
+        }
         var vmPlacements: [UUID: WorkloadPlacement] = [:]
         if !vmIDs.isEmpty {
             for vm in try await VM.query(on: db).filter(\.$id ~~ vmIDs).all() {
@@ -932,13 +966,15 @@ struct ObservedStateApplier {
                 sandboxPlacements[id] = WorkloadPlacement(agentId: sandbox.hypervisorId)
             }
         }
-        let volumeIDs = report.unrecognized.filter { $0.kind == .volume }.map(\.workloadId)
+        let volumeIDs = try report.unrecognized.values.filter { $0.kind == .volume }.map {
+            try UUID(protocolString: $0.workloadID)
+        }
         var volumePlacements: [UUID: WorkloadPlacement] = [:]
         if !volumeIDs.isEmpty {
             let replicas = try await VolumeService.replicas(volumeIDs: volumeIDs, on: db)
             for volumeID in volumeIDs {
                 guard let rows = replicas[volumeID] else { continue }
-                let placed = rows.first(where: { $0.agentId == report.agentId }) ?? rows.first
+                let placed = rows.first(where: { $0.agentId == report.agentID }) ?? rows.first
                 volumePlacements[volumeID] = WorkloadPlacement(agentId: placed?.agentId)
             }
         }
@@ -959,20 +995,22 @@ struct ObservedStateApplier {
         // stale-delete note above for why this path can't afford a round trip
         // per workload.
         var newClaims: [AgentWorkloadClaim] = []
-        for entry in report.unrecognized {
-            let key = ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId)
+        for entry in report.unrecognized.values {
+            let workloadID = try UUID(protocolString: entry.workloadID)
+            let key = ResourceKey(kind: entry.kind.resourceKind, id: workloadID)
             // An exhaustive switch, not a ternary: the two-kind ternary this
             // replaces would have silently bucketed a volume entry into the
             // sandbox lookup, and "no sandbox row with that id" reads as "no
             // row at all" — which is what authorizes a teardown.
             let placement: WorkloadPlacement?
             switch entry.kind {
-            case .vm: placement = vmPlacements[entry.workloadId]
-            case .sandbox: placement = sandboxPlacements[entry.workloadId]
-            case .volume: placement = volumePlacements[entry.workloadId]
-            case .volumeSnapshot: placement = snapshotPlacements[entry.workloadId]
-            case .vmCheckpoint: placement = snapshotPlacements[entry.workloadId]
-            case .sandboxSnapshot: placement = snapshotPlacements[entry.workloadId]
+            case .vm: placement = vmPlacements[workloadID]
+            case .sandbox: placement = sandboxPlacements[workloadID]
+            case .volume: placement = volumePlacements[workloadID]
+            case .volumeSnapshot: placement = snapshotPlacements[workloadID]
+            case .vmCheckpoint: placement = snapshotPlacements[workloadID]
+            case .sandboxSnapshot: placement = snapshotPlacements[workloadID]
+            case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
             }
             let existing = claimsByKey[key]
 
@@ -985,7 +1023,7 @@ struct ObservedStateApplier {
                     existing?.disposition != .tombstoned || existing?.tombstoneGeneration != generation
                 try await upsertClaim(
                     existing,
-                    agentId: report.agentId,
+                    agentId: report.agentID,
                     key: key,
                     disposition: .tombstoned,
                     tombstoneGeneration: generation,
@@ -998,10 +1036,10 @@ struct ObservedStateApplier {
                     app.logger.notice(
                         "Agent holds a workload with no control-plane record; authorizing teardown",
                         metadata: [
-                            "strato.agent.id": .string(report.agentId),
+                            "strato.agent.id": .string(report.agentID),
                             "resourceKind": .string(key.kind.rawValue),
                             "resourceId": .string(key.id.uuidString),
-                            "observedStatus": .string(entry.status ?? "unknown"),
+                            "observedStatus": .string((entry.hasStatus ? entry.status : "unknown")),
                             "tombstoneGeneration": .stringConvertible(generation),
                         ])
                     Telemetry.workloadTombstoned(kind: key.kind.rawValue)
@@ -1012,14 +1050,14 @@ struct ObservedStateApplier {
             // A row exists. Nothing here can authorize a teardown — this is
             // the control plane failing to describe a workload it owns, and
             // destroying it would be acting on our own bug.
-            let onThisAgent = placement.agentId == report.agentId
+            let onThisAgent = placement.agentId == report.agentID
             let reason =
                 onThisAgent
                 ? AgentWorkloadClaim.heldRowPresentReason
                 : AgentWorkloadClaim.heldOnOtherAgentReason(placement.agentId ?? "none")
             try await upsertClaim(
                 existing,
-                agentId: report.agentId,
+                agentId: report.agentID,
                 key: key,
                 disposition: .held,
                 tombstoneGeneration: nil,
@@ -1033,10 +1071,10 @@ struct ObservedStateApplier {
                     : AgentWorkloadClaim.heldOtherAgentBucket, default: 0] += 1
             if existing?.disposition != .held || existing?.reason != reason {
                 var metadata: Logger.Metadata = [
-                    "strato.agent.id": .string(report.agentId),
+                    "strato.agent.id": .string(report.agentID),
                     "resourceKind": .string(key.kind.rawValue),
                     "resourceId": .string(key.id.uuidString),
-                    "observedStatus": .string(entry.status ?? "unknown"),
+                    "observedStatus": .string((entry.hasStatus ? entry.status : "unknown")),
                 ]
                 if let placementAgentID = placement.agentId {
                     metadata["strato.agent.placement.id"] = .string(placementAgentID)
@@ -1087,7 +1125,7 @@ struct ObservedStateApplier {
                     tombstoneGeneration: tombstoneGeneration,
                     reason: reason,
                     observedGeneration: entry.observedGeneration,
-                    observedStatus: entry.status
+                    observedStatus: entry.hasStatus ? entry.status : nil
                 ))
             return
         }
@@ -1096,13 +1134,13 @@ struct ObservedStateApplier {
                 || claim.tombstoneGeneration != tombstoneGeneration
                 || claim.reason != reason
                 || claim.observedGeneration != entry.observedGeneration
-                || claim.observedStatus != entry.status
+                || claim.observedStatus != (entry.hasStatus ? entry.status : nil)
         else { return }  // unchanged: don't churn the row on every report
         claim.disposition = disposition
         claim.tombstoneGeneration = tombstoneGeneration
         claim.reason = reason
         claim.observedGeneration = entry.observedGeneration
-        claim.observedStatus = entry.status
+        claim.observedStatus = entry.hasStatus ? entry.status : nil
         try await claim.save(on: db)
     }
 

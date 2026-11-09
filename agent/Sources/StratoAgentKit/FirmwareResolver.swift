@@ -89,13 +89,13 @@ public enum FirmwareResolver {
         public var description: String {
             if secureBoot {
                 return
-                    "no Secure Boot firmware pair found for \(architecture.rawValue). Install the signed EDK2 build "
+                    "no Secure Boot firmware pair found for \(architecture.protocolValue). Install the signed EDK2 build "
                     + "(Debian/Ubuntu: `apt install ovmf` provides OVMF_CODE_4M.secboot.fd + OVMF_VARS_4M.ms.fd) "
                     + "or set secure_boot_firmware_code_path and secure_boot_firmware_vars_template "
                     + "in the agent configuration."
             }
             return
-                "no UEFI firmware found for \(architecture.rawValue). Install EDK2 firmware "
+                "no UEFI firmware found for \(architecture.protocolValue). Install EDK2 firmware "
                 + "(Debian/Ubuntu: `apt install ovmf qemu-efi-aarch64`, macOS: bundled with `brew install qemu`) "
                 + "or set firmware_code_path and firmware_vars_template in the agent configuration."
         }
@@ -262,20 +262,22 @@ public enum FirmwareResolver {
             return prefixes.map {
                 Pair(code: "\($0)/edk2-aarch64-code.fd", vars: "\($0)/edk2-arm-vars.fd")
             }
-        case .x86_64:
+        case .x8664:
             return prefixes.map {
                 Pair(code: "\($0)/edk2-x86_64-code.fd", vars: "\($0)/edk2-i386-vars.fd")
             }
+        case .unspecified, .UNRECOGNIZED:
+            return []
         }
         #else
         switch (architecture, secureBoot) {
-        case (.x86_64, false):
+        case (.x8664, false):
             return [
                 Pair(code: "/usr/share/OVMF/OVMF_CODE_4M.fd", vars: "/usr/share/OVMF/OVMF_VARS_4M.fd"),
                 Pair(code: "/usr/share/OVMF/OVMF_CODE.fd", vars: "/usr/share/OVMF/OVMF_VARS.fd"),
                 Pair(code: "/usr/share/edk2/ovmf/OVMF_CODE.fd", vars: "/usr/share/edk2/ovmf/OVMF_VARS.fd"),
             ]
-        case (.x86_64, true):
+        case (.x8664, true):
             return [
                 Pair(
                     code: "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd",
@@ -299,6 +301,8 @@ public enum FirmwareResolver {
                     code: "/usr/share/edk2/aarch64/QEMU_EFI-silent-pflash.raw",
                     vars: "/usr/share/edk2/aarch64/vars-template-pflash.raw"),
             ]
+        case (.unspecified, _), (.UNRECOGNIZED, _):
+            return []
         }
         #endif
     }
@@ -315,8 +319,10 @@ public enum FirmwareResolver {
         switch architecture {
         case .arm64:
             return ["/opt/homebrew/share/qemu/edk2-aarch64-code.fd"]
-        case .x86_64:
+        case .x8664:
             return ["/opt/homebrew/share/qemu/edk2-x86_64-code.fd"]
+        case .unspecified, .UNRECOGNIZED:
+            return []
         }
         #else
         switch architecture {
@@ -326,12 +332,14 @@ public enum FirmwareResolver {
                 "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
                 "/usr/share/edk2/aarch64/QEMU_EFI.fd",
             ]
-        case .x86_64:
+        case .x8664:
             return [
                 "/usr/share/OVMF/OVMF_CODE.fd",
                 "/usr/share/edk2/ovmf/OVMF_CODE.fd",
                 "/usr/share/qemu/OVMF.fd",
             ]
+        case .unspecified, .UNRECOGNIZED:
+            return []
         }
         #endif
     }

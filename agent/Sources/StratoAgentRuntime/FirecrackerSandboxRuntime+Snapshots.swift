@@ -94,7 +94,7 @@ extension FirecrackerSandboxRuntime {
             metadata: [
                 "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
-                "mode": .string(mode.rawValue),
+                "mode": .string(mode.protocolValue),
             ])
 
         // Stage the archive directory before touching the guest, so a
@@ -186,7 +186,7 @@ extension FirecrackerSandboxRuntime {
             firecrackerVersion: info.vmlinuxVersion,
             guestControlProtocolVersion: guestControlProtocolVersion,
             forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion,
-            cpuTemplate: managed.spec.cpuTemplate)
+            cpuTemplate: managed.spec.hasCpuTemplate ? managed.spec.cpuTemplate : nil)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
@@ -231,7 +231,8 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
+            resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil,
+            enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -351,11 +352,12 @@ extension FirecrackerSandboxRuntime {
             newManager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(
-                    plan: plan, guestMemoryBytes: managed.spec.memoryBytes, resourceClass: managed.spec.resourceClass),
+                    plan: plan, guestMemoryBytes: managed.spec.memoryBytes,
+                    resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: !suspensionManagedRestore && managed.spec.resourceClass?.policy.kind != .burstable,
+                    resumeVM: !suspensionManagedRestore && managed.spec.resourceClass.policy.kind != .burstable,
                     networkOverrides: overrides),
                 validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: managed.spec))
         } else {
@@ -376,7 +378,7 @@ extension FirecrackerSandboxRuntime {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
                     memFilePath: archiveMemory,
-                    resumeVM: !suspensionManagedRestore && managed.spec.resourceClass?.policy.kind != .burstable,
+                    resumeVM: !suspensionManagedRestore && managed.spec.resourceClass.policy.kind != .burstable,
                     networkOverrides: overrides))
         }
 

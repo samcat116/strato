@@ -47,7 +47,7 @@ final class Image: Model, @unchecked Sendable {
 
     /// Guest CPU architecture. Authoritative for scheduling — the scheduler reads
     /// this single value rather than reconciling per-artifact architectures.
-    @Enum(key: "architecture")
+    @ProtocolEnum(key: "architecture")
     var architecture: CPUArchitecture
 
     /// Typed artifact set backing this image (disk-image, kernel, rootfs, ...).
@@ -141,6 +141,8 @@ extension Image {
             requiredKind = .diskImage
         case .firecracker:
             requiredKind = .rootfs
+        case .unspecified, .UNRECOGNIZED:
+            return nil
         }
         return ($artifacts.value ?? []).first { artifact in
             artifact.kind == requiredKind
@@ -356,7 +358,7 @@ struct ImageResponse: Content {
         self.defaultDisk = image.defaultDisk
         self.defaultCmdline = image.defaultCmdline
         self.artifacts = (image.$artifacts.value ?? []).map { $0.asPublic() }
-        self.compatibleHypervisors = image.compatibleHypervisors().sorted { $0.rawValue < $1.rawValue }
+        self.compatibleHypervisors = image.compatibleHypervisors().sorted { $0.protocolValue < $1.protocolValue }
         self.uploadedById = image.$uploadedBy.id
         self.createdAt = image.createdAt
         self.updatedAt = image.updatedAt

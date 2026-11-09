@@ -690,7 +690,7 @@ final class InputSizeBoundTests {
 
     @Test("POST /api/security-groups refuses an oversized name")
     func securityGroupNameCeiling() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             try await app.test(.POST, "/api/security-groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -704,7 +704,7 @@ final class InputSizeBoundTests {
 
     @Test("POST /api/volumes refuses an oversized name and an oversized description")
     func volumeCeilings() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             func post(name: String, description: String?) async throws -> HTTPStatus {
                 var status: HTTPStatus = .ok
                 try await app.test(.POST, "/api/volumes") { req in
@@ -779,7 +779,7 @@ final class InputSizeBoundTests {
     /// megabyte of name has been lowercased and split into labels.
     @Test("POST /api/dns-zones accepts a name at the DNS ceiling and refuses one past it")
     func dnsZoneNameCeiling() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             let atLimit = self.maximalDNSName
             #expect(atLimit.count == DNSName.maxNameLength)
             #expect(try await self.postZone(app, token, project, name: atLimit) == .ok)
@@ -804,7 +804,7 @@ final class InputSizeBoundTests {
     /// The field with no grammar and, before this, no bound at all.
     @Test("POST /api/dns-zones accepts a description at the ceiling and refuses one past it")
     func dnsZoneDescriptionCeiling() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             let status = try await self.postZone(
                 app, token, project, name: "described.internal",
                 description: self.string(Validate.textLength))
@@ -822,7 +822,7 @@ final class InputSizeBoundTests {
 
     @Test("POST /api/dns-zones/:id/records bounds the owner name at the DNS ceiling")
     func dnsRecordNameCeiling() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "records.internal") == .ok)
             let zoneID = try #require(
                 try await DNSZone.query(on: app.db).first()?.requireID())
@@ -846,7 +846,7 @@ final class InputSizeBoundTests {
     /// "required name" guard here would turn a documented spelling into a 400.
     @Test("An empty record name still means the zone apex")
     func dnsRecordEmptyNameIsApex() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "apex.internal") == .ok)
             let zoneID = try #require(try await DNSZone.query(on: app.db).first()?.requireID())
 
@@ -865,7 +865,7 @@ final class InputSizeBoundTests {
     /// leave the create-side bound decorative.
     @Test("A record's value is bounded on create and on update alike")
     func dnsRecordValueCeiling() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "txt.internal") == .ok)
             let zoneID = try #require(try await DNSZone.query(on: app.db).first()?.requireID())
 
@@ -906,7 +906,7 @@ final class InputSizeBoundTests {
     /// half-applied one would be a name in OVSDB nothing in the API can name.
     @Test("An oversized zone name never reaches the zone an agent realizes")
     func dnsZoneNameNeverReachesOVSDB() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
             #expect(try await self.postZone(app, token, project, name: "acme.internal") == .ok)
             let zone = try #require(try await DNSZone.query(on: app.db).first())
             let zoneID = try zone.requireID()
@@ -943,8 +943,8 @@ final class InputSizeBoundTests {
             let assembled = try await DNSZoneAssembler.assemble(zone: stored, on: app.db)
             let desired = DNSZoneAssembler.desiredZone(assembled, networkIDs: [networkID])
             #expect(desired.zoneName == "acme.internal")
-            #expect(!desired.records.isEmpty)
-            #expect(desired.records.allSatisfy { $0.name.hasSuffix(".acme.internal") })
+            #expect(!desired.records.values.isEmpty)
+            #expect(desired.records.values.allSatisfy { $0.name.hasSuffix(".acme.internal") })
         }
     }
 

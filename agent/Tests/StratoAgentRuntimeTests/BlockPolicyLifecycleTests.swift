@@ -124,15 +124,15 @@ extension Agent {
     fileprivate func recordedBlockPolicy(vmId: String, volumeId: UUID)
         -> AppliedBlockDevicePolicy?
     {
-        managedVMs[vmId]?.spec.volumes.first { $0.volumeId == volumeId }?
-            .appliedBlockPolicy
+        managedVMs[vmId]?.spec.volumes.values.first { UUID(uuidString: $0.volumeID) == volumeId }
+            .flatMap { $0.hasAppliedBlockPolicy ? $0.appliedBlockPolicy : nil }
     }
 
     fileprivate func forgetBlockPolicyForCrashTest(vmId: String) {
         guard let entry = managedVMs[vmId] else { return }
         let pending = entry.with(
             spec: entry.spec.withVolumes(
-                entry.spec.volumes.map { $0.withAppliedBlockPolicy(nil) }))
+                entry.spec.volumes.values.map { $0.withAppliedBlockPolicy(nil) }))
         managedVMs[vmId] = pending.recordingAdoption(of: pending.spec)
     }
 
@@ -166,7 +166,7 @@ struct BlockPolicyLifecycleTests {
                 vmId: "test-vm", hypervisorType: requested)
             #expect(await storage.preparationCount == (requested == .qemu ? 1 : 0))
             #expect(await storage.capabilityProbeCount == (requested == .qemu ? 1 : 0))
-            #expect((spec.volumes.first?.appliedBlockPolicy != nil) == (requested == .qemu))
+            #expect((spec.volumes.values.first?.hasAppliedBlockPolicy == true) == (requested == .qemu))
             try await agent.shutDownBlockPolicyTestResources()
         } catch {
             try? await agent.shutDownBlockPolicyTestResources()

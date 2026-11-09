@@ -21,7 +21,7 @@ struct VMGuestAgentExposureTests {
                 vm: vm, vmId: vm.id!, resolvedInterfaces: [], region: nil,
                 availabilityZone: nil, instanceSPIFFEID: nil)
         }
-        #expect(metadata().guestAgentRelease == nil)
+        #expect(!metadata().hasGuestAgentRelease)
         vm.guestAgentEnabled = true
         vm.userData = "#!/bin/sh\necho tenant"
         #expect(metadata().guestAgentRelease == GuestAgentBootstrap.defaultRelease)

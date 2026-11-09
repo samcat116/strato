@@ -52,14 +52,18 @@ enum VMGuestConfigPresentation {
         lhs.utf8.elementsEqual(rhs.utf8)
     }
     static func validate(_ report: GuestConfigObservation, config: GuestConfig, generation: Int64) throws {
+        try report.validateProtocol()
+        try config.validateProtocol()
         try report.validate(
             for: config, generation: generation,
-            expectedFileSHA256: Dictionary(uniqueKeysWithValues: config.files.map { ($0.path, hash($0.content)) }))
+            expectedFileSHA256: Dictionary(
+                uniqueKeysWithValues: config.files.values.map { ($0.path, hash($0.content)) }))
         // Linux paths are byte identities. Canonical Unicode String equality
         // must not turn another path into a managed identity.
-        guard report.files.allSatisfy({ fact in config.files.contains { sameBytes($0.path, fact.path) } }),
-            report.failedItem.map({ item in
-                item.section != .files || config.files.contains { sameBytes($0.path, item.identity) }
+        guard
+            report.files.values.allSatisfy({ fact in config.files.values.contains { sameBytes($0.path, fact.path) } }),
+            (report.hasFailedItem ? report.failedItem : nil).map({ item in
+                item.section != .files || config.files.values.contains { sameBytes($0.path, item.identity) }
             }) ?? true
         else { throw GuestConfigObservationError.invalid }
     }
@@ -69,12 +73,14 @@ enum VMGuestConfigPresentation {
         guard observation.status == .converged,
             (try? validate(observation, config: config, generation: generation)) != nil
         else { return false }
-        return config.files.allSatisfy { item in
-            observation.files.first(where: { sameBytes($0.path, item.path) })?.sha256 == hash(item.content)
+        return config.files.values.allSatisfy { item in
+            observation.files.values.first(where: { sameBytes($0.path, item.path) }).map {
+                $0.hasSha256 && $0.sha256 == hash(item.content)
+            } == true
         }
-            && config.sysctls.allSatisfy { item in
-                observation.sysctls.first(where: { $0.key == item.key })?.value.map {
-                    sameBytes(whitespace($0), whitespace(item.value))
+            && config.sysctls.values.allSatisfy { item in
+                observation.sysctls.values.first(where: { $0.key == item.key }).map {
+                    $0.hasValue && sameBytes(whitespace($0.value), whitespace(item.value))
                 } == true
             }
     }
@@ -110,6 +116,8 @@ enum VMGuestConfigPresentation {
     static func items(_ vm: VM, agentOnline: Bool) -> [VMGuestConfigurationItem] {
         guard let config = vm.guestConfig else { return [] }
         let report = vm.guestConfigEvidence?.observation
+        let failedItem = report.flatMap { $0.hasFailedItem ? $0.failedItem : nil }
+        let reportError = report.flatMap { $0.hasError ? $0.error : nil }
         let fresh =
             current(vm) && agentOnline && vm.guestAgentObservation?.reachable != false
             && vm.status == .running && vm.desiredStatus == .running
@@ -118,8 +126,8 @@ enum VMGuestConfigPresentation {
         {
             let failed =
                 report?.generation == vm.generation && report?.status == .failed
-                && report?.failedItem?.section.rawValue == section
-                && report?.failedItem?.identity.utf8.elementsEqual(identity.utf8) == true
+                && failedItem?.section.protocolValue == section
+                && failedItem?.identity.utf8.elementsEqual(identity.utf8) == true
             let state: VMGuestConfigurationItem.State
             if failed {
                 state = .failed
@@ -132,50 +140,50 @@ enum VMGuestConfigPresentation {
             }
             return .init(
                 section: section, identity: identity, desired: desired, observed: observed,
-                state: state, error: failed ? safeFailure(report?.error) : nil)
+                state: state, error: failed ? safeFailure(reportError) : nil)
         }
         var rows: [VMGuestConfigurationItem] = []
-        for desired in config.packages {
-            let fact = report?.packages.first { $0.name == desired.name }
+        for desired in config.packages.values {
+            let fact = report?.packages.values.first { $0.name == desired.name }
             rows.append(
                 item(
-                    "packages", desired.name, desired.state.rawValue,
-                    fact.map { $0.version ?? "absent" },
-                    fact.map { ($0.version != nil) == (desired.state == .present) }))
+                    "packages", desired.name, desired.state.protocolValue,
+                    fact.map { $0.hasVersion ? $0.version : "absent" },
+                    fact.map { $0.hasVersion == (desired.state == .present) }))
         }
-        for desired in config.files {
-            let fact = report?.files.first { sameBytes($0.path, desired.path) }
+        for desired in config.files.values {
+            let fact = report?.files.values.first { sameBytes($0.path, desired.path) }
             let actual = fact.flatMap { value in
-                value.sha256 == nil && value.mode == nil
+                !value.hasSha256 && !value.hasMode
                     ? nil
-                    : "sha256 \(value.sha256 ?? "unknown"); mode \(value.mode ?? "unknown")"
+                    : "sha256 \(value.hasSha256 ? value.sha256 : "unknown"); mode \(value.hasMode ? value.mode : "unknown")"
             }
             rows.append(
                 item(
                     "files", desired.path, "sha256 \(hash(desired.content)); mode \(desired.mode)", actual,
                     fact.flatMap {
-                        $0.sha256 != nil && $0.mode != nil
+                        $0.hasSha256 && $0.hasMode
                             ? $0.sha256 == hash(desired.content) && $0.mode == desired.mode : nil
                     }))
         }
-        for desired in config.services {
-            let fact = report?.services.first { $0.name == desired.name }
+        for desired in config.services.values {
+            let fact = report?.services.values.first { $0.name == desired.name }
             let actual = fact.flatMap { value in
-                value.enabled == nil && value.activeState == nil
+                !value.hasEnabled && !value.hasActiveState
                     ? nil
-                    : "\(value.enabled.map { $0 ? "enabled" : "disabled" } ?? "unknown") at boot; active \(value.activeState ?? "unknown")"
+                    : "\(value.hasEnabled ? (value.enabled ? "enabled" : "disabled") : "unknown") at boot; active \(value.hasActiveState ? value.activeState : "unknown")"
             }
             rows.append(
                 item(
                     "services", desired.name, desired.enabled ? "enabled at boot" : "disabled at boot", actual,
-                    fact?.enabled.map { $0 == desired.enabled }))
+                    fact.flatMap { $0.hasEnabled ? $0.enabled == desired.enabled : nil }))
         }
-        for desired in config.sysctls {
-            let fact = report?.sysctls.first { $0.key == desired.key }
+        for desired in config.sysctls.values {
+            let fact = report?.sysctls.values.first { $0.key == desired.key }
             rows.append(
                 item(
-                    "sysctls", desired.key, desired.value, fact?.value,
-                    fact?.value.map { sameBytes(whitespace($0), whitespace(desired.value)) }))
+                    "sysctls", desired.key, desired.value, fact.flatMap { $0.hasValue ? $0.value : nil },
+                    fact.flatMap { $0.hasValue ? sameBytes(whitespace($0.value), whitespace(desired.value)) : nil }))
         }
         return rows
     }

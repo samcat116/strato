@@ -36,7 +36,7 @@ struct AgentUpdateBridgeLifecycleTests {
             #expect(await iterator.next() == "after-transient-failure")
             #expect(await poller.deliveredSyncs == 2)
             try await agent.prepareForWorkloadRegistration(fetchBridge: {
-                AgentUpdateBridgeResponse(workloadWireVersion: WireProtocol.currentVersion, update: nil)
+                AgentUpdateBridgeResponse(workloadWireVersion: Int(AgentProtocolCompatibility.major), update: nil)
             })
             #expect(await poller.isRunning)
         }
@@ -68,7 +68,8 @@ struct AgentUpdateBridgeLifecycleTests {
             await #expect(throws: AgentError.self) {
                 try await agent.prepareForWorkloadRegistration(
                     fetchBridge: {
-                        AgentUpdateBridgeResponse(workloadWireVersion: WireProtocol.currentVersion + 1, update: update)
+                        AgentUpdateBridgeResponse(
+                            workloadWireVersion: Int(AgentProtocolCompatibility.major) + 1, update: update)
                     }, updater: updater)
             }
             #expect(await !poller.isRunning)
@@ -100,16 +101,18 @@ struct AgentUpdateBridgeLifecycleTests {
             shouldUpgrade: { channel, _ in channel.eventLoop.makeSucceededFuture(HTTPHeaders()) },
             upgradePipelineHandler: { channel, _ in
                 WebSocket.server(on: channel) { ws in
-                    ws.onText { ws, text in
+                    ws.onBinary { ws, buffer in
                         do {
-                            let envelope = try WireProtocol.makeDecoder().decode(
-                                MessageEnvelope.self, from: Data(text.utf8))
+                            let envelope = try WireProtocol.decodeEnvelope(Data(buffer.readableBytesView))
                             guard envelope.type == .agentRegister else { return }
                             let registration = try envelope.decode(as: AgentRegisterMessage.self)
                             let response = AgentRegisterResponseMessage(
                                 requestId: registration.requestId, agentId: "registered-bridge-agent",
-                                name: "bridge-test")
-                            ws.send(String(decoding: try WireProtocol.encodeEnvelope(response), as: UTF8.self))
+                                name: "bridge-test",
+                                agreement: try AgentProtocolCompatibility.negotiate(
+                                    local: AgentProtocolCompatibility.localOffer, remote: registration.protocolOffer,
+                                    inventorySessionID: UUID()))
+                            ws.send(try WireProtocol.encodeEnvelope(response))
                         } catch {
                             _ = ws.close(code: .unexpectedServerError)
                         }
@@ -143,12 +146,13 @@ struct AgentUpdateBridgeLifecycleTests {
             },
             deliver: { envelope in
                 await agent.routeInboundMessage(envelope)
-                if let desired = try? envelope.decode(as: DesiredStateMessage.self) { output.yield(desired.syncId) }
+                if let desired = try? envelope.decode(as: DesiredStateMessage.self) { output.yield(desired.syncID) }
             }, logger: logger)
-        let client = await agent.installBridgeTestConnection(port: port, poller: poller)
+        let client = await agent.installBridgeTestConnection(port: port)
         do {
             _ = try await client.connect()
             try await agent.registerWithControlPlane()
+            await agent.installBridgeTestPoller(poller)
             try await test(agent, client, poller, input, deliveries, directory)
             input.finish()
             await agent.stop()
@@ -165,16 +169,20 @@ struct AgentUpdateBridgeLifecycleTests {
 }
 
 extension Agent {
-    fileprivate func installBridgeTestConnection(port: Int, poller: DesiredStatePoller<ContinuousClock>)
-        -> StratoAgentRuntime.WebSocketClient
-    {
-        desiredStatePoller = poller
+    fileprivate func installBridgeTestConnection(port: Int) -> StratoAgentRuntime.WebSocketClient {
+
         let client = StratoAgentRuntime.WebSocketClient(
             url: "ws://127.0.0.1:\(port)/agent/ws", agent: self, logger: logger,
             inboundContinuation: inboundContinuation)
         websocketClient = client
         startMessageConsumer()
         return client
+    }
+
+    fileprivate func installBridgeTestPoller(_ poller: DesiredStatePoller<ContinuousClock>) async {
+        await desiredStatePoller?.stop()
+        desiredStatePoller = poller
+        await poller.start()
     }
 
     fileprivate func waitForBridgeTestShutdown() async {

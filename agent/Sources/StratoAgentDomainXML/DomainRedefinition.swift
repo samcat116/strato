@@ -77,8 +77,9 @@ public enum DomainRedefinition {
     public static func applyingBlockPolicies(
         toInactiveDomainXML xml: String, volumes: [VolumeSpec]
     ) throws -> String? {
-        let requested = volumes.compactMap { volume in
-            volume.appliedBlockPolicy.map { (volume.volumeId, $0) }
+        let requested = try volumes.compactMap { volume -> (UUID, AppliedBlockDevicePolicy)? in
+            guard volume.hasAppliedBlockPolicy else { return nil }
+            return (try UUID(protocolString: volume.volumeID), volume.appliedBlockPolicy)
         }
         guard !requested.isEmpty else { return nil }
         guard Set(requested.map(\.0)).count == requested.count else {
@@ -129,11 +130,11 @@ public enum DomainRedefinition {
                                     driver.removeAttribute(name)
                                 }
                             }
-                            setOptional("cache", policy.cacheMode?.rawValue)
-                            setOptional("io", policy.ioMode?.rawValue)
+                            setOptional("cache", policy.hasCacheMode ? policy.cacheMode.protocolValue : nil)
+                            setOptional("io", policy.hasIoMode ? policy.ioMode.protocolValue : nil)
                             setOptional("discard", policy.discard ? "unmap" : nil)
                             setOptional("detect_zeroes", policy.discard ? "unmap" : nil)
-                            setOptional("queues", policy.queueCount.map(String.init))
+                            setOptional("queues", policy.hasQueueCount ? String(policy.queueCount) : nil)
                         })
                 else {
                     missingDriver = volumeId
@@ -239,7 +240,7 @@ public enum DomainRedefinition {
         toInactiveDomainXML xml: String, volumes: [VolumeSpec]
     ) throws -> String? {
         let orderedVolumeIds = volumes.compactMap { volume in
-            volume.bootOrder == nil ? nil : volume.volumeId.uuidString
+            volume.hasBootOrder ? volume.volumeID : nil
         }
         guard !orderedVolumeIds.isEmpty else { return nil }
         return try applyingBootOrder(
@@ -464,11 +465,11 @@ public enum DomainRedefinition {
         domain.editChild(named: "cpu") { cpu in
             cpu.editChild(named: "numa") { numa in
                 numa.editChildren(named: "cell") {
-                    $0.setAttribute("cpus", DomainXMLBuilder.cpuRange(maxCPUs: wanted))
+                    $0.setAttribute("cpus", DomainXMLBuilder.cpuRange(maxCPUs: Int(wanted)))
                 }
             }
         }
-        return wanted
+        return Int(wanted)
     }
 
     // MARK: - Spare root ports

@@ -13,12 +13,12 @@ extension FirecrackerSandboxRuntime {
     ) throws -> (@Sendable (Int32, String) throws -> Void)? {
         guard
             let limits = try BurstableResourceLimits.plan(
-                resourceClass: spec.resourceClass, guestGrantBytes: spec.memoryBytes,
+                resourceClass: spec.hasResourceClass ? spec.resourceClass : nil, guestGrantBytes: spec.memoryBytes,
                 backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)
         else { return nil }
         try BurstableGuestGrant.verify(
-            cpuCount: spec.cpus, memoryMiB: Int(spec.memoryBytes / (1024 * 1024)),
-            admittedCPUs: spec.cpus, admittedBytes: spec.memoryBytes)
+            cpuCount: Int(spec.cpus), memoryMiB: Int(spec.memoryBytes / (1024 * 1024)),
+            admittedCPUs: Int(spec.cpus), admittedBytes: spec.memoryBytes)
         let expectedPath = JailerOptions.cgroupDirectory(firecrackerBinaryPath: firecrackerBinaryPath, vmId: sandboxId)
         let pageSize = BurstableCgroupEnforcement.hostPageSizeBytes
         // Reject an unrepresentable plan before any backend action.
@@ -76,11 +76,11 @@ extension FirecrackerSandboxRuntime {
     func validateRestoredGrant(manager: FirecrackerManager, sandboxId: String, spec: SandboxSpec, resume: Bool)
         async throws
     {
-        guard spec.resourceClass?.policy.kind == .burstable else { return }
+        guard spec.resourceClass.policy.kind == .burstable else { return }
         let actual = try await manager.getMachineConfig()
         try BurstableGuestGrant.verify(
             cpuCount: actual.vcpuCount, memoryMiB: actual.memSizeMib,
-            admittedCPUs: spec.cpus, admittedBytes: spec.memoryBytes)
+            admittedCPUs: Int(spec.cpus), admittedBytes: spec.memoryBytes)
         try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
         if resume { try await manager.resume() }
     }

@@ -14,9 +14,11 @@ private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
 
     private(set) var deliveredDoorbells: [String] = []
     private(set) var deliveredAgentKeys: [String] = []
+    private(set) var deliveredFrames: [Data] = []
 
-    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws {
+    func deliverAgentFrame(_ frame: Data, agentKey: String) async throws {
         deliveredAgentKeys.append(agentKey)
+        deliveredFrames.append(frame)
     }
 
     func deliverDoorbell(agentKey: String) async {
@@ -94,9 +96,14 @@ final class ReplicaMessageBridgeTests {
             await holder.start(delegate: holderDelegate)
             await holder.recordRoute(agentKey: "spiffe://example.test/agent/node-1")
 
-            try await requester.deliver(
-                GuestExecCloseMessage(sessionId: "session-1"),
-                agentKey: "spiffe://example.test/agent/node-1")
+            let message = GuestExecCloseMessage(sessionId: "session-1")
+            var expectedFrame = try WireProtocol.encodeEnvelope(message)
+            // Unknown field 100, varint 255. Receiving replicas must retain it,
+            // including bytes that cannot be represented as UTF-8 text.
+            expectedFrame.append(contentsOf: [0xa0, 0x06, 0xff, 0x01])
+            let envelope = try WireProtocol.decodeEnvelope(expectedFrame)
+            try await requester.deliver(envelope, agentKey: "spiffe://example.test/agent/node-1")
+            #expect(await holderDelegate.deliveredFrames == [expectedFrame])
 
             #expect(await holderDelegate.deliveredAgentKeys == ["spiffe://example.test/agent/node-1"])
             #expect(await requesterDelegate.deliveredAgentKeys.isEmpty)
@@ -127,9 +134,14 @@ final class ReplicaMessageBridgeTests {
         await holder.recordRoute(agentKey: "spiffe://example.test/agent/node-1")
 
         let error = await #expect(throws: ReplicaMessageBridge.DeliveryError.self) {
-            try await requester.deliver(
-                GuestExecCloseMessage(sessionId: "session-1"),
-                agentKey: "spiffe://example.test/agent/node-1")
+            let message = GuestExecCloseMessage(sessionId: "session-1")
+            var expectedFrame = try WireProtocol.encodeEnvelope(message)
+            // Unknown field 100, varint 255. Receiving replicas must retain it,
+            // including bytes that cannot be represented as UTF-8 text.
+            expectedFrame.append(contentsOf: [0xa0, 0x06, 0xff, 0x01])
+            let envelope = try WireProtocol.decodeEnvelope(expectedFrame)
+            try await requester.deliver(envelope, agentKey: "spiffe://example.test/agent/node-1")
+            #expect(await holderDelegate.deliveredFrames == [expectedFrame])
         }
 
         #expect(error?.isDefinitive == false)

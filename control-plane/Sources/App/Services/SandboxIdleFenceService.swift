@@ -87,6 +87,10 @@ enum SandboxIdleFenceService {
     static func observe(
         _ report: SandboxIdleActivityReport?, sandbox: Sandbox, at now: ClusterInstant, on db: any Database
     ) async throws {
+        try report?.validateProtocol()
+        var normalized = report
+        try normalized?.normalizeProtocolIdentifiers()
+        let report = normalized
         guard let sql = db as? any SQLDatabase, let owner = sandbox.hypervisorId, let ownerID = UUID(uuidString: owner)
         else { return }
         let id = try sandbox.requireID()
@@ -113,15 +117,19 @@ enum SandboxIdleFenceService {
         if let report, let old = previous?.decodedReport, inventory != nil,
             previous?.inventory_session_id == inventory, report.isNewer(than: old),
             report.generation == sandbox.generation,
+            report.hasControlPlaneActivityRevision, old.hasControlPlaneActivityRevision,
             report.controlPlaneActivityRevision == previous?.activity_revision,
             old.controlPlaneActivityRevision == previous?.activity_revision,
             report.evidenceAgeMilliseconds <= 30_000,
-            report.idleFenceSupported, let guest = report.guest, let oldGuest = old.guest,
+            report.idleFenceSupported,
+            let guest = report.hasGuest ? report.guest : nil,
+            let oldGuest = old.hasGuest ? old.guest : nil,
             guest.hasCompleteQuiescentCoverage, oldGuest.hasCompleteQuiescentCoverage,
             guest.monitorIncarnation == oldGuest.monitorIncarnation,
             guest.sampleSequence > oldGuest.sampleSequence,
-            report.activeExecSessionIds?.isEmpty == true, report.hostPendingCommandCount == 0,
-            report.snapshotOrRestoreInProgress == false,
+            report.hasActiveExecSessionIds, report.activeExecSessionIds.values.isEmpty,
+            report.hasHostPendingCommandCount, report.hostPendingCommandCount == 0,
+            report.hasSnapshotOrRestoreInProgress, !report.snapshotOrRestoreInProgress,
             let agent = try await Agent.find(ownerID, on: db), !agent.administrativelyOffline
         {
             struct Released: Decodable { let id: UUID }
@@ -140,19 +148,29 @@ enum SandboxIdleFenceService {
         // Identity resets and missing coverage invalidate all previously issued
         // claims. A new incarnation must accumulate its own residency window.
         let unchanged =
-            inventory != nil && previous?.inventory_session_id == inventory
-            && report?.idleFenceSupported == true && report?.guest?.hasCompleteQuiescentCoverage == true
-            && report?.activeExecSessionIds?.isEmpty == true && report?.hostPendingCommandCount == 0
-            && report?.snapshotOrRestoreInProgress == false && report?.generation == sandbox.generation
-            && previous?.decodedReport.map { old in
-                report?.isNewer(than: old) == true && old.guest?.monitorIncarnation == report?.guest?.monitorIncarnation
-                    && old.guest?.activityEpoch == report?.guest?.activityEpoch
-                    && old.activityEpoch == report?.activityEpoch
+            report.map { current in
+                guard inventory != nil, previous?.inventory_session_id == inventory,
+                    current.idleFenceSupported, current.hasGuest, current.guest.hasCompleteQuiescentCoverage,
+                    current.hasActiveExecSessionIds, current.activeExecSessionIds.values.isEmpty,
+                    current.hasHostPendingCommandCount, current.hostPendingCommandCount == 0,
+                    current.hasSnapshotOrRestoreInProgress, !current.snapshotOrRestoreInProgress,
+                    current.generation == sandbox.generation,
+                    let old = previous?.decodedReport, old.hasGuest
+                else { return false }
+                return current.isNewer(than: old)
+                    && old.guest.monitorIncarnation == current.guest.monitorIncarnation
+                    && old.guest.activityEpoch == current.guest.activityEpoch
+                    && old.activityEpoch == current.activityEpoch
             } == true
-        let measured = report?.guest.map { $0.isBounded && $0.coverage == .complete && $0.trusted } == true
+        let measured =
+            report.map {
+                $0.hasGuest && $0.guest.isBounded && $0.guest.coverage == .complete && $0.guest.trusted
+            } == true
         let userWork =
-            report?.activeExecSessionIds.map { !$0.isEmpty } == true
-            || report?.hostPendingCommandCount.map { $0 > 0 } == true
+            report.map {
+                ($0.hasActiveExecSessionIds && !$0.activeExecSessionIds.values.isEmpty)
+                    || ($0.hasHostPendingCommandCount && $0.hostPendingCommandCount > 0)
+            } == true
         if !unchanged, measured || userWork, sandbox.status == .running || sandbox.status == .starting {
             SandboxActivityService.touch(sandbox, at: now)
             try await sandbox.save(on: db)
@@ -246,8 +264,8 @@ enum SandboxIdleFenceService {
             SELECT s.id, f.report::text AS report, s.last_active_at, s.created_at
             FROM sandbox_idle_fences f JOIN sandboxes s ON s.id = f.sandbox_id
             JOIN agents a ON a.id::text = lower(s.hypervisor_id)
-            WHERE s.status = \(bind: SandboxStatus.running.rawValue)
-                AND s.desired_status = \(bind: DesiredSandboxStatus.running.rawValue)
+            WHERE s.status = \(bind: SandboxStatus.running.protocolValue)
+                AND s.desired_status = \(bind: DesiredSandboxStatus.running.protocolValue)
                 AND s.observed_generation = s.generation AND s.failed_generation IS DISTINCT FROM s.generation
                 AND s.generation < 9223372036854775807 AND f.activity_revision < 9223372036854775807
                 AND f.agent_key = s.hypervisor_id AND NOT a.administratively_offline
@@ -276,10 +294,11 @@ enum SandboxIdleFenceService {
             guard
                 let report = try? WireProtocol.makeDecoder().decode(
                     SandboxIdleActivityReport.self, from: Data(row.report.utf8)), report.isCompleteQuiet,
-                let policy = report.policy, policy.enabled, !policy.excludedSandboxIDs.contains(row.id),
+                let policy = report.hasPolicy ? report.policy : nil, policy.enabled,
+                !policy.excludedSandboxIDs.values.contains(where: { UUID(uuidString: $0) == row.id }),
                 policy.idleSeconds.isFinite, policy.idleSeconds > 0,
                 policy.minimumResidencySeconds.isFinite, policy.minimumResidencySeconds > 0,
-                let quiet = report.hostQuietMilliseconds,
+                let quiet = report.hasHostQuietMilliseconds ? report.hostQuietMilliseconds : nil,
                 Double(quiet) / 1000 >= policy.idleSeconds,
                 now.date.timeIntervalSince(row.last_active_at ?? row.created_at ?? now.date)
                     >= policy.idleSeconds,
@@ -314,13 +333,15 @@ enum SandboxIdleFenceService {
                 let ownerID = UUID(uuidString: state.agent_key),
                 let owner = try await Agent.find(ownerID, on: db), !owner.administrativelyOffline,
                 state.inventory_session_id == (try await InventorySessionFence.current(agentID: ownerID, on: db)),
-                report.generation == sandbox.generation, report.controlPlaneActivityRevision == state.activity_revision,
+                report.generation == sandbox.generation, report.hasControlPlaneActivityRevision,
+                report.controlPlaneActivityRevision == state.activity_revision,
                 report.isCompleteQuiet, let received = state.received_at,
                 received <= current.date, current.date.timeIntervalSince(received) <= 30,
-                let policy = report.policy, policy.enabled, !policy.excludedSandboxIDs.contains(id),
+                let policy = report.hasPolicy ? report.policy : nil, policy.enabled,
+                !policy.excludedSandboxIDs.values.contains(where: { UUID(uuidString: $0) == id }),
                 policy.idleSeconds.isFinite, policy.idleSeconds > 0,
                 policy.minimumResidencySeconds.isFinite, policy.minimumResidencySeconds > 0,
-                let quiet = report.hostQuietMilliseconds,
+                let quiet = report.hasHostQuietMilliseconds ? report.hostQuietMilliseconds : nil,
                 Double(quiet) / 1000 >= policy.idleSeconds,
                 current.date.timeIntervalSince(sandbox.lastActiveAt ?? sandbox.createdAt ?? current.date)
                     >= policy.idleSeconds,

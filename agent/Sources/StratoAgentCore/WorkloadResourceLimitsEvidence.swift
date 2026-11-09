@@ -51,22 +51,25 @@ public struct WorkloadResourceLimitsEvidence: Codable, Sendable, Equatable {
         let quotaFlag = quota.map(ResourceTelemetryFlag.available) ?? .unavailable
         let ownershipFlag = ownershipVerified.map(ResourceTelemetryFlag.available) ?? .unavailable
         let match: ResourceTelemetryFlag
-        if target != nil, highUnlimited.value == true || maximumUnlimited.value == true || quota == false {
+        if target != nil,
+            (highUnlimited.hasValue && highUnlimited.value) || (maximumUnlimited.hasValue && maximumUnlimited.value)
+                || quota == false
+        {
             match = .available(false)
-        } else if let target, let appliedHigh = high.value, let appliedMax = maximum.value,
-            let appliedWeight = weight.value,
-            highUnlimited.value == false, maximumUnlimited.value == false, quota == true
+        } else if let target, high.hasValue, maximum.hasValue, weight.hasValue,
+            highUnlimited.hasValue && !highUnlimited.value, maximumUnlimited.hasValue && !maximumUnlimited.value,
+            quota == true
         {
             match = .available(
-                appliedHigh == target.memoryHighBytes && appliedMax == target.memoryMaxBytes
-                    && appliedWeight == Int64(target.cpuWeight))
+                high.value == target.memoryHighBytes && maximum.value == target.memoryMaxBytes
+                    && weight.value == Int64(target.cpuWeight))
         } else {
             match = .unavailable
         }
         let acknowledged: ResourceTelemetryFlag
-        if ownershipVerified == false || match.value == false {
+        if ownershipVerified == false || (match.hasValue && !match.value) {
             acknowledged = .available(false)
-        } else if ownershipVerified == true, match.value == true {
+        } else if ownershipVerified == true, match.hasValue, match.value {
             acknowledged = .available(true)
         } else {
             acknowledged = .unavailable

@@ -453,7 +453,7 @@ struct LibvirtDomainTests {
     func optionalStatsStayNil() throws {
         let stats = try #require(
             LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512)]))
-        #expect(stats.balloonActualBytes == nil)
+        #expect(!stats.hasBalloonActualBytes)
     }
 
     @Test("A value that cannot be a byte count is dropped rather than wrapped")
@@ -463,7 +463,7 @@ struct LibvirtDomainTests {
         // nothing.
         #expect(LibvirtMemoryStats.parse([stat(5, kib: .max), stat(8, kib: 512)]) == nil)
         let partial = LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512), stat(4, kib: .max)])
-        #expect(partial?.balloonActualBytes == nil)
+        #expect(partial?.hasBalloonActualBytes == false)
     }
 
     // MARK: - Host reservations

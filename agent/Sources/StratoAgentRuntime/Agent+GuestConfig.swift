@@ -7,7 +7,8 @@ extension Agent {
     /// Keeping withdrawal on that path prevents an older in-flight pass from
     /// repopulating the cache after the newer intent has retired it.
     func retireGuestConfigObservation(_ item: ReconcileWorkItem) async {
-        guard item.kind == .vm, item.desired?.guestConfig?.isEmpty != false else { return }
+        guard item.kind == .vm, item.desired.flatMap({ $0.hasGuestConfig ? $0.guestConfig : nil })?.isEmpty != false
+        else { return }
         guestConfigObservationCache.removeValue(forKey: item.id)
     }
 
@@ -19,6 +20,7 @@ extension Agent {
     ) -> GuestConfigObservation? {
         guard status == .running, let observation = guestConfigObservationCache[vmId] else { return nil }
         switch observation.status {
+        case .unspecified, .UNRECOGNIZED: return nil
         case .failed:
             return observation.generation == failedGeneration ? observation : nil
         case .converged:
@@ -28,10 +30,11 @@ extension Agent {
     }
 
     func reconcileGuestConfig(_ item: ReconcileWorkItem) async throws {
-        guard let desired = item.desired, let config = desired.guestConfig, !config.isEmpty else {
+        guard let desired = item.desired, desired.hasGuestConfig, !desired.guestConfig.isEmpty else {
             await retireGuestConfigObservation(item)
             return
         }
+        let config = desired.guestConfig
         guard desired.spec.guestAgentEnabled else {
             throw ConvergenceError.unsupported("Guest configuration requires the VM guest-agent opt-in")
         }
@@ -44,7 +47,8 @@ extension Agent {
             })
         guestConfigObservationCache[item.id] = observation
         if observation.status == .failed {
-            throw GuestConfigurationFailure.failed(reason: GuestConfigurationFailure.safeReason(observation.error))
+            throw GuestConfigurationFailure.failed(
+                reason: GuestConfigurationFailure.safeReason(observation.hasError ? observation.error : nil))
         }
     }
 

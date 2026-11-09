@@ -642,7 +642,7 @@ final class SandboxSnapshotTests {
         firecrackerVersion: String? = "1.7.0",
         cpuModel: String? = "TestCPU 3000",
         architecture: CPUArchitecture? = CPUArchitecture.current,
-        protocolVersion: Int = WireProtocol.currentVersion
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major)
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
             on: app,
@@ -654,7 +654,7 @@ final class SandboxSnapshotTests {
                     type: .firecracker, available: true, accelerated: true,
                     version: firecrackerVersion)
             ],
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             sandboxCapable: true,
             hostInfo: HostInfo(cpuModel: cpuModel))
     }
@@ -664,7 +664,7 @@ final class SandboxSnapshotTests {
         app: Application, user: User, sandbox: Sandbox,
         agentId: String?,
         firecrackerVersion: String? = "1.7.0",
-        architecture: String? = CPUArchitecture.current.rawValue,
+        architecture: String? = CPUArchitecture.current.protocolValue,
         cpuTemplate: String? = nil,
         sourceCPUModel: String? = "TestCPU 3000"
     ) async throws -> SandboxSnapshot {
@@ -683,7 +683,7 @@ final class SandboxSnapshotTests {
         snapshot.sourceCPUModel = sourceCPUModel
         snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
         snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
-        snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+        snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.knownCases.map {
             SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
         }
         snapshot.exportedAt = Date()

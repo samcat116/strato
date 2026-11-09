@@ -37,16 +37,16 @@ struct NetworkACLProtocolTests {
 
         let data = try WireProtocol.makeEncoder().encode(network)
         let decoded = try WireProtocol.makeDecoder().decode(DesiredNetworkState.self, from: data)
-        let acl = try #require(decoded.networkACLs?.first)
-        let rule = try #require(acl.rules.first)
+        let acl = try #require(decoded._jsonNetworkACLs?.first)
+        let rule = try #require(acl._jsonRules.first)
 
-        #expect(acl.id == aclID)
-        #expect(acl.generation == 4)
-        #expect(rule.id == ruleID)
-        #expect(rule.ruleNumber == 100)
-        #expect(rule.action == "allow")
-        #expect(rule.remoteCIDR == "198.51.100.0/24")
-        #expect(rule.portRangeMin == 443)
+        #expect(acl._jsonId == aclID)
+        #expect(acl._jsonGeneration == 4)
+        #expect(rule._jsonId == ruleID)
+        #expect(rule._jsonRuleNumber == 100)
+        #expect(rule._jsonAction == "allow")
+        #expect(rule._jsonRemoteCIDR == "198.51.100.0/24")
+        #expect(rule._jsonPortRangeMin == 443)
     }
 
     @Test("Network ACL absence and authoritative emptiness remain distinct")
@@ -59,7 +59,7 @@ struct NetworkACLProtocolTests {
             """
         let absent = try WireProtocol.makeDecoder().decode(
             DesiredNetworkState.self, from: Data(legacy.utf8))
-        #expect(absent.networkACLs == nil)
+        #expect(absent._jsonNetworkACLs == nil)
 
         let authoritative = DesiredNetworkState(
             networkId: UUID(),
@@ -72,6 +72,6 @@ struct NetworkACLProtocolTests {
             networkACLs: [])
         let data = try WireProtocol.makeEncoder().encode(authoritative)
         let decoded = try WireProtocol.makeDecoder().decode(DesiredNetworkState.self, from: data)
-        #expect(decoded.networkACLs == [])
+        #expect(decoded._jsonNetworkACLs == [])
     }
 }

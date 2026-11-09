@@ -53,6 +53,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
         switchNames: Set<String>,
         existing: ManagedLoadBalancerObservation?
     ) async throws -> String {
+        try desired.validateProtocol()
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
@@ -106,9 +107,10 @@ extension NetworkServiceLinux: LoadBalancerActuator {
     func observeBackendHealth(
         for desired: DesiredLoadBalancer
     ) async throws -> [ObservedLoadBalancerBackend] {
+        try desired.validateProtocol()
         guard desired.healthCheck.enabled else {
-            return desired.backends.map {
-                ObservedLoadBalancerBackend(id: $0.id, healthStatus: .unknown)
+            return desired.backends.values.map {
+                ObservedLoadBalancerBackend(id: validatedProtocolUUID($0.id), healthStatus: .unknown)
             }
         }
         try await ensureSouthboundConnection()
@@ -158,7 +160,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
     ) async throws -> [String] {
         let existing = try await manager.getLoadBalancerHealthChecks().filter {
             Self.isManaged($0.external_ids)
-                && $0.external_ids?[Self.loadBalancerIDKey] == desired.id.uuidString
+                && $0.external_ids?[Self.loadBalancerIDKey] == desired.id
         }
         guard desired.healthCheck.enabled else {
             for check in existing {
@@ -179,11 +181,11 @@ extension NetworkServiceLinux: LoadBalancerActuator {
             "failure_count": String(desired.healthCheck.failureThreshold),
         ]
         var retained: [String] = []
-        for listener in desired.listeners {
-            let listenerID = listener.id.uuidString
+        for listener in desired.listeners.values {
+            let listenerID = listener.id
             let externalIDs = [
                 Self.managedKey: Self.managedValue,
-                Self.loadBalancerIDKey: desired.id.uuidString,
+                Self.loadBalancerIDKey: desired.id,
                 Self.loadBalancerListenerIDKey: listenerID,
             ]
             let wanted = OVNLoadBalancerHealthCheck(
@@ -222,7 +224,7 @@ extension NetworkServiceLinux: LoadBalancerActuator {
     ) -> [String: String] {
         [
             managedKey: managedValue,
-            loadBalancerIDKey: desired.id.uuidString,
+            loadBalancerIDKey: desired.id,
             loadBalancerNetworkIDKey: networkID.uuidString,
             loadBalancerGenerationKey: String(desired.generation),
             loadBalancerDisplayNameKey: desired.name,
@@ -235,22 +237,20 @@ extension NetworkServiceLinux: LoadBalancerActuator {
         externalIDs: [String: String]
     ) -> OVNLoadBalancer {
         var vips: [String: String] = [:]
-        for listener in desired.listeners {
-            vips["\(desired.vip):\(listener.port)"] = desired.backends
+        for listener in desired.listeners.values {
+            vips["\(desired.vip):\(listener.port)"] = desired.backends.values
                 .map { "\($0.ipAddress):\(listener.backendPort)" }
                 .joined(separator: ",")
         }
         var mappings: [String: String] = [:]
-        for backend in desired.backends {
-            guard let vmID = backend.vmId,
-                let nicIndex = backend.nicIndex,
-                let sourceIP = backend.healthCheckSourceIP
+        for backend in desired.backends.values {
+            guard backend.hasVmID, backend.hasNicIndex, backend.hasHealthCheckSourceIp
             else { continue }
             mappings[backend.ipAddress] =
-                "\(OVNNaming.vmPortName(vmId: vmID.uuidString, nicIndex: nicIndex)):\(sourceIP)"
+                "\(OVNNaming.vmPortName(vmId: backend.vmID, nicIndex: Int(backend.nicIndex))):\(backend.healthCheckSourceIp)"
         }
         return OVNLoadBalancer(
-            name: "strato-lb-\(desired.id.uuidString.lowercased())",
+            name: "strato-lb-\(desired.id.lowercased())",
             vips: vips,
             protocolType: desired.protocolName,
             health_check: healthChecks,

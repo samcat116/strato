@@ -1,16 +1,21 @@
 import Foundation
+import SwiftProtobuf
 
 /// STR-313 eligibility only. The suspended lifecycle owns checkpoint durability,
 /// stopping, restoration, and artifact retention; this value never performs them.
-public struct SandboxIdlePolicy: Codable, Sendable, Equatable {
-    public var enabled = false
-    public var idleSeconds: TimeInterval = 300
-    public var minimumResidencySeconds: TimeInterval = 60
-    public var maximumEvidenceAgeSeconds: TimeInterval = 30
-    public var restoreTimeoutSeconds: TimeInterval = 120
-    public var excludedSandboxIDs: Set<UUID> = []
+public typealias SandboxIdlePolicy = Strato_Agent_V1_SandboxIdlePolicy
+extension Strato_Agent_V1_SandboxIdlePolicy: Codable {
 
-    public init() {}
+    public static var defaults: Self {
+        .with { value in
+            value.enabled = false
+            value.idleSeconds = 300
+            value.minimumResidencySeconds = 60
+            value.maximumEvidenceAgeSeconds = 30
+            value.restoreTimeoutSeconds = 120
+            value.excludedSandboxIDs = .init()
+        }
+    }
 
     public enum Verdict: Sendable, Equatable {
         case disabled, invalidConfiguration, excluded, unsupportedBackend
@@ -56,25 +61,28 @@ public struct SandboxIdlePolicy: Codable, Sendable, Equatable {
     public func evaluate(_ evidence: Evidence, at now: Date) -> Verdict {
         guard enabled else { return .disabled }
         guard
-            [idleSeconds, minimumResidencySeconds, maximumEvidenceAgeSeconds, restoreTimeoutSeconds]
-                .allSatisfy({ $0.isFinite && $0 > 0 })
+            [
+                _jsonIdleSeconds, _jsonMinimumResidencySeconds, _jsonMaximumEvidenceAgeSeconds,
+                _jsonRestoreTimeoutSeconds,
+            ]
+            .allSatisfy({ $0.isFinite && $0 > 0 })
         else { return .invalidConfiguration }
-        guard !excludedSandboxIDs.contains(evidence.sandboxID) else { return .excluded }
+        guard !_jsonExcludedSandboxIDs.contains(evidence.sandboxID) else { return .excluded }
         guard evidence.supportsFullSnapshot else { return .unsupportedBackend }
         guard evidence.guestAndNetworkActivityKnown,
             let sessions = evidence.activeSessions, sessions >= 0,
             let commands = evidence.pendingCommands, commands >= 0,
             let snapshotBusy = evidence.snapshotOrRestoreInProgress,
             evidence.observedAt <= now,
-            now.timeIntervalSince(evidence.observedAt) <= maximumEvidenceAgeSeconds,
+            now.timeIntervalSince(evidence.observedAt) <= _jsonMaximumEvidenceAgeSeconds,
             evidence.lastActiveAt <= evidence.observedAt,
             evidence.residentSince <= evidence.observedAt
         else { return .unknownActivity }
         guard sessions == 0, commands == 0, !snapshotBusy else { return .busy }
-        guard now.timeIntervalSince(evidence.residentSince) >= minimumResidencySeconds else {
+        guard now.timeIntervalSince(evidence.residentSince) >= _jsonMinimumResidencySeconds else {
             return .minimumResidency
         }
-        guard now.timeIntervalSince(evidence.lastActiveAt) >= idleSeconds else { return .recentlyActive }
+        guard now.timeIntervalSince(evidence.lastActiveAt) >= _jsonIdleSeconds else { return .recentlyActive }
         return .eligible
     }
 
@@ -91,5 +99,64 @@ public struct SandboxIdlePolicy: Codable, Sendable, Equatable {
             && claimed.residentSince == current.residentSince
             && evaluate(claimed, at: claimed.observedAt) == .eligible
             && evaluate(current, at: now) == .eligible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled; case idleSeconds; case minimumResidencySeconds; case maximumEvidenceAgeSeconds;
+        case restoreTimeoutSeconds; case excludedSandboxIDs
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decode(Bool.self, forKey: .enabled)
+        self._jsonIdleSeconds = try container.decode(TimeInterval.self, forKey: .idleSeconds)
+        self._jsonMinimumResidencySeconds = try container.decode(TimeInterval.self, forKey: .minimumResidencySeconds)
+        self._jsonMaximumEvidenceAgeSeconds = try container.decode(
+            TimeInterval.self, forKey: .maximumEvidenceAgeSeconds)
+        self._jsonRestoreTimeoutSeconds = try container.decode(TimeInterval.self, forKey: .restoreTimeoutSeconds)
+        self._jsonExcludedSandboxIDs = try container.decode(Set<UUID>.self, forKey: .excludedSandboxIDs)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(_jsonIdleSeconds, forKey: .idleSeconds)
+        try container.encode(_jsonMinimumResidencySeconds, forKey: .minimumResidencySeconds)
+        try container.encode(_jsonMaximumEvidenceAgeSeconds, forKey: .maximumEvidenceAgeSeconds)
+        try container.encode(_jsonRestoreTimeoutSeconds, forKey: .restoreTimeoutSeconds)
+        try container.encode(_jsonExcludedSandboxIDs, forKey: .excludedSandboxIDs)
+    }
+
+    var _jsonIdleSeconds: TimeInterval {
+        get { idleSeconds }
+        set { let value = newValue; idleSeconds = value }
+    }
+    var _jsonMinimumResidencySeconds: TimeInterval {
+        get { minimumResidencySeconds }
+        set { let value = newValue; minimumResidencySeconds = value }
+    }
+    var _jsonMaximumEvidenceAgeSeconds: TimeInterval {
+        get { maximumEvidenceAgeSeconds }
+        set { let value = newValue; maximumEvidenceAgeSeconds = value }
+    }
+    var _jsonRestoreTimeoutSeconds: TimeInterval {
+        get { restoreTimeoutSeconds }
+        set { let value = newValue; restoreTimeoutSeconds = value }
+    }
+    var _jsonExcludedSandboxIDs: Set<UUID> {
+        get {
+            Set(
+                excludedSandboxIDs.values.map {
+                    UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+                })
+        }
+        set {
+            let value = newValue;
+            excludedSandboxIDs = Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection.with {
+                $0.values = Array(value).map { $0.uuidString }
+            }
+        }
     }
 }

@@ -95,7 +95,7 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
     var agentId: String?
 
     // Desired/observed state split (ADR 0001 stage 8, STR-150).
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredSnapshotStatus
 
     @Field(key: "generation")
@@ -255,8 +255,8 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     @discardableResult
     func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool {
         var changed = false
-        if let path = facts.storagePath, storagePath != path {
-            storagePath = path
+        if facts.hasStoragePath, storagePath != facts.storagePath {
+            storagePath = facts.storagePath
             changed = true
         }
         // `currentSizeBytes`, never `sizeBytes` — and never into `size`.
@@ -269,10 +269,10 @@ extension VolumeSnapshot: SnapshotArtifactResource {
         // measurement taken at capture, when the overlay is an empty file, and
         // is still ignored: a pre-v39 agent reports only that one, and reading
         // it would make every snapshot it holds cost ~200 KB.
-        if let footprint = facts.currentSizeBytes,
-            observedSizeBytes.map({ abs(footprint - $0) >= Self.footprintReportGranularity }) ?? true
+        if facts.hasCurrentSizeBytes,
+            observedSizeBytes.map({ abs(facts.currentSizeBytes - $0) >= Self.footprintReportGranularity }) ?? true
         {
-            observedSizeBytes = footprint
+            observedSizeBytes = facts.currentSizeBytes
             changed = true
         }
         return changed

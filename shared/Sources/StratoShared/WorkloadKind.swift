@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 /// Which kind of workload a reconcile work item, manifest entry, or wire-level
 /// teardown record refers to (issue #417). The reconciler engine — diff,
@@ -14,25 +15,24 @@ import Foundation
 /// `Codable` because the on-disk workload manifest tags each entry with its
 /// kind; manifests written before sandboxes existed have no kind and decode
 /// as `.vm`.
-public enum WorkloadKind: String, Codable, Hashable, CaseIterable, Sendable {
-    case vm
-    case sandbox
+public typealias WorkloadKind = Strato_Agent_V1_WorkloadKind
+extension Strato_Agent_V1_WorkloadKind: Codable {
+
     /// A managed volume (STR-148). Unlike the first two kinds, nothing is ever
     /// written to `VMManifestStore` under this kind: a volume's durable record
     /// on the agent is its directory in the storage backend, which is also what
     /// the reconciler enumerates as its presence set. Attachment, the one piece
     /// of volume state the filesystem cannot answer, rides the *VM's* manifest
     /// entry (`VMSpec.volumes`), because that is what the spawn path reads.
-    case volume
+
     /// A point-in-time copy of one volume's data — an external qcow2 overlay
     /// (ADR 0001 stage 8, STR-150).
-    case volumeSnapshot = "volume_snapshot"
+
     /// A full-VM checkpoint: guest RAM and device state inside the VM's own
     /// qcow2 disks (STR-150).
-    case vmCheckpoint = "vm_checkpoint"
+
     /// A sandbox checkpoint: Firecracker memory + vmstate + rootfs copy in an
     /// agent-owned directory (STR-150).
-    case sandboxSnapshot = "sandbox_snapshot"
 
     /// Whether this kind names a snapshot artifact rather than a live
     /// workload. Artifacts are frozen bytes with a parent — they never boot,
@@ -42,6 +42,50 @@ public enum WorkloadKind: String, Codable, Hashable, CaseIterable, Sendable {
         switch self {
         case .vm, .sandbox, .volume: return false
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return true
+        case .unspecified, .UNRECOGNIZED: return false
         }
+    }
+
+    public var protocolValue: String {
+        switch self {
+        case .vm: return "vm"
+        case .sandbox: return "sandbox"
+        case .volume: return "volume"
+        case .volumeSnapshot: return "volume_snapshot"
+        case .vmCheckpoint: return "vm_checkpoint"
+        case .sandboxSnapshot: return "sandbox_snapshot"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "vm": self = .vm
+        case "sandbox": self = .sandbox
+        case "volume": self = .volume
+        case "volume_snapshot": self = .volumeSnapshot
+        case "vm_checkpoint": self = .vmCheckpoint
+        case "sandbox_snapshot": self = .sandboxSnapshot
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.vm, .sandbox, .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
     }
 }

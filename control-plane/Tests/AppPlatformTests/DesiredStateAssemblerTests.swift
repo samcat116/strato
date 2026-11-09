@@ -50,12 +50,12 @@ final class DesiredStateAssemblerTests {
         named name: String,
         siteID: UUID? = nil,
         resolverCapable: Bool? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major)
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
             on: app,
             named: name,
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             resolverCapable: resolverCapable,
             siteID: siteID)
     }
@@ -91,14 +91,14 @@ final class DesiredStateAssemblerTests {
             vm.generation = 7
             try await vm.save(on: app.db)
             let initial = try await DesiredStateAssembler(app: app).assemble(agentId: agentID)
-            #expect(initial.vms.first?.guestConfig == vm.guestConfig)
-            #expect(initial.vms.first?.guestConfigFailedGeneration == nil)
+            #expect(initial.vms.values.first?.guestConfig == vm.guestConfig)
+            #expect(initial.vms.values.first?.hasGuestConfigFailedGeneration == false)
             vm.guestConfigFailedGeneration = 7
             try await vm.save(on: app.db)
             // Assembly reads the persisted verdict, without a shared process-local cache.
             let restored = try await DesiredStateAssembler(app: app).assemble(agentId: agentID)
-            #expect(restored.vms.first?.generation == 7)
-            #expect(restored.vms.first?.guestConfigFailedGeneration == 7)
+            #expect(restored.vms.values.first?.generation == 7)
+            #expect(restored.vms.values.first?.guestConfigFailedGeneration == 7)
         }
     }
 
@@ -213,32 +213,33 @@ final class DesiredStateAssemblerTests {
                 ipv6: ("fd40::5", 64, "fd40::1"))
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
-            let metadata = try #require(entry.metadata)
+            let entry = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString })
+            try #require(entry.hasMetadata)
+            let metadata = entry.metadata
 
-            #expect(metadata.instanceId == vm.id)
+            #expect(metadata.instanceID == vm.id?.uuidString)
             #expect(metadata.hostname == "web-01")
-            #expect(metadata.projectId == project.id)
+            #expect(metadata.projectID == project.id?.uuidString)
             #expect(metadata.environment == "production")
             // Placement: the site names the coarse half, the placing agent the
             // fine one.
             #expect(metadata.region == "dc-meta")
             #expect(metadata.availabilityZone == "meta-agent")
-            #expect(metadata.sshAuthorizedKeys == [vm.sshPublicKey!])
+            #expect(metadata.sshAuthorizedKeys.values == [vm.sshPublicKey!])
             #expect(metadata.userData == vm.userData)
-            #expect(metadata.vendorData == nil)
-            #expect(metadata.tags.isEmpty)
+            #expect(!metadata.hasVendorData)
+            #expect(metadata.tags.values.isEmpty)
             // The VM's own SPIFFE ID (STR-55) is publishable because it is only
             // a name. Empty issuance configuration keeps STR-62 disabled and
             // publishes no audience or TTL capability to the agent.
-            #expect(metadata.identity?.spiffeId == identity.spiffeID)
-            #expect(metadata.identity?.audiences == [])
-            #expect(metadata.identity?.ttlSeconds == nil)
+            #expect(metadata.identity.spiffeID == identity.spiffeID)
+            #expect(metadata.identity.audiences.values == [])
+            #expect(!metadata.identity.hasTtlSeconds)
 
-            #expect(metadata.nics.map(\.deviceName) == ["net0", "net1"])
-            let net0 = metadata.nics[0]
+            #expect(metadata.nics.values.map(\.deviceName) == ["net0", "net1"])
+            let net0 = metadata.nics.values[0]
             #expect(net0.macAddress == "00:0c:29:00:00:01")
-            #expect(net0.networkId == front.id)
+            #expect(net0.networkID == front.id?.uuidString)
             #expect(net0.networkName == "front")
             #expect(net0.ipAddress == "10.40.0.5")
             #expect(net0.prefixLength == 24)
@@ -247,27 +248,27 @@ final class DesiredStateAssemblerTests {
             #expect(net0.ipv6PrefixLength == 64)
             #expect(net0.gateway6 == "fd40::1")
             #expect(net0.mtu == 9000)
-            #expect(net0.dnsServers == ["10.40.0.53", "fd40::53"])
+            #expect(net0.dnsServers.values == ["10.40.0.53", "fd40::53"])
             #expect(net0.domainName == "front.example")
             #expect(net0.dhcpEnabled)
             #expect(net0.metadataEnabled)
-            #expect(net0.resolverAddresses == (front.resolverAddressesIfEnabled(siteCapable: true) ?? []))
+            #expect(net0.resolverAddresses.values == (front.resolverAddressesIfEnabled(siteCapable: true) ?? []))
 
-            let net1 = metadata.nics[1]
+            let net1 = metadata.nics.values[1]
             #expect(net1.networkName == "back")
             #expect(net1.ipAddress == "10.41.0.9")
             // Single-stack NIC: no v6 half invented from the network's config.
-            #expect(net1.ipv6Address == nil)
-            #expect(net1.mtu == nil)
-            #expect(net1.dnsServers == ["10.41.0.53"])
-            #expect(net1.domainName == nil)
+            #expect(!net1.hasIpv6Address)
+            #expect(!net1.hasMtu)
+            #expect(net1.dnsServers.values == ["10.41.0.53"])
+            #expect(!net1.hasDomainName)
             #expect(net1.dhcpEnabled)
             #expect(net1.metadataEnabled)
-            #expect(net1.resolverAddresses == (back.resolverAddressesIfEnabled(siteCapable: true) ?? []))
+            #expect(net1.resolverAddresses.values == (back.resolverAddressesIfEnabled(siteCapable: true) ?? []))
 
             // The metadata NIC order is the spec's NIC order — a guest matches
             // by MAC, but an operator reading both sees one list.
-            #expect(entry.spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))
+            #expect(entry.spec.networks.values.map(\.macAddress) == metadata.nics.values.map(\.macAddress))
         }
     }
 
@@ -282,8 +283,8 @@ final class DesiredStateAssemblerTests {
             // leaves behind. Nil is the whole answer: the guest is told nothing
             // rather than told an identity nothing will honour.
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
-            #expect(metadata.identity == nil)
+            let metadata = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString }?.metadata)
+            #expect(!metadata.hasIdentity)
         }
     }
 
@@ -302,11 +303,11 @@ final class DesiredStateAssemblerTests {
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let policy = try #require(
-                sync.vms.first { $0.vmId == vm.id }?.metadata?.identity)
+                sync.vms.values.first { $0.vmID == vm.id?.uuidString }?.metadata.identity)
 
-            #expect(policy.spiffeId == identity.spiffeID)
+            #expect(policy.spiffeID == identity.spiffeID)
             #expect(
-                policy.audiences == [
+                policy.audiences.values == [
                     "spiffe://strato.local/control-plane", "spiffe://strato.local/other",
                 ])
             #expect(policy.ttlSeconds == 900)
@@ -321,16 +322,16 @@ final class DesiredStateAssemblerTests {
                 app: app, project: project, named: "bare-vm", onAgent: agentId)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
+            let metadata = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString }?.metadata)
 
-            #expect(metadata.nics.isEmpty)
+            #expect(metadata.nics.values.isEmpty)
             // Nil, not a slug of `name`: the derivation the stored column
             // exists to avoid, and it would disagree with the VM's DNS zone.
-            #expect(metadata.hostname == nil)
-            #expect(metadata.instanceId == vm.id)
-            #expect(metadata.projectId == project.id)
-            #expect(metadata.sshAuthorizedKeys.isEmpty)
-            #expect(metadata.userData == nil)
+            #expect(!metadata.hasHostname)
+            #expect(metadata.instanceID == vm.id?.uuidString)
+            #expect(metadata.projectID == project.id?.uuidString)
+            #expect(metadata.sshAuthorizedKeys.values.isEmpty)
+            #expect(!metadata.hasUserData)
             let agent = try #require(try await Agent.find(UUID(uuidString: agentId), on: app.db))
             let site = try await agent.$site.get(on: app.db)
             #expect(metadata.region == site.name)
@@ -418,8 +419,8 @@ final class DesiredStateAssemblerTests {
             let sync = try await DesiredStateAssembler(app: app, metricsFactory: metrics)
                 .assemble(agentId: agentId)
 
-            #expect(sync.vms.map(\.vmId) == [healthy.id!])
-            #expect(!sync.tombstones.contains { $0.workloadId == poisonID })
+            #expect(sync.vms.values.map(\.vmID) == [healthy.id!.uuidString])
+            #expect(!sync.tombstones.values.contains { $0.workloadID == poisonID.uuidString })
             let degraded = try #require(
                 try await VM.find(poisonID, on: app.db)?.conditions.degraded)
             #expect(degraded.sinceGeneration == poison.generation)
@@ -437,7 +438,7 @@ final class DesiredStateAssemblerTests {
             repairedBoot.$createdBy.id = try owner.requireID()
             try await repairedBoot.save(on: app.db)
             let repaired = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(Set(repaired.vms.map(\.vmId)) == Set([healthy.id!, poisonID]))
+            #expect(Set(repaired.vms.values.map(\.vmID)) == Set([healthy.id!.uuidString, poisonID.uuidString]))
             #expect(try await VM.find(poisonID, on: app.db)?.conditions.degraded == nil)
         }
     }
@@ -457,9 +458,9 @@ final class DesiredStateAssemblerTests {
             try await vm.save(on: app.db)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            let entry = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString })
             #expect(entry.desiredStatus == .absent)
-            #expect(entry.spec.volumes.isEmpty)
+            #expect(entry.spec.volumes.values.isEmpty)
         }
     }
 
@@ -474,8 +475,8 @@ final class DesiredStateAssemblerTests {
                 app: app, project: project, named: "env-vm", onAgent: agentId, environment: "")
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
-            #expect(metadata.environment == nil)
+            let metadata = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString }?.metadata)
+            #expect(!metadata.hasEnvironment)
         }
     }
 
@@ -493,15 +494,15 @@ final class DesiredStateAssemblerTests {
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let servedMetadata = try #require(sync.vms.first { $0.vmId == served.id }?.metadata)
+            let servedMetadata = try #require(sync.vms.values.first { $0.vmID == served.id?.uuidString }?.metadata)
             #expect(servedMetadata.serviceEnabled == true)
             #expect(servedMetadata.isServiceEnabled)
 
-            let hardenedMetadata = try #require(sync.vms.first { $0.vmId == hardened.id }?.metadata)
+            let hardenedMetadata = try #require(sync.vms.values.first { $0.vmID == hardened.id?.uuidString }?.metadata)
             #expect(hardenedMetadata.serviceEnabled == false)
             #expect(!hardenedMetadata.isServiceEnabled)
-            #expect(hardenedMetadata.instanceId == hardened.id)
-            #expect(hardenedMetadata.projectId == project.id)
+            #expect(hardenedMetadata.instanceID == hardened.id?.uuidString)
+            #expect(hardenedMetadata.projectID == project.id?.uuidString)
         }
     }
 
@@ -518,9 +519,9 @@ final class DesiredStateAssemblerTests {
             // sending a zero would be a subtly different claim from sending
             // nothing, and it would put both keys in every sync's digest.
             var sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            var entry = try #require(sync.vms.first { $0.vmId == vm.id })
-            #expect(entry.rebootGeneration == nil)
-            #expect(entry.restore == nil)
+            var entry = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString })
+            #expect(!entry.hasRebootGeneration)
+            #expect(!entry.hasRestore)
 
             let snapshotID = UUID()
             vm.requestFixtureReboot()
@@ -528,13 +529,13 @@ final class DesiredStateAssemblerTests {
             try await vm.save(on: app.db)
 
             sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            entry = try #require(sync.vms.values.first { $0.vmID == vm.id?.uuidString })
             #expect(entry.rebootGeneration == 1)
-            #expect(entry.restore?.generation == 1)
-            #expect(entry.restore?.snapshotId == snapshotID)
+            #expect(entry.restore.generation == 1)
+            #expect(entry.restore.snapshotID == snapshotID.uuidString)
             // A VM checkpoint lives inside the VM's own disks, so it never moves
             // between hosts and there is nothing to stage.
-            #expect(entry.restore?.artifacts == nil)
+            #expect(!entry.restore.hasArtifacts)
         }
     }
 
@@ -591,9 +592,9 @@ final class DesiredStateAssemblerTests {
             vm: vm, vmId: vm.id!, resolvedInterfaces: resolved,
             region: "dc-drop", availabilityZone: "drop-agent", instanceSPIFFEID: nil)
 
-        #expect(metadata.nics.map(\.deviceName) == ["net0", "net2"])
-        #expect(spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))
-        #expect(!metadata.nics.contains { $0.networkId == missingNetworkID })
+        #expect(metadata.nics.values.map(\.deviceName) == ["net0", "net2"])
+        #expect(spec.networks.values.map(\.macAddress) == metadata.nics.values.map(\.macAddress))
+        #expect(!metadata.nics.values.contains { $0.networkID == missingNetworkID.uuidString })
     }
 
     @Test("Only IMDS-backed VMs publish a NoCloud seed capability")
@@ -608,13 +609,13 @@ final class DesiredStateAssemblerTests {
         let imds = InstanceMetadata.build(
             vm: vm, vmId: vm.id!, resolvedInterfaces: [], region: nil,
             availabilityZone: nil, instanceSPIFFEID: nil)
-        #expect(imds.noCloudSeedToken == seedToken)
+        #expect(imds.noCloudSeedToken == seedToken.uuidString)
 
         vm.metadataSource = .iso
         let iso = InstanceMetadata.build(
             vm: vm, vmId: vm.id!, resolvedInterfaces: [], region: nil,
             availabilityZone: nil, instanceSPIFFEID: nil)
-        #expect(iso.noCloudSeedToken == nil)
+        #expect(!iso.hasNoCloudSeedToken)
     }
 
     // MARK: - Shape
@@ -669,12 +670,12 @@ final class DesiredStateAssemblerTests {
                 app.fluent.history.start()
                 defer { app.fluent.history.stop() }
                 let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-                #expect(sync.vms.count == expected)
+                #expect(sync.vms.values.count == expected)
                 // Every VM carries metadata for both its NICs and its own
                 // identity; a scaling test that measured an empty assembly
                 // would prove nothing.
-                #expect(sync.vms.allSatisfy { ($0.metadata?.nics.count ?? 0) == 2 })
-                #expect(sync.vms.allSatisfy { $0.metadata?.identity != nil })
+                #expect(sync.vms.values.allSatisfy { $0.hasMetadata && $0.metadata.nics.values.count == 2 })
+                #expect(sync.vms.values.allSatisfy { $0.hasMetadata && $0.metadata.hasIdentity })
                 return app.fluent.history.queries.count
             }
 

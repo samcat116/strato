@@ -521,7 +521,7 @@ package struct TestDataBuilder {
                 supportsVolumeIOLimits: true)
         ],
         networkCapability: NetworkCapability? = .overlay,
-        protocolVersion: Int = WireProtocol.currentVersion,
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major),
         sandboxCapable: Bool? = nil,
         sandboxNetworkingCapable: Bool? = nil,
         tpmCapable: Bool? = nil,
@@ -552,7 +552,7 @@ package struct TestDataBuilder {
             architecture: architecture ?? .x86_64,
             hypervisors: hypervisors ?? [],
             networkCapability: networkCapability,
-            protocolVersion: protocolVersion,
+            protocolOffer: .with { $0.major = UInt32(protocolMajor) },
             sandboxCapable: sandboxCapable ?? false,
             sandboxNetworkingCapable: sandboxNetworkingCapable ?? false,
             tpmCapable: tpmCapable ?? false,

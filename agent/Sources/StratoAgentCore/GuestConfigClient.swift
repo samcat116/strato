@@ -82,7 +82,7 @@ public struct GuestConfigClient: Sendable {
                 let observation = response.observation
             else { throw GuestConfigurationFailure.invalidResponse }
             let expectedFileSHA256 = Dictionary(
-                uniqueKeysWithValues: config.files.map { file in
+                uniqueKeysWithValues: config.files.values.map { file in
                     (file.path, SHA256.hash(data: Data(file.content.utf8)).map { String(format: "%02x", $0) }.joined())
                 })
             try observation.validate(for: config, generation: generation, expectedFileSHA256: expectedFileSHA256)

@@ -113,10 +113,9 @@ public struct ResourceTelemetryProbe: Sendable {
         let swapUsed: ResourceTelemetryValue
         if case .available = swapTotal.availability,
             case .available = swapFree.availability,
-            let total = swapTotal.value,
-            let free = swapFree.value
+            swapTotal.hasValue, swapFree.hasValue
         {
-            swapUsed = .available(max(0, total - free))
+            swapUsed = .available(max(0, swapTotal.value - swapFree.value))
         } else {
             swapUsed = .unavailable
         }
@@ -138,22 +137,26 @@ public struct ResourceTelemetryProbe: Sendable {
         }
 
         let zramUsed = zramUsage()
-        let elapsed = previous.map { sampledAt.timeIntervalSince($0.sampledAt) }
+        let elapsed = previous.map { sampledAt.timeIntervalSince($0.sampledAt.date) }
         func rate(_ current: ResourceTelemetryValue, _ prior: ResourceTelemetryValue?) -> Double? {
-            guard let elapsed, elapsed > 0, let value = current.value,
-                let old = prior?.value, value >= old
+            guard let elapsed, elapsed > 0, current.hasValue, let prior, prior.hasValue,
+                current.value >= prior.value
             else { return nil }
-            return (Double(value) - Double(old)) / elapsed
+            return (Double(current.value) - Double(prior.value)) / elapsed
         }
         let swapIn = integerValue(vmstat["pswpin"])
         let swapOut = integerValue(vmstat["pswpout"])
         let inRate = rate(swapIn, previous?.swapInPagesTotal)
         let outRate = rate(swapOut, previous?.swapOutPagesTotal)
         var warnings: [String] = []
-        if (inRate ?? 0) > 0 && (outRate ?? 0) > 0 && (memoryPressure.full?.average10 ?? 0) >= 0.5 {
+        if (inRate ?? 0) > 0 && (outRate ?? 0) > 0
+            && (memoryPressure.hasFull ? memoryPressure.full.average10 : 0) >= 0.5
+        {
             warnings.append("swap_thrashing")
         }
-        if let current = oomKills.value, let old = previous?.oomKillsTotal.value, current > old {
+        if oomKills.hasValue, let previous, previous.oomKillsTotal.hasValue,
+            oomKills.value > previous.oomKillsTotal.value
+        {
             warnings.append("oom_kill")
         }
         let health = Self.health(
@@ -304,11 +307,11 @@ public struct ResourceTelemetryProbe: Sendable {
         let available = [cpu, memory, io].contains { $0.availability == .available }
         guard available else { return .unknown }
 
-        let cpuSome = cpu.some?.average10 ?? 0
-        let memorySome = memory.some?.average10 ?? 0
-        let memoryFull = memory.full?.average10 ?? 0
-        let ioSome = io.some?.average10 ?? 0
-        let ioFull = io.full?.average10 ?? 0
+        let cpuSome = cpu.hasSome ? cpu.some.average10 : 0
+        let memorySome = memory.hasSome ? memory.some.average10 : 0
+        let memoryFull = memory.hasFull ? memory.full.average10 : 0
+        let ioSome = io.hasSome ? io.some.average10 : 0
+        let ioFull = io.hasFull ? io.full.average10 : 0
 
         if cpuSome >= 50 || memorySome >= 20 || memoryFull >= 2 || ioSome >= 30 || ioFull >= 5 {
             return .critical
@@ -474,7 +477,9 @@ extension ResourceTelemetryProbe {
                 let size = read("\(sysRoot)/block/zram0/disksize").flatMap {
                     Int64($0.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
-                if size != (config.zramBytes ?? 1_073_741_824) { reason = "zram_size_mismatch_or_unsupported" }
+                if size != (config.hasZramBytes ? config.zramBytes : 1_073_741_824) {
+                    reason = "zram_size_mismatch_or_unsupported"
+                }
                 if swaps.contains(where: { $0.first != "/dev/zram0" && $0.count >= 5 && (Int($0[4]) ?? 100) >= 100 }) {
                     reason = "operator_swap_priority_conflict"
                 }
@@ -483,7 +488,9 @@ extension ResourceTelemetryProbe {
                 let pool = read("\(sysRoot)/module/zswap/parameters/max_pool_percent").flatMap {
                     Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
-                if pool != (config.zswapPoolPercent ?? 20) { reason = "zswap_pool_mismatch_or_unsupported" }
+                if pool != (config.hasZswapPoolPercent ? Int(config.zswapPoolPercent) : 20) {
+                    reason = "zswap_pool_mismatch_or_unsupported"
+                }
             }
             if reason == nil && config.ksm == true {
                 let pages = read("\(sysRoot)/kernel/mm/ksm/pages_to_scan").flatMap {
@@ -492,13 +499,14 @@ extension ResourceTelemetryProbe {
                 let sleep = read("\(sysRoot)/kernel/mm/ksm/sleep_millisecs").flatMap {
                     Int($0.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
-                if pages != (config.ksmPagesToScan ?? 100) || sleep != (config.ksmSleepMilliseconds ?? 100)
+                if pages != (config.hasKsmPagesToScan ? Int(config.ksmPagesToScan) : 100)
+                    || sleep != (config.hasKsmSleepMilliseconds ? Int(config.ksmSleepMilliseconds) : 100)
                     || !(1...1000).contains(pages ?? 0) || !(50...60000).contains(sleep ?? 0)
                 {
                     reason = "ksm_scanner_bounds_mismatch"
                 }
             }
-            if reason == nil && config.requireMGLRU == true {
+            if reason == nil && config.requireMglru == true {
                 if let raw = read("\(sysRoot)/kernel/mm/lru_gen/enabled")?.trimmingCharacters(
                     in: .whitespacesAndNewlines),
                     let bits = parseInteger(raw), bits & 1 != 0

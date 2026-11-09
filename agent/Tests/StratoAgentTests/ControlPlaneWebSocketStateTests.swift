@@ -42,4 +42,31 @@ struct ControlPlaneWebSocketStateTests {
         let currentClose = state.markClosed(successor)
         #expect(currentClose == .unexpected)
     }
+    @Test("A replacement socket cannot send workload before its own registration")
+    func registrationCannotAuthorizeSuccessor() {
+        var state = ControlPlaneWebSocketState()
+        let first = state.beginConnection()
+        let connectedFirst = state.markConnected(first)
+        #expect(connectedFirst)
+        #expect(!state.canSendWorkload)
+        let registeredFirst = state.markRegistered(first)
+        #expect(registeredFirst)
+        #expect(state.canSendWorkload)
+
+        let successor = state.beginConnection()
+        #expect(!state.canSendWorkload)
+        let connectedSuccessor = state.markConnected(successor)
+        #expect(connectedSuccessor)
+        let staleRegistration = state.markRegistered(first)
+        #expect(!staleRegistration)
+        #expect(!state.canSendWorkload)
+        let registeredSuccessor = state.markRegistered(successor)
+        #expect(registeredSuccessor)
+        #expect(state.canSendWorkload)
+        #expect(state.markClosed(first) == .stale)
+        #expect(state.canSendWorkload)
+        #expect(state.beginIntentionalDisconnect() == successor)
+        #expect(!state.canSendWorkload)
+    }
+
 }

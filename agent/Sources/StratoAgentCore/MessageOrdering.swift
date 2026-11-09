@@ -77,40 +77,39 @@ extension MessageEnvelope {
 
     /// The serial lanes used to order this inbound frame relative to others.
     public var serializationKeys: [String] {
-        Self.serializationKeys(type: type, payload: payload)
-    }
-
-    /// Compute the serial lanes for a frame of `type` with the given raw JSON `payload`.
-    static func serializationKeys(type: MessageType, payload: Data) -> [String] {
+        let key: String?
+        let prefix: String
         switch type {
         case .desiredState:
             return [Self.reconcileLane]
-        case .consoleConnect, .consoleDisconnect, .consoleData:
-            return routingKey(in: payload, field: \.vmId, prefix: "console:")
-        case .guestExecStart, .guestExecInput, .guestExecResize, .guestExecClose,
-            .guestExecRecordedAck:
-            return routingKey(in: payload, field: \.sessionId, prefix: "exec:")
+        case .consoleConnect:
+            key = try? decode(as: ConsoleConnectMessage.self).vmID
+            prefix = "console:"
+        case .consoleDisconnect:
+            key = try? decode(as: ConsoleDisconnectMessage.self).vmID
+            prefix = "console:"
+        case .consoleData:
+            key = try? decode(as: ConsoleDataMessage.self).vmID
+            prefix = "console:"
+        case .guestExecStart:
+            key = try? decode(as: GuestExecStartMessage.self).sessionID
+            prefix = "exec:"
+        case .guestExecInput:
+            key = try? decode(as: GuestExecInputMessage.self).sessionID
+            prefix = "exec:"
+        case .guestExecResize:
+            key = try? decode(as: GuestExecResizeMessage.self).sessionID
+            prefix = "exec:"
+        case .guestExecClose:
+            key = try? decode(as: GuestExecCloseMessage.self).sessionID
+            prefix = "exec:"
+        case .guestExecRecordedAck:
+            key = try? decode(as: GuestExecRecordedAckMessage.self).sessionID
+            prefix = "exec:"
         default:
-            return [unkeyedSerializationLane]
+            return [Self.unkeyedSerializationLane]
         }
-    }
-
-    private static func routingKey(
-        in payload: Data,
-        field: KeyPath<RoutingFields, String?>,
-        prefix: String
-    ) -> [String] {
-        guard
-            let fields = try? WireProtocol.makeDecoder().decode(RoutingFields.self, from: payload),
-            let value = fields[keyPath: field],
-            !value.isEmpty
-        else { return [unkeyedSerializationLane] }
-        return [prefix + value]
-    }
-
-    /// Minimal projection decoded for the live-stream frames that need routing.
-    private struct RoutingFields: Decodable {
-        let vmId: String?
-        let sessionId: String?
+        guard let key, !key.isEmpty else { return [Self.unkeyedSerializationLane] }
+        return [prefix + key]
     }
 }

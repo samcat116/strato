@@ -20,8 +20,8 @@ public struct AgentUpdateBridgeResponse: Codable, Sendable {
             targetVersion = update.targetVersion
             artifactURL = update.artifactURL
             sha256 = update.sha256
-            artifactKind = update.artifactKind.rawValue
-            tarballMember = update.tarballMember
+            artifactKind = update.artifactKind.protocolValue
+            tarballMember = update.hasTarballMember ? update.tarballMember : nil
         }
 
         public func desiredUpdate() throws -> DesiredAgentUpdate {

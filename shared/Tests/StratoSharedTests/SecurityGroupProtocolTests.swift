@@ -40,20 +40,20 @@ struct SecurityGroupProtocolTests {
         )
         let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
 
-        let groups = try #require(decoded.securityGroups)
+        let groups = try #require(decoded._jsonSecurityGroups)
         #expect(groups.count == 1)
-        #expect(groups[0].id == groupId)
-        #expect(groups[0].generation == 3)
-        #expect(groups[0].rules.count == 2)
-        #expect(groups[0].rules[0].id == ruleId)
-        #expect(groups[0].rules[0].direction == "ingress")
-        #expect(groups[0].rules[0].protocolName == "tcp")
-        #expect(groups[0].rules[0].portRangeMin == 443)
-        #expect(groups[0].rules[0].remoteCIDR == "0.0.0.0/0")
-        #expect(groups[0].rules[0].remoteGroupId == nil)
-        #expect(groups[0].rules[1].ethertype == "ipv6")
-        #expect(groups[0].rules[1].remoteGroupId == peerId)
-        #expect(groups[0].rules[1].protocolName == nil)
+        #expect(groups[0]._jsonId == groupId)
+        #expect(groups[0]._jsonGeneration == 3)
+        #expect(groups[0]._jsonRules.count == 2)
+        #expect(groups[0]._jsonRules[0]._jsonId == ruleId)
+        #expect(groups[0]._jsonRules[0]._jsonDirection == "ingress")
+        #expect(groups[0]._jsonRules[0]._jsonProtocolName == "tcp")
+        #expect(groups[0]._jsonRules[0]._jsonPortRangeMin == 443)
+        #expect(groups[0]._jsonRules[0]._jsonRemoteCIDR == "0.0.0.0/0")
+        #expect(groups[0]._jsonRules[0]._jsonRemoteGroupId == nil)
+        #expect(groups[0]._jsonRules[1]._jsonEthertype == "ipv6")
+        #expect(groups[0]._jsonRules[1]._jsonRemoteGroupId == peerId)
+        #expect(groups[0]._jsonRules[1]._jsonProtocolName == nil)
     }
 
     @Test("A non-authoritative desired message keeps securityGroups nil")
@@ -67,7 +67,7 @@ struct SecurityGroupProtocolTests {
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
-        #expect(decoded.securityGroups == nil)
+        #expect(decoded._jsonSecurityGroups == nil)
     }
 
     @Test("NetworkSpec carries securityGroupIds and tolerates their absence")
@@ -76,7 +76,7 @@ struct SecurityGroupProtocolTests {
         let spec = NetworkSpec(network: "default", networkId: UUID(), securityGroupIds: ids)
         let data = try WireProtocol.makeEncoder().encode(spec)
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
-        #expect(decoded.securityGroupIds == ids)
+        #expect(decoded._jsonSecurityGroupIds == ids)
 
         // Nil marks the NIC unmanaged: it joins no port groups, including the
         // drop group.
@@ -86,7 +86,7 @@ struct SecurityGroupProtocolTests {
             """
         let unmanagedDecoded = try WireProtocol.makeDecoder().decode(
             NetworkSpec.self, from: Data(unmanaged.utf8))
-        #expect(unmanagedDecoded.securityGroupIds == nil)
+        #expect(unmanagedDecoded._jsonSecurityGroupIds == nil)
     }
 
     @Test("A rule's log flag round-trips and is required")
@@ -94,7 +94,7 @@ struct SecurityGroupProtocolTests {
         let logged = DesiredSecurityGroupRule(
             id: UUID(), direction: "ingress", ethertype: "ipv4", log: true)
         let data = try WireProtocol.makeEncoder().encode(logged)
-        #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data).log == true)
+        #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data)._jsonLog == true)
 
         let missingLog = """
             {"id":"\(UUID().uuidString)","direction":"ingress","ethertype":"ipv4"}

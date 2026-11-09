@@ -255,8 +255,8 @@ struct MetadataIdentityTests {
         #expect(initial.body == "token-a")
 
         let tightenedPolicy = IdentityPolicy(
-            spiffeId: initialPolicy.spiffeId,
-            audiences: initialPolicy.audiences,
+            spiffeId: initialPolicy.spiffeID,
+            audiences: initialPolicy.audiences.values,
             ttlSeconds: 120)
         await responder.update(
             MetadataSnapshot(

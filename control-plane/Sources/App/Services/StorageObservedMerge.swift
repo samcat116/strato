@@ -18,7 +18,8 @@ extension ObservedStateApplier {
         on db: Database
     ) async throws -> Bool {
         let volumeID = try volume.requireID()
-        try logSupersededFailureReport(volume, reportedGeneration: observed.failedGeneration)
+        try logSupersededFailureReport(
+            volume, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
         // Captured before anything mutates, for exactly the reasons the VM
         // path documents: `recordConvergence` mirrors the agent's own
         // `failedGeneration` onto the model and would otherwise satisfy the
@@ -28,26 +29,25 @@ extension ObservedStateApplier {
         let volumePool = try await VolumeService.pool(of: volume, on: db)
         let isCeph = volumePool?.mode == .ceph
         let observedCephAttachment: DiskAttachment?
-        if isCeph, observed.present, let attachment = observed.attachment {
+        if isCeph, observed.present, let attachment = (observed.hasAttachment ? observed.attachment : nil) {
             guard
-                case .rbd(
-                    let poolName, let imageName, let namespace, let user, let monEndpoints,
-                    let clusterID, let credentialID, let configPath
-                ) = attachment,
-                poolName == volumePool?.cephPoolName,
-                namespace == volumePool?.cephNamespace,
+                case .rbd(let coordinates) = attachment.value,
+                let clusterID = UUID(uuidString: coordinates.clusterID),
+                let credentialID = UUID(uuidString: coordinates.credentialID),
+                coordinates.pool == volumePool?.cephPoolName,
+                coordinates.namespace == volumePool?.cephNamespace,
                 clusterID == volumePool?.$cephCluster.id,
-                imageName == CephVolumeStorage.imageName(volumeId: volumeID),
+                coordinates.image == CephVolumeStorage.imageName(volumeId: volumeID),
                 let cluster = try await CephCluster.find(clusterID, on: db),
-                monEndpoints == cluster.monEndpoints,
-                configPath
+                coordinates.monEndpoints.values == cluster.monEndpoints,
+                coordinates.configPath
                     == CephVolumeStorage.configPath(
                         clusterId: clusterID, credentialId: credentialID),
                 let access = try await CephProjectAccess.query(on: db)
                     .filter(\.$keyringSecret.$id == credentialID).first(),
                 access.id == volumePool?.$cephProjectAccess.id,
                 access.$cluster.id == clusterID,
-                user == String(access.clientName.dropFirst("client.".count))
+                coordinates.user == String(access.clientName.dropFirst("client.".count))
             else {
                 throw Abort(
                     .unprocessableEntity,
@@ -64,7 +64,7 @@ extension ObservedStateApplier {
             allStorageSettled =
                 observed.present
                 && observedCephAttachment != nil
-                && observed.convergencePhase == nil
+                && !observed.hasConvergencePhase
                 && observed.observedGeneration >= volume.generation
             aggregateObservedGeneration =
                 observed.present
@@ -89,20 +89,23 @@ extension ObservedStateApplier {
                 }.min() ?? 0
         }
         let failedAtTarget =
-            observed.lastError != nil && observed.failedGeneration == volume.generation
+            observed.hasLastError
+            && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == volume.generation
         let nextPhase: String?
         let nextError: String?
         let nextFailedGeneration: Int64?
         if failedAtTarget {
-            nextPhase = observed.convergencePhase
-            nextError = observed.lastError
-            nextFailedGeneration = observed.failedGeneration
+            nextPhase = (observed.hasConvergencePhase ? observed.convergencePhase : nil)
+            nextError = (observed.hasLastError ? observed.lastError : nil)
+            nextFailedGeneration = (observed.hasFailedGeneration ? observed.failedGeneration : nil)
         } else if allStorageSettled {
             nextPhase = nil
             nextError = nil
             nextFailedGeneration = nil
         } else {
-            nextPhase = observed.convergencePhase ?? (isCeph ? "waiting for Ceph image" : "waiting for replicas")
+            nextPhase =
+                (observed.hasConvergencePhase ? observed.convergencePhase : nil)
+                ?? (isCeph ? "waiting for Ceph image" : "waiting for replicas")
             nextError = volume.errorMessage
             nextFailedGeneration = volume.failedGeneration
         }
@@ -127,7 +130,7 @@ extension ObservedStateApplier {
         // the image) leaves the column alone instead of clearing it. Writing nil
         // through would turn a silent agent into "this volume has no size",
         // which is the same wrong answer in the other direction.
-        if let reported = observed.sizeBytes, volume.observedSizeBytes != reported {
+        if let reported = (observed.hasSizeBytes ? observed.sizeBytes : nil), volume.observedSizeBytes != reported {
             volume.observedSizeBytes = reported
             changed = true
         }
@@ -140,9 +143,9 @@ extension ObservedStateApplier {
         var normalizedDesiredSize = false
         if volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil,
             observed.present,
-            observed.convergencePhase == nil,
-            observed.lastError == nil,
-            let materializedSize = observed.sizeBytes,
+            !observed.hasConvergencePhase,
+            !observed.hasLastError,
+            let materializedSize = (observed.hasSizeBytes ? observed.sizeBytes : nil),
             materializedSize > volume.size
         {
             let admissionError: String?
@@ -205,13 +208,15 @@ extension ObservedStateApplier {
         // would record an agent's silence as "the caps were removed". An agent
         // reporting an explicitly uncapped disk sends a present-but-empty
         // value instead, and that one does clear the columns.
-        if let applied = observed.ioLimits {
-            if volume.appliedIOPSTotal != applied.iopsTotal {
-                volume.appliedIOPSTotal = applied.iopsTotal
+        if let applied = (observed.hasIoLimits ? observed.ioLimits : nil) {
+            let iopsTotal = applied.hasIopsTotal ? applied.iopsTotal : nil
+            let bpsTotal = applied.hasBpsTotal ? applied.bpsTotal : nil
+            if volume.appliedIOPSTotal != iopsTotal {
+                volume.appliedIOPSTotal = iopsTotal
                 changed = true
             }
-            if volume.appliedBPSTotal != applied.bpsTotal {
-                volume.appliedBPSTotal = applied.bpsTotal
+            if volume.appliedBPSTotal != bpsTotal {
+                volume.appliedBPSTotal = bpsTotal
                 changed = true
             }
         }
@@ -224,8 +229,8 @@ extension ObservedStateApplier {
         // `attachedAgentId` below, kept ahead of the convergence early-return
         // because applied policy remains a useful fact while peers catch up.
         let reporterOwnsAttachment =
-            observed.attachedVMId != nil || volume.attachedAgentId == agentId
-        if let applied = observed.blockPolicy,
+            observed.hasAttachedVmID || volume.attachedAgentId == agentId
+        if let applied = (observed.hasBlockPolicy ? observed.blockPolicy : nil),
             reporterOwnsAttachment,
             volume.appliedBlockPolicy != applied
         {
@@ -238,9 +243,9 @@ extension ObservedStateApplier {
         // applied-value echo. Keep the last known columns for operator
         // visibility, but do not let that stale fact satisfy the current
         // generation. A later libvirt read-back advances it normally.
-        let requiresAppliedIOLimitsEcho = observed.attachedVMId != nil || volume.ioLimits != nil
+        let requiresAppliedIOLimitsEcho = observed.hasAttachedVmID || volume.ioLimits != nil
         let verifiedObservedGeneration =
-            requiresAppliedIOLimitsEcho && observed.ioLimits == nil
+            requiresAppliedIOLimitsEcho && !observed.hasIoLimits
             ? min(aggregateObservedGeneration, generationBeforeTarget)
             : aggregateObservedGeneration
         if verifiedObservedGeneration > volume.observedGeneration {
@@ -249,7 +254,7 @@ extension ObservedStateApplier {
         }
 
         // Still converging: progress only, never a settled status.
-        if observed.convergencePhase != nil || (isCeph && !allStorageSettled) {
+        if observed.hasConvergencePhase || (isCeph && !allStorageSettled) {
             if changed {
                 try await volume.save(on: db)
             }
@@ -259,7 +264,7 @@ extension ObservedStateApplier {
         // Where the realized attachment runs. A detached report may clear only
         // this reporter's own attachment; a storage-only replica must not erase
         // the VM host's observation.
-        if observed.attachedVMId != nil {
+        if observed.hasAttachedVmID {
             if volume.attachedAgentId != agentId {
                 volume.attachedAgentId = agentId
                 changed = true
@@ -277,7 +282,7 @@ extension ObservedStateApplier {
             // Bytes not (yet) on disk with nothing in flight. Distinguishing a
             // create that has not started from one that failed is the
             // `lastError` check below; `.creating` is the honest reading here.
-            derived = observed.lastError == nil ? .creating : .error
+            derived = !observed.hasLastError ? .creating : .error
         } else if volume.attachedAgentId != nil {
             derived = .attached
         } else {
@@ -293,7 +298,7 @@ extension ObservedStateApplier {
         // Preserve the desired state and deadline for an actionable refusal
         // the agent is still retrying. Replica and status facts above still
         // land, including the degraded reason.
-        if failedAtTarget, observed.failureClassification == .blocked {
+        if failedAtTarget, (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked {
             if changed {
                 try await volume.save(on: db)
             }
@@ -303,8 +308,8 @@ extension ObservedStateApplier {
             volume,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: observed.lastError,
-            reportedFailedGeneration: observed.failedGeneration,
+            reportedError: (observed.hasLastError ? observed.lastError : nil),
+            reportedFailedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
             at: instant,
@@ -321,7 +326,9 @@ extension ObservedStateApplier {
         into placements: inout [UUID: WorkloadPlacement],
         on db: Database
     ) async throws {
-        let ids = report.unrecognized.filter { $0.kind == kind }.map(\.workloadId)
+        let ids = try report.unrecognized.values.filter { $0.kind == kind }.map {
+            try UUID(protocolString: $0.workloadID)
+        }
         guard !ids.isEmpty else { return }
         for artifact in try await A.query(on: db).filter(\._$id ~~ ids).all() {
             guard let id = artifact.id else { continue }
@@ -380,7 +387,8 @@ extension ObservedStateApplier {
         at instant: ClusterInstant,
         on db: Database
     ) async throws -> Bool {
-        try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
+        try logSupersededFailureReport(
+            artifact, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
         // Captured before anything mutates, for the reasons the VM path
         // documents: `recordConvergence` mirrors the agent's own
         // `failedGeneration` onto the model and would otherwise satisfy the
@@ -389,9 +397,9 @@ extension ObservedStateApplier {
         let failedBefore = artifact.failedGeneration
 
         var changed = artifact.recordConvergence(
-            phase: observed.convergencePhase,
-            lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration
+            phase: (observed.hasConvergencePhase ? observed.convergencePhase : nil),
+            lastError: (observed.hasLastError ? observed.lastError : nil),
+            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil)
         )
 
         // The captured facts — footprint, hypervisor version, fork layout,
@@ -402,7 +410,7 @@ extension ObservedStateApplier {
         // checkpoint that in fact existed `.error`. A report is re-sent on every
         // heartbeat, so they simply arrive again.
         var footprintChanged = false
-        if let facts = observed.facts, artifact.applyCapturedFacts(facts) {
+        if let facts = (observed.hasFacts ? observed.facts : nil), artifact.applyCapturedFacts(facts) {
             changed = true
             footprintChanged = true
         }
@@ -411,7 +419,7 @@ extension ObservedStateApplier {
         }
 
         // Still converging: progress only, never a settled status.
-        if observed.convergencePhase != nil {
+        if observed.hasConvergencePhase {
             if changed {
                 try await artifact.save(on: db)
             }
@@ -426,7 +434,7 @@ extension ObservedStateApplier {
         // Status is derived, not reported: the agent describes the bytes, and
         // that fact plus the desired state is the whole status vocabulary an
         // artifact has.
-        let failed = observed.lastError != nil
+        let failed = observed.hasLastError
         if artifact.applyObservedPresence(present: observed.present, failed: failed) {
             changed = true
         }
@@ -434,8 +442,11 @@ extension ObservedStateApplier {
         // A blocked capture/export keeps its requested intent until a later
         // same-generation report succeeds or the convergence deadline expires.
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == artifact.generation
-        if failedCurrentGeneration, observed.failureClassification == .blocked {
+            observed.hasLastError
+            && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == artifact.generation
+        if failedCurrentGeneration,
+            (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked
+        {
             if changed {
                 try await artifact.save(on: db)
             }
@@ -446,8 +457,8 @@ extension ObservedStateApplier {
             artifact,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: observed.lastError,
-            reportedFailedGeneration: observed.failedGeneration,
+            reportedError: (observed.hasLastError ? observed.lastError : nil),
+            reportedFailedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             previousFailureGeneration: failedBefore,
             defaultMutation: .create,
             at: instant,
@@ -668,9 +679,10 @@ extension ObservedStateApplier {
         on db: Database
     ) async throws {
         let failedAtTarget =
-            observed.lastError != nil && observed.failedGeneration == desiredGeneration
+            observed.hasLastError
+            && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == desiredGeneration
         let state: VolumeReplicaState =
-            observed.present && observed.convergencePhase == nil && !failedAtTarget
+            observed.present && !observed.hasConvergencePhase && !failedAtTarget
             ? .healthy : .provisioning
         if let existing = try await VolumeReplica.query(on: db)
             .filter(\.$volume.$id == volumeID)
@@ -678,7 +690,7 @@ extension ObservedStateApplier {
             .first()
         {
             var changed = false
-            if let diskAttachment = observed.attachment,
+            if let diskAttachment = (observed.hasAttachment ? observed.attachment : nil),
                 existing.diskAttachment != diskAttachment
             {
                 existing.diskAttachment = diskAttachment
@@ -701,7 +713,7 @@ extension ObservedStateApplier {
         try await VolumeReplica(
             volumeID: volumeID,
             agentId: agentId,
-            diskAttachment: observed.attachment,
+            diskAttachment: (observed.hasAttachment ? observed.attachment : nil),
             state: state,
             generation: observed.observedGeneration
         ).create(on: db)

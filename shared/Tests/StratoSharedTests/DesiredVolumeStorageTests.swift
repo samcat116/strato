@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Desired volume storage wire format")
 struct DesiredVolumeStorageTests {
@@ -75,7 +75,7 @@ struct DesiredVolumeStorageTests {
             storage: .ceph(cephConfiguration))
 
         #expect(try encodedKeys(desired).contains("storage"))
-        #expect(try roundTrip(desired).storage == .ceph(cephConfiguration))
+        #expect(try roundTrip(desired)._jsonStorage == .ceph(cephConfiguration))
     }
 
     @Test("A persisted pre-v53 desired volume defaults to local storage")
@@ -90,7 +90,7 @@ struct DesiredVolumeStorageTests {
             }
             """
 
-        #expect(try decodeJSON(DesiredVolumeState.self, from: json).storage == .local)
+        #expect(try decodeJSON(DesiredVolumeState.self, from: json)._jsonStorage == .local)
     }
 
     @Test("The contract has no plaintext Ceph messenger mode")

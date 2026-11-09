@@ -50,8 +50,10 @@ struct AppleVirtualizationRuntimeTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let service = await AppleVirtualizationService(logger: Logger(label: "apple-memory"), vmStoragePath: root.path)
         let support = await service.support()
-        let minimum = try #require(support.minimumMemoryBytes)
-        let maximum = try #require(support.maximumMemoryBytes)
+        try #require(support.hasMinimumMemoryBytes)
+        let minimum = support.minimumMemoryBytes
+        try #require(support.hasMaximumMemoryBytes)
+        let maximum = support.maximumMemoryBytes
         for memory in [minimum - (1 << 20), minimum + 1, maximum + (1 << 20)] {
             await #expect(throws: HypervisorServiceError.self) {
                 try await service.createVM(

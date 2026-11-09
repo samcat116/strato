@@ -313,7 +313,7 @@ public struct AgentConfig {
 
 extension AgentConfig {
     public var resolvedSandboxIdlePolicy: SandboxIdlePolicy {
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = sandboxIdleSuspendEnabled ?? false
         policy.idleSeconds = TimeInterval(sandboxIdleSeconds ?? 300)
         policy.minimumResidencySeconds = TimeInterval(sandboxMinimumResidencySeconds ?? 60)
@@ -323,7 +323,7 @@ extension AgentConfig {
         // Programmatic configurations receive the same fail-closed exclusion
         // guarantee as the TOML loader; a malformed ID must not disappear.
         if ids.count != excluded.count { policy.enabled = false }
-        policy.excludedSandboxIDs = Set(ids)
+        policy.excludedSandboxIDs.values = Set(ids).map(\.uuidString).sorted()
         return policy
     }
 }

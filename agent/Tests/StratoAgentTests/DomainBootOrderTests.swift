@@ -112,10 +112,10 @@ struct DomainBootOrderTests {
             in: [second],
             authoritative: [first, second])
 
-        #expect(recording.volumes.map(\.volumeId) == [first.volumeId, second.volumeId])
+        #expect(recording.volumes.map(\.volumeID) == [first.volumeID, second.volumeID])
         #expect(
             recording.orderedBootVolumeIds
-                == [first.volumeId.uuidString, second.volumeId.uuidString])
+                == [first.volumeID, second.volumeID])
     }
 
     @Test("volumes without an API boot order lose stale libvirt metadata")

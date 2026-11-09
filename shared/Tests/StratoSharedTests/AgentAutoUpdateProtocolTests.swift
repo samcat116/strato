@@ -19,12 +19,12 @@ struct AgentAutoUpdateProtocolTests {
         let message = DesiredStateMessage(syncId: "sync-1", vms: [], desiredAgentUpdate: Self.update)
         let decoded = try throughEnvelope(message)
 
-        let update = try #require(decoded.desiredAgentUpdate)
-        #expect(update.targetVersion == "1.4.0")
-        #expect(update.artifactURL == Self.update.artifactURL)
-        #expect(update.sha256 == Self.update.sha256)
-        #expect(update.artifactKind == .tarball)
-        #expect(update.tarballMember == "strato-agent")
+        let update = try #require(decoded._jsonDesiredAgentUpdate)
+        #expect(update._jsonTargetVersion == "1.4.0")
+        #expect(update._jsonArtifactURL == Self.update._jsonArtifactURL)
+        #expect(update._jsonSha256 == Self.update._jsonSha256)
+        #expect(update._jsonArtifactKind == .tarball)
+        #expect(update._jsonTarballMember == "strato-agent")
     }
 
     @Test("DesiredStateMessage without an update opinion decodes the update to nil")
@@ -36,8 +36,8 @@ struct AgentAutoUpdateProtocolTests {
              "cephCredentialRevocations":[]}
             """
         let decoded = try decodeJSON(DesiredStateMessage.self, from: noOpinion)
-        #expect(decoded.desiredAgentUpdate == nil)
-        #expect(decoded.syncId == "s")
+        #expect(decoded._jsonDesiredAgentUpdate == nil)
+        #expect(decoded._jsonSyncId == "s")
     }
 
     @Test("Redacted artifact URL strips the query string")
@@ -60,10 +60,10 @@ struct AgentAutoUpdateProtocolTests {
         )
         let decoded = try throughEnvelope(report)
 
-        let status = try #require(decoded.agentUpdateStatus)
-        #expect(status.targetVersion == "1.4.0")
-        #expect(status.disposition == ObservedAgentUpdateStatus.dispositionBlocked)
-        #expect(status.reason.contains("in flight"))
+        let status = try #require(decoded._jsonAgentUpdateStatus)
+        #expect(status._jsonTargetVersion == "1.4.0")
+        #expect(status._jsonDisposition == ObservedAgentUpdateStatus.dispositionBlocked)
+        #expect(status._jsonReason.contains("in flight"))
     }
 
     @Test("ObservedStateReport without an update blocker decodes the status to nil")
@@ -74,7 +74,7 @@ struct AgentAutoUpdateProtocolTests {
                           "totalDisk":100,"availableDisk":50,"physicalFreeDisk":50},"unrecognized":[]}
             """
         let decoded = try decodeJSON(ObservedStateReport.self, from: noBlocker)
-        #expect(decoded.agentUpdateStatus == nil)
+        #expect(decoded._jsonAgentUpdateStatus == nil)
     }
 
     @Test("Nil update fields stay off the wire; present ones reach it")

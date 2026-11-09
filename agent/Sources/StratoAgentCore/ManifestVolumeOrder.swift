@@ -9,29 +9,29 @@ public enum ManifestVolumeOrder {
         authoritative: [VolumeSpec]?
     ) -> (volumes: [VolumeSpec], orderedBootVolumeIds: [String]) {
         var remaining = Dictionary(
-            recorded.map { ($0.volumeId, $0) },
+            recorded.map { ($0.volumeID, $0) },
             uniquingKeysWith: { first, _ in first })
-        remaining[update.volumeId] = update
+        remaining[update.volumeID] = update
 
         var volumes: [VolumeSpec] = []
         for desired in authoritative ?? [] {
-            if let realized = remaining.removeValue(forKey: desired.volumeId) {
+            if let realized = remaining.removeValue(forKey: desired.volumeID) {
                 volumes.append(realized)
             }
         }
         for existing in recorded {
-            if let retained = remaining.removeValue(forKey: existing.volumeId) {
+            if let retained = remaining.removeValue(forKey: existing.volumeID) {
                 volumes.append(retained)
             }
         }
-        if let appended = remaining.removeValue(forKey: update.volumeId) {
+        if let appended = remaining.removeValue(forKey: update.volumeID) {
             volumes.append(appended)
         }
 
-        let recordedIds = Set(volumes.map(\.volumeId))
+        let recordedIds = Set(volumes.map(\.volumeID))
         let orderedBootVolumeIds: [String] = (authoritative ?? volumes).compactMap { volume in
-            guard volume.bootOrder != nil, recordedIds.contains(volume.volumeId) else { return nil }
-            return volume.volumeId.uuidString
+            guard volume.hasBootOrder, recordedIds.contains(volume.volumeID) else { return nil }
+            return volume.volumeID
         }
         return (volumes, orderedBootVolumeIds)
     }

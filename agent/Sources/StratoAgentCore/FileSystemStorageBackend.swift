@@ -156,13 +156,13 @@ public actor FileSystemStorageBackend: StorageBackend {
             metadata: [
                 "volumeId": .string(volumeId),
                 "size": .stringConvertible(sizeBytes),
-                "format": .string(format.rawValue),
+                "format": .string(format.protocolValue),
             ])
 
         try DurableFileWriter().createDirectory(at: volumeDirectory(volumeId: volumeId))
 
         try await publishAtomically(to: path) { stagingPath in
-            let result = try await self.runQemuImg(["create", "-f", format.rawValue, stagingPath, "\(sizeBytes)"])
+            let result = try await self.runQemuImg(["create", "-f", format.protocolValue, stagingPath, "\(sizeBytes)"])
             if result.terminationStatus != 0 {
                 let output = result.combinedOutput
                 self.logger.error(
@@ -195,8 +195,8 @@ public actor FileSystemStorageBackend: StorageBackend {
             "Creating volume from image",
             metadata: [
                 "volumeId": .string(volumeId),
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "format": .string(format.rawValue),
+                "imageId": .string(imageInfo.imageID),
+                "format": .string(format.protocolValue),
             ])
 
         return try await materializeDisk(
@@ -270,7 +270,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         let stagingPath = path + ".partial." + UUID().uuidString.lowercased()
 
         do {
-            if sourceFormat == format.rawValue {
+            if sourceFormat == format.protocolValue {
                 try copyItem(sourcePath, stagingPath)
             } else {
                 // Source and target formats differ — convert instead of copying,
@@ -279,7 +279,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                     [
                         "convert",
                         "-f", sourceFormat,
-                        "-O", format.rawValue,
+                        "-O", format.protocolValue,
                         sourcePath,
                         stagingPath,
                     ], budget: .imageWork(bytes: sourceInfo.virtualSize))
@@ -316,7 +316,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 "path": .string(path),
                 "sourceImage": .string(sourcePath),
                 "sourceFormat": .string(sourceFormat),
-                "targetFormat": .string(format.rawValue),
+                "targetFormat": .string(format.protocolValue),
             ])
 
         return .file(path: path, format: format)
@@ -417,7 +417,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     }
 
     private func requireManagedVolumePath(in directory: String) throws -> String {
-        for format in DiskFormat.allCases {
+        for format in DiskFormat.knownCases {
             let path = "\(directory)/volume.\(format.fileExtension)"
             if FileManager.default.fileExists(atPath: path) { return path }
         }
@@ -440,24 +440,24 @@ public actor FileSystemStorageBackend: StorageBackend {
     // MARK: - Volume Resize
 
     public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
-        guard case .file(let volumePath, _) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             throw StorageBackendError.resizeFailed(
                 "filesystem storage cannot resize non-file attachment \(attachment)")
         }
         logger.info(
             "Resizing volume",
             metadata: [
-                "path": .string(volumePath),
+                "path": .string(protocolFile.path),
                 "newSize": .stringConvertible(newSizeBytes),
             ])
 
-        let result = try await runQemuImg(["resize", volumePath, "\(newSizeBytes)"])
+        let result = try await runQemuImg(["resize", protocolFile.path, "\(newSizeBytes)"])
         if result.terminationStatus != 0 {
             let output = result.combinedOutput
             logger.error(
                 "qemu-img resize failed",
                 metadata: [
-                    "path": .string(volumePath),
+                    "path": .string(protocolFile.path),
                     "output": .string(output),
                 ])
             throw qemuImgFailure(output: output, context: "qemu-img resize", fallback: StorageBackendError.resizeFailed)
@@ -466,7 +466,7 @@ public actor FileSystemStorageBackend: StorageBackend {
         logger.info(
             "Volume resized successfully",
             metadata: [
-                "path": .string(volumePath),
+                "path": .string(protocolFile.path),
                 "newSize": .stringConvertible(newSizeBytes),
             ])
     }
@@ -479,7 +479,7 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func createSnapshot(
         volumeId: String, snapshotId: String, attachment: DiskAttachment
     ) async throws -> String {
-        guard case .file(let volumePath, _) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             throw StorageBackendError.snapshotFailed(
                 "filesystem storage cannot snapshot non-file attachment \(attachment)")
         }
@@ -506,10 +506,10 @@ public actor FileSystemStorageBackend: StorageBackend {
             metadata: [
                 "volumeId": .string(volumeId),
                 "snapshotId": .string(snapshotId),
-                "volumePath": .string(volumePath),
+                "volumePath": .string(protocolFile.path),
             ])
 
-        let sourceInfo = try await queryImageInfo(path: volumePath)
+        let sourceInfo = try await queryImageInfo(path: protocolFile.path)
         let backingFormat = sourceInfo.format
 
         let snapshotDirectory = (snapshotPath as NSString).deletingLastPathComponent
@@ -524,7 +524,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             let result = try await self.runQemuImg([
                 "create",
                 "-f", "qcow2",
-                "-b", volumePath,
+                "-b", protocolFile.path,
                 "-F", backingFormat,
                 stagingPath,
             ])
@@ -585,11 +585,11 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func cloneVolume(
         sourceVolumeId: String, sourceAttachment: DiskAttachment, targetVolumeId: String
     ) async throws -> DiskAttachment {
-        guard case .file(let sourcePath, _) = sourceAttachment else {
+        guard case .file(let protocolFile) = sourceAttachment.value else {
             throw StorageBackendError.cloneFailed(
                 "filesystem storage cannot clone non-file attachment \(sourceAttachment)")
         }
-        let sourceInfo = try await queryImageInfo(path: sourcePath)
+        let sourceInfo = try await queryImageInfo(path: protocolFile.path)
         let sourceFormatString = sourceInfo.format
         guard let format = DiskFormat(rawValue: sourceFormatString) else {
             throw StorageBackendError.unsupportedFormat(sourceFormatString)
@@ -610,8 +610,8 @@ public actor FileSystemStorageBackend: StorageBackend {
             metadata: [
                 "sourceVolumeId": .string(sourceVolumeId),
                 "targetVolumeId": .string(targetVolumeId),
-                "sourcePath": .string(sourcePath),
-                "format": .string(format.rawValue),
+                "sourcePath": .string(protocolFile.path),
+                "format": .string(format.protocolValue),
             ])
 
         try requireCopyCapacity(
@@ -626,9 +626,9 @@ public actor FileSystemStorageBackend: StorageBackend {
             let result = try await self.runQemuImg(
                 [
                     "convert",
-                    "-f", format.rawValue,
-                    "-O", format.rawValue,
-                    sourcePath,
+                    "-f", format.protocolValue,
+                    "-O", format.protocolValue,
+                    protocolFile.path,
                     stagingPath,
                 ], budget: .imageWork(bytes: sourceInfo.virtualSize))
             if result.terminationStatus != 0 {
@@ -675,13 +675,13 @@ public actor FileSystemStorageBackend: StorageBackend {
     // MARK: - Volume Info
 
     public func volumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult {
-        guard case .file(let volumePath, _) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             throw StorageBackendError.infoFailed(
                 "filesystem storage cannot inspect non-file attachment \(attachment)")
         }
-        logger.debug("Getting volume info", metadata: ["path": .string(volumePath)])
+        logger.debug("Getting volume info", metadata: ["path": .string(protocolFile.path)])
 
-        let info = try await queryImageInfo(path: volumePath)
+        let info = try await queryImageInfo(path: protocolFile.path)
 
         return VolumeInfoResult(
             actualSize: info.actualSize,
@@ -762,7 +762,7 @@ public actor FileSystemStorageBackend: StorageBackend {
                 }
                 continue
             }
-            for format in DiskFormat.allCases {
+            for format in DiskFormat.knownCases {
                 let path = volumePath(volumeId: entry, format: format)
                 if FileManager.default.fileExists(atPath: path) {
                     volumes[volumeId] = .file(path: path, format: format)
@@ -816,12 +816,12 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func qemuBlockCapabilities(
         for attachment: DiskAttachment
     ) async -> StorageBlockDeviceCapabilities {
-        guard case .file(let path, let format) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             return .unsupported
         }
 
-        let discard = await probeHolePunching(beside: path)
-        let direct = await probeDirectIO(path: path, format: format)
+        let discard = await probeHolePunching(beside: protocolFile.path)
+        let direct = await probeDirectIO(path: protocolFile.path, format: protocolFile.format)
         return StorageBlockDeviceCapabilities(
             discardSupported: discard == nil,
             discardUnavailableReason: discard,
@@ -863,7 +863,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             let result = try await runSubprocess(
                 URL(fileURLWithPath: qemuImgPath),
                 [
-                    "bench", "-c", "1", "-d", "1", "-f", format.rawValue,
+                    "bench", "-c", "1", "-d", "1", "-f", format.protocolValue,
                     "-i", "io_uring", "-t", "none", "-s", "512", path,
                 ], .inspection)
             guard result.terminationStatus == 0 else {

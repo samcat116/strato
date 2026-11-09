@@ -1,45 +1,34 @@
 import Foundation
 import Testing
+import SwiftProtobuf
 import StratoShared
 
-@Suite("MessageEnvelope")
+@Suite("Binary Protobuf message envelope")
 struct MessageEnvelopeTests {
-    @Test("wire form is a type string plus base64 payload")
-    func wireShape() throws {
+    @Test("typed oneof routes binary messages without JSON or base64 payloads")
+    func binaryRoundTrip() throws {
         let message = Fixtures.consoleConnect(vmId: "vm-7")
-        let envelopeData = try encodeJSON(MessageEnvelope(message: message))
-        let object = try JSONSerialization.jsonObject(with: envelopeData) as? [String: Any]
-        let json = try #require(object)
-
-        #expect(json["type"] as? String == "console_connect")
-
-        // Data encodes as base64 under default JSONEncoder settings; the
-        // payload must decode back to the inner message's JSON.
-        let base64 = try #require(json["payload"] as? String)
-        let payload = try #require(Data(base64Encoded: base64))
-        let inner = try decodeJSON(ConsoleConnectMessage.self, from: payload)
-        #expect(inner.vmId == "vm-7")
-    }
-
-    @Test("WireProtocol encodes the complete envelope")
-    func wireProtocolEncoding() throws {
-        let message = Fixtures.consoleConnect(vmId: "vm-7")
-        let encoded = try WireProtocol.encodeEnvelope(message)
-        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: encoded)
-        let decoded = try envelope.decode(as: ConsoleConnectMessage.self)
-
+        let bytes = try WireProtocol.encodeEnvelope(message)
+        let envelope = try WireProtocol.decodeEnvelope(bytes)
         #expect(envelope.type == .consoleConnect)
-        #expect(decoded.vmId == message.vmId)
-        #expect(decoded.sessionId == message.sessionId)
-        #expect(decoded.requestId == message.requestId)
+        let decoded = try envelope.decode(as: ConsoleConnectMessage.self)
+        #expect(decoded == message)
+        #expect(throws: (any Error).self) { try JSONSerialization.jsonObject(with: bytes) }
     }
 
-    @Test("payload that does not match the requested type throws")
+    @Test("payload type mismatch fails without guessing a message shape")
     func mismatchedPayloadThrows() throws {
         let envelope = try MessageEnvelope(message: SuccessMessage(requestId: "r1"))
-        #expect(throws: DecodingError.self) {
-            // ConsoleDataMessage requires fields a success reply lacks.
+        #expect(throws: AgentProtocolDecodeError.self) {
             try envelope.decode(as: ConsoleDataMessage.self)
         }
+    }
+
+    @Test("missing or unknown envelope bodies fail closed")
+    func missingBody() throws {
+        #expect(throws: AgentProtocolDecodeError.self) { try WireProtocol.decodeEnvelope(Data()) }
+        // field 100, length-delimited, empty: unknown future body is preserved
+        // by Protobuf but cannot accidentally become an executable command.
+        #expect(throws: AgentProtocolDecodeError.self) { try WireProtocol.decodeEnvelope(Data([0xa2, 0x06, 0])) }
     }
 }

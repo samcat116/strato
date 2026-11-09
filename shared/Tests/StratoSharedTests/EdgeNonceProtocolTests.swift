@@ -40,12 +40,12 @@ struct EdgeNonceProtocolTests {
             ])
 
         let decoded = try throughEnvelope(message)
-        #expect(decoded.vms[0].rebootGeneration == 3)
-        #expect(decoded.vms[0].restore?.generation == 2)
-        #expect(decoded.vms[0].restore?.snapshotId == Self.snapshotID)
+        #expect(decoded._jsonVms[0]._jsonRebootGeneration == 3)
+        #expect(decoded._jsonVms[0]._jsonRestore?._jsonGeneration == 2)
+        #expect(decoded._jsonVms[0]._jsonRestore?._jsonSnapshotId == Self.snapshotID)
         // A VM checkpoint lives inside the VM's own disks, so it never moves
         // hosts and a VM restore never stages artifacts.
-        #expect(decoded.vms[0].restore?.artifacts == nil)
+        #expect(decoded._jsonVms[0]._jsonRestore?._jsonArtifacts == nil)
     }
 
     @Test("a VM that has never been restarted or restored puts nothing on the wire")
@@ -72,9 +72,9 @@ struct EdgeNonceProtocolTests {
 
         let decoded = try decodeJSON(
             DesiredVMState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(decoded.rebootGeneration == nil)
-        #expect(decoded.restore == nil)
-        #expect(decoded.generation == 4)
+        #expect(decoded._jsonRebootGeneration == nil)
+        #expect(decoded._jsonRestore == nil)
+        #expect(decoded._jsonGeneration == 4)
     }
 
     @Test("a sandbox restore carries its exported artifacts")
@@ -97,13 +97,13 @@ struct EdgeNonceProtocolTests {
                 generation: 5, snapshotId: Self.snapshotID, artifacts: [artifact]))
 
         let decoded = try roundTrip(entry)
-        #expect(decoded.restore?.generation == 5)
-        #expect(decoded.restore?.artifacts?.count == 1)
-        #expect(decoded.restore?.artifacts?.first?.sha256 == "abc123")
+        #expect(decoded._jsonRestore?._jsonGeneration == 5)
+        #expect(decoded._jsonRestore?._jsonArtifacts?.count == 1)
+        #expect(decoded._jsonRestore?._jsonArtifacts?.first?._jsonSha256 == "abc123")
         // `restore` and `spec.restoreFrom` have different
         // meanings — an edge on an existing sandbox versus a fork's create
         // strategy — and nothing may conflate them.
-        #expect(decoded.spec.restoreFrom == nil)
+        #expect(decoded._jsonSpec._jsonRestoreFrom == nil)
     }
 
 }

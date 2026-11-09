@@ -59,12 +59,14 @@ extension ObservedStateApplier {
     ) async throws {
         let vmID = try vm.requireID()
         if try await rejectInvalidWorkloadGeneration(
-            vm, observedGeneration: observed.observedGeneration, failedGeneration: observed.failedGeneration,
+            vm, observedGeneration: observed.observedGeneration,
+            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             at: instant, on: db)
         {
             return
         }
-        try logSupersededFailureReport(vm, reportedGeneration: observed.failedGeneration)
+        try logSupersededFailureReport(
+            vm, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
 
         // Where the VM stood before this report. Every convergence outcome
         // below is a *transition* out of this state, which is what makes the
@@ -91,7 +93,7 @@ extension ObservedStateApplier {
                 vm.guestConfigFailedGeneration == vm.generation
                 || (vm.guestConfigEvidence?.observation.generation == vm.generation
                     && vm.guestConfigEvidence?.observation.status == .failed)
-            if let report = observed.guestConfigObservation,
+            if let report = (observed.hasGuestConfigObservation ? observed.guestConfigObservation : nil),
                 report.status == .failed || observed.status == .running,
                 (try? VMGuestConfigPresentation.validate(report, config: config, generation: vm.generation)) != nil,
                 report.status == .failed
@@ -115,9 +117,11 @@ extension ObservedStateApplier {
         // Host failures before that step provide no guest verdict or item facts.
         if vm.guestConfig?.isEmpty == false,
             failedGuestReport
-                || (observed.guestConfigFailedGeneration == vm.generation
-                    && observed.lastError != nil && observed.failedGeneration == vm.generation
-                    && observed.failureClassification == .permanent),
+                || ((observed.hasGuestConfigFailedGeneration ? observed.guestConfigFailedGeneration : nil)
+                    == vm.generation
+                    && observed.hasLastError
+                    && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == vm.generation
+                    && (observed.hasFailureClassification ? observed.failureClassification : nil) == .permanent),
             vm.guestConfigFailedGeneration != vm.generation
         {
             vm.guestConfigFailedGeneration = vm.generation
@@ -129,13 +133,19 @@ extension ObservedStateApplier {
         // audit or webhooks. Retain detailed facts only in the redacted record.
         let effectiveError =
             guestFailed
-            ? VMGuestConfigPresentation.safeFailure(vm.guestConfigEvidence?.observation.error)
-            : ((observed.guestConfigObservation?.status == .failed
-                || observed.guestConfigFailedGeneration.map { $0 == observed.failedGeneration } == true
-                || observed.failedGeneration.map { $0 == vm.guestConfigFailedGeneration } == true)
-                && observed.lastError != nil
-                ? VMGuestConfigPresentation.failure : observed.lastError)
-        let effectiveFailedGeneration = guestFailed ? vm.generation : observed.failedGeneration
+            ? VMGuestConfigPresentation.safeFailure(
+                vm.guestConfigEvidence.flatMap { $0.observation.hasError ? $0.observation.error : nil })
+            : (((observed.hasGuestConfigObservation ? observed.guestConfigObservation : nil)?.status == .failed
+                || (observed.hasGuestConfigFailedGeneration ? observed.guestConfigFailedGeneration : nil).map {
+                    $0 == (observed.hasFailedGeneration ? observed.failedGeneration : nil)
+                } == true
+                || (observed.hasFailedGeneration ? observed.failedGeneration : nil).map {
+                    $0 == vm.guestConfigFailedGeneration
+                } == true)
+                && observed.hasLastError
+                ? VMGuestConfigPresentation.failure : (observed.hasLastError ? observed.lastError : nil))
+        let effectiveFailedGeneration =
+            guestFailed ? vm.generation : (observed.hasFailedGeneration ? observed.failedGeneration : nil)
 
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
@@ -146,8 +156,8 @@ extension ObservedStateApplier {
         // forever). A nil on a running/paused/transitional/unknown VM is left
         // alone — that's a transient probe miss, and nil-preserves-last-known.
         if vm.guestAgentEnabled, observed.status == .running,
-            let observation = observed.guestAgentObservation,
-            observation.checkedAt > (vm.guestAgentObservation?.checkedAt ?? .distantPast)
+            let observation = (observed.hasGuestAgentObservation ? observed.guestAgentObservation : nil),
+            observation.checkedAt.date > (vm.guestAgentObservation?.checkedAt.date ?? .distantPast)
         {
             vm.guestAgentObservation = observation
             try await vm.update(on: db)
@@ -156,7 +166,7 @@ extension ObservedStateApplier {
             try await vm.update(on: db)
         }
 
-        if let guestInfo = observed.guestInfo {
+        if let guestInfo = (observed.hasGuestInfo ? observed.guestInfo : nil) {
             try await persistGuestInfo(vm: vm, guestInfo: guestInfo, interfaces: interfaces, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
             try await clearGuestInfo(vm: vm, interfaces: interfaces, on: db)
@@ -165,14 +175,16 @@ extension ObservedStateApplier {
         // Balloon memory stats (issue #567) follow the same contract as
         // guestInfo, independently: a guest can report balloon stats without
         // qga (and vice versa), so their presence is tracked separately.
-        if let memoryStats = observed.memoryStats {
+        if let memoryStats = (observed.hasMemoryStats ? observed.memoryStats : nil) {
             try await persistMemoryStats(vm: vm, stats: memoryStats, at: instant, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
         var resourceTelemetryChanged = false
-        if let telemetry = observed.resourceTelemetry, vm.resourceTelemetry != telemetry {
+        if let telemetry = (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
+            vm.resourceTelemetry != telemetry
+        {
             vm.resourceTelemetry = telemetry
             vm.resourceTelemetryReceivedAt = instant.date
             resourceTelemetryChanged = true
@@ -182,8 +194,8 @@ extension ObservedStateApplier {
                 agentID: agentID,
                 workloadID: vmID.uuidString,
                 kind: .vm,
-                telemetry: observed.resourceTelemetry,
-                balloon: observed.memoryStats)
+                telemetry: (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
+                balloon: (observed.hasMemoryStats ? observed.memoryStats : nil))
         }
 
         // Mirror the report's convergence progress onto the row (STR-142) so
@@ -191,7 +203,7 @@ extension ObservedStateApplier {
         // both the converging and settled paths — the phase only exists on the
         // former, and the error pair has to be *cleared* on the latter.
         let bootVolumePhase: String?
-        if let bootVolumes, observed.convergencePhase == nil, observed.lastError == nil,
+        if let bootVolumes, !observed.hasConvergencePhase, !observed.hasLastError,
             vm.desiredStatus != .absent
         {
             bootVolumePhase = pendingBootVolumePhase(for: vm, bootVolumes: bootVolumes)
@@ -203,7 +215,8 @@ extension ObservedStateApplier {
                 && !(effectiveError != nil && effectiveFailedGeneration == vm.generation)
                 && !VMGuestConfigPresentation.converged(vm)
             ? "waiting for current guest configuration read-back" : nil
-        let effectivePhase = observed.convergencePhase ?? bootVolumePhase ?? guestPhase
+        let effectivePhase =
+            (observed.hasConvergencePhase ? observed.convergencePhase : nil) ?? bootVolumePhase ?? guestPhase
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
             lastError: effectiveError,
@@ -238,7 +251,10 @@ extension ObservedStateApplier {
         // says the target generation no longer contains the interface. The
         // generation check rejects a stale report; the explicit id set rejects
         // the more dangerous interpretation of silence as absence.
-        if let appliedNetworkInterfaceIds = observed.appliedNetworkInterfaceIds {
+        if let appliedNetworkInterfaceIds =
+            (observed.hasAppliedNetworkInterfaceIds
+                ? try observed.appliedNetworkInterfaceIds.values.map { try UUID(protocolString: $0) } : nil)
+        {
             let applied = Set(appliedNetworkInterfaceIds)
             for interface in interfaces {
                 guard let detachGeneration = interface.detachGeneration,
@@ -266,8 +282,8 @@ extension ObservedStateApplier {
                     "VM state drifted with nothing in flight",
                     metadata: [
                         "strato.vm.id": .string(vmID.uuidString),
-                        "previousStatus": .string(previous.rawValue),
-                        "observedStatus": .string(observed.status.rawValue),
+                        "previousStatus": .string(previous.protocolValue),
+                        "observedStatus": .string(observed.status.protocolValue),
                     ])
                 Telemetry.vmDriftDetected()
             }
@@ -290,7 +306,8 @@ extension ObservedStateApplier {
         // steady-state repair failure and follows the same retain-and-retry
         // path regardless of classification.
         if failedCurrentGeneration,
-            observed.failureClassification == .blocked || vm.convergenceDeadline == nil
+            (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked
+                || vm.convergenceDeadline == nil
         {
             if changed {
                 try await vm.save(on: db)
@@ -435,8 +452,8 @@ extension ObservedStateApplier {
             vm.qgaAvailable = guestInfo.qgaAvailable
             vmChanged = true
         }
-        if vm.observedHostname != guestInfo.hostname {
-            vm.observedHostname = guestInfo.hostname
+        if vm.observedHostname != (guestInfo.hasHostname ? guestInfo.hostname : nil) {
+            vm.observedHostname = (guestInfo.hasHostname ? guestInfo.hostname : nil)
             vmChanged = true
         }
         if vmChanged {
@@ -446,9 +463,9 @@ extension ObservedStateApplier {
         // Group the guest's addresses by MAC (lowercased for case-insensitive
         // matching against the stored NIC MAC).
         var addressesByMAC: [String: [GuestIPAddress]] = [:]
-        for iface in guestInfo.interfaces {
-            guard let mac = iface.hardwareAddress?.lowercased() else { continue }
-            addressesByMAC[mac, default: []].append(contentsOf: iface.addresses)
+        for iface in guestInfo.interfaces.values {
+            guard let mac = (iface.hasHardwareAddress ? iface.hardwareAddress.lowercased() : nil) else { continue }
+            addressesByMAC[mac, default: []].append(contentsOf: iface.addresses.values)
         }
 
         for nic in interfaces {
@@ -457,13 +474,15 @@ extension ObservedStateApplier {
             // and the unique index would reject the duplicate row.
             var seen: Set<String> = []
             let desired = (addressesByMAC[nic.macAddress.lowercased()] ?? []).filter {
-                seen.insert("\($0.family.rawValue)|\($0.address)").inserted
+                seen.insert("\($0.family.protocolValue)|\($0.address)").inserted
             }
 
             let storedKeys = Set(
                 nic.observedAddresses.map { "\($0.family)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
             let desiredKeys = Set(
-                desired.map { "\($0.family.rawValue)|\($0.address)|\($0.prefixLength.map(String.init) ?? "")" })
+                desired.map {
+                    "\($0.family.protocolValue)|\($0.address)|\($0.hasPrefixLength ? String($0.prefixLength) : "")"
+                })
             if storedKeys == desiredKeys { continue }
 
             // The set changed: replace this NIC's observed rows wholesale, in a
@@ -478,7 +497,7 @@ extension ObservedStateApplier {
                         interfaceID: nicID,
                         family: address.family,
                         address: address.address,
-                        prefixLength: address.prefixLength
+                        prefixLength: address.hasPrefixLength ? Int(address.prefixLength) : nil
                     ).save(on: db)
                 }
             }
@@ -494,13 +513,13 @@ extension ObservedStateApplier {
         vm: VM, stats: VMMemoryStats, at instant: ClusterInstant, on db: Database
     ) async throws {
         guard
-            vm.guestMemoryTotalBytes != stats.totalBytes
-                || vm.guestMemoryAvailableBytes != stats.availableBytes
-                || vm.guestMemoryBalloonActualBytes != stats.balloonActualBytes
+            vm.guestMemoryTotalBytes != (stats.hasTotalBytes ? stats.totalBytes : nil)
+                || vm.guestMemoryAvailableBytes != (stats.hasAvailableBytes ? stats.availableBytes : nil)
+                || vm.guestMemoryBalloonActualBytes != (stats.hasBalloonActualBytes ? stats.balloonActualBytes : nil)
         else { return }
-        vm.guestMemoryTotalBytes = stats.totalBytes
-        vm.guestMemoryAvailableBytes = stats.availableBytes
-        vm.guestMemoryBalloonActualBytes = stats.balloonActualBytes
+        vm.guestMemoryTotalBytes = (stats.hasTotalBytes ? stats.totalBytes : nil)
+        vm.guestMemoryAvailableBytes = (stats.hasAvailableBytes ? stats.availableBytes : nil)
+        vm.guestMemoryBalloonActualBytes = (stats.hasBalloonActualBytes ? stats.balloonActualBytes : nil)
         vm.guestMemoryStatsAt = instant.date
         try await vm.save(on: db)
     }
@@ -604,7 +623,7 @@ extension ObservedStateApplier {
             metadata: [
                 "strato.vm.id": .string(vmID.uuidString),
                 "strato.agent.id": .string(agentId),
-                "previousStatus": .string(previous.rawValue),
+                "previousStatus": .string(previous.protocolValue),
             ])
     }
 
@@ -618,20 +637,24 @@ extension ObservedStateApplier {
     ) async throws {
         let sandboxID = try sandbox.requireID()
         if try await rejectInvalidWorkloadGeneration(
-            sandbox, observedGeneration: observed.observedGeneration, failedGeneration: observed.failedGeneration,
+            sandbox, observedGeneration: observed.observedGeneration,
+            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             at: instant, on: db)
         {
             return
         }
         try await SandboxIdleFenceService.observe(
-            observed.idleActivity, sandbox: sandbox, at: instant, on: db)
-        try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
+            (observed.hasIdleActivity ? observed.idleActivity : nil), sandbox: sandbox, at: instant, on: db)
+        try logSupersededFailureReport(
+            sandbox, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
         let suspensionChanged = try await SandboxSuspensionService.apply(observed, to: sandbox, on: db)
 
         var resourceTelemetryChanged = false
-        if let telemetry = observed.resourceTelemetry, sandbox.resourceTelemetry != telemetry {
+        if let telemetry = (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
+            sandbox.resourceTelemetry != telemetry
+        {
             sandbox.resourceTelemetry = telemetry
             sandbox.resourceTelemetryReceivedAt = instant.date
             resourceTelemetryChanged = true
@@ -641,21 +664,21 @@ extension ObservedStateApplier {
                 agentID: agentID,
                 workloadID: sandboxID.uuidString,
                 kind: .sandbox,
-                telemetry: observed.resourceTelemetry)
+                telemetry: (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil))
         }
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
         var changed = sandbox.recordTimestampedConvergence(
-            phase: observed.convergencePhase,
-            lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration,
+            phase: (observed.hasConvergencePhase ? observed.convergencePhase : nil),
+            lastError: (observed.hasLastError ? observed.lastError : nil),
+            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             at: instant
         )
         changed = suspensionChanged || resourceTelemetryChanged || changed
 
         // Still converging: progress only, never a settled status.
-        if observed.convergencePhase != nil {
+        if observed.hasConvergencePhase {
             if changed {
                 try await sandbox.save(on: db)
             }
@@ -663,7 +686,7 @@ extension ObservedStateApplier {
                 "Sandbox converging on agent",
                 metadata: [
                     "strato.sandbox.id": .string(sandboxID.uuidString),
-                    "phase": .string(observed.convergencePhase ?? ""),
+                    "phase": .string((observed.hasConvergencePhase ? observed.convergencePhase : nil) ?? ""),
                     "targetGeneration": .stringConvertible(sandbox.generation),
                 ])
             return
@@ -691,13 +714,13 @@ extension ObservedStateApplier {
                     "Sandbox state drifted with nothing in flight",
                     metadata: [
                         "strato.sandbox.id": .string(sandboxID.uuidString),
-                        "previousStatus": .string(previous.rawValue),
-                        "observedStatus": .string(observed.status.rawValue),
+                        "previousStatus": .string(previous.protocolValue),
+                        "observedStatus": .string(observed.status.protocolValue),
                     ])
             }
         }
-        if sandbox.exitCode != observed.exitCode {
-            sandbox.exitCode = observed.exitCode
+        if sandbox.exitCode != (observed.hasExitCode ? Int(observed.exitCode) : nil) {
+            sandbox.exitCode = (observed.hasExitCode ? Int(observed.exitCode) : nil)
             changed = true
         }
         if sandbox.desiredSatisfied, sandbox.divergenceDetectedAt != nil {
@@ -706,12 +729,14 @@ extension ObservedStateApplier {
         }
 
         let failedCurrentGeneration =
-            observed.lastError != nil && observed.failedGeneration == sandbox.generation
+            observed.hasLastError
+            && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == sandbox.generation
         // Blocked failures remain active mutations because the agent will
         // re-drive them at this generation. A failure with no deadline is a
         // steady-state repair and retains intent for the same reason.
         if failedCurrentGeneration,
-            observed.failureClassification == .blocked || sandbox.convergenceDeadline == nil
+            (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked
+                || sandbox.convergenceDeadline == nil
         {
             if changed {
                 try await sandbox.save(on: db)
@@ -722,8 +747,8 @@ extension ObservedStateApplier {
             sandbox,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: observed.lastError,
-            reportedFailedGeneration: observed.failedGeneration,
+            reportedError: (observed.hasLastError ? observed.lastError : nil),
+            reportedFailedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
             at: instant,
@@ -782,7 +807,7 @@ extension ObservedStateApplier {
             metadata: [
                 "strato.sandbox.id": .string(sandboxID.uuidString),
                 "strato.agent.id": .string(agentId),
-                "previousStatus": .string(previous.rawValue),
+                "previousStatus": .string(previous.protocolValue),
             ])
     }
 

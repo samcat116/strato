@@ -10,7 +10,7 @@ import StratoShared
 struct AddMetadataSourceToVM: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema(VM.schema)
-            .field("metadata_source", .string, .required, .sql(.default(MetadataSource.iso.rawValue)))
+            .field("metadata_source", .string, .required, .sql(.default(MetadataSource.iso.protocolValue)))
             .update()
 
         if let sql = database as? any SQLDatabase {

@@ -22,22 +22,23 @@ public struct SandboxIdleFenceTransport: SandboxAutomaticSuspensionTransport {
         let response = try await exchange(context, SandboxIdleGuestRequest(type: .activity, probeId: probe))
         guard response.matches(sandboxId: context.sandboxId.uuidString, nonce: context.fence.identityNonce),
             response.type == .activity, let activity = response.activity,
-            activity.probeId == probe, activity.nonce == context.fence.identityNonce,
-            activity.sandboxId == context.sandboxId.uuidString,
+            UUID(uuidString: activity.probeID) == probe, activity.nonce == context.fence.identityNonce,
+            activity.sandboxID == context.sandboxId.uuidString,
             activity.hasCompleteQuiescentCoverage,
-            activity.quietForMilliseconds.map({ $0 >= minimumQuietMilliseconds }) == true
+            activity.hasQuietForMilliseconds, activity.quietForMilliseconds >= minimumQuietMilliseconds
         else { throw SandboxSuspensionGuard.GateError.stale }
         let fence = context.fence.request
         let prepared = try await exchange(
             context,
             SandboxIdleGuestRequest(
                 type: .prepare,
-                operationId: fence.operationId, admissionToken: fence.admissionToken,
+                operationId: try UUID(protocolString: fence.operationID),
+                admissionToken: try UUID(protocolString: fence.admissionToken),
                 expectedActivityEpoch: activity.activityEpoch, minimumQuietMilliseconds: minimumQuietMilliseconds))
-        guard try status(prepared, context: context) == .prepared(fence.admissionToken) else {
+        guard try status(prepared, context: context) == .prepared(UUID(protocolString: fence.admissionToken)) else {
             throw SandboxSuspensionGuard.GateError.stale
         }
-        return fence.admissionToken
+        return try UUID(protocolString: fence.admissionToken)
     }
     public func query(_ context: SandboxSuspensionFenceContext) async throws -> SandboxGuestFenceStatus {
         let request = context.fence.request
@@ -46,7 +47,8 @@ public struct SandboxIdleFenceTransport: SandboxAutomaticSuspensionTransport {
                 context,
                 SandboxIdleGuestRequest(
                     type: .query,
-                    operationId: request.operationId, admissionToken: request.admissionToken)), context: context)
+                    operationId: try UUID(protocolString: request.operationID),
+                    admissionToken: try UUID(protocolString: request.admissionToken))), context: context)
     }
     public func validateAdmission(_ context: SandboxSuspensionFenceContext) async throws {
         try await validate(context)
@@ -57,7 +59,8 @@ public struct SandboxIdleFenceTransport: SandboxAutomaticSuspensionTransport {
             context,
             SandboxIdleGuestRequest(
                 type: .release,
-                operationId: request.operationId, admissionToken: request.admissionToken))
+                operationId: try UUID(protocolString: request.operationID),
+                admissionToken: try UUID(protocolString: request.admissionToken)))
         guard try status(response, context: context) == .released else { throw SandboxSuspensionGuard.GateError.stale }
     }
     func status(_ response: SandboxIdleGuestResponse, context: SandboxSuspensionFenceContext) throws
@@ -65,12 +68,12 @@ public struct SandboxIdleFenceTransport: SandboxAutomaticSuspensionTransport {
     {
         let request = context.fence.request
         guard response.matches(sandboxId: context.sandboxId.uuidString, nonce: context.fence.identityNonce),
-            response.type == .fence, response.operationId == request.operationId,
-            response.admissionToken == request.admissionToken, let state = response.state
+            response.type == .fence, response.operationId == UUID(uuidString: request.operationID),
+            response.admissionToken == UUID(uuidString: request.admissionToken), let state = response.state
         else { throw SandboxSuspensionGuard.GateError.stale }
         switch state {
         case .absent: return .absent
-        case .prepared: return .prepared(request.admissionToken)
+        case .prepared: return .prepared(try UUID(protocolString: request.admissionToken))
         case .released: return .released
         }
     }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Success / error messages")
 struct ResponseMessageTests {
@@ -18,8 +18,8 @@ struct ResponseMessageTests {
             {"requestId":"r","timestamp":0,"message":"done","data":{"state":"Running"}}
             """
         let decoded = try decodeJSON(SuccessMessage.self, from: json)
-        #expect(decoded.requestId == "r")
-        #expect(decoded.message == "done")
+        #expect(decoded._jsonRequestId == "r")
+        #expect(decoded._jsonMessage == "done")
     }
 
     @Test func errorRoundTrip() throws {
@@ -33,9 +33,9 @@ struct ResponseMessageTests {
             )
         )
         #expect(decoded.type == .error)
-        #expect(decoded.error == "boot failed")
-        #expect(decoded.details == "qemu exited with status 1")
-        #expect(decoded.code == "invalid_token")
+        #expect(decoded._jsonError == "boot failed")
+        #expect(decoded._jsonDetails == "qemu exited with status 1")
+        #expect(decoded._jsonCode == "invalid_token")
     }
 
     /// `code` is documented as optional so peers that predate error
@@ -45,8 +45,8 @@ struct ResponseMessageTests {
             {"requestId":"r","timestamp":0,"error":"nope"}
             """
         let decoded = try decodeJSON(ErrorMessage.self, from: json)
-        #expect(decoded.error == "nope")
-        #expect(decoded.details == nil)
-        #expect(decoded.code == nil)
+        #expect(decoded._jsonError == "nope")
+        #expect(decoded._jsonDetails == nil)
+        #expect(decoded._jsonCode == nil)
     }
 }

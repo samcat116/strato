@@ -236,7 +236,8 @@ extension FirecrackerSandboxRuntime {
                 "durable suspension requires an adopted, jailed sandbox")
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
+            resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil,
+            enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId), suspending.insert(sandboxId).inserted else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -260,7 +261,7 @@ extension FirecrackerSandboxRuntime {
         if let fence {
             record.guestFence = SandboxSuspensionGuestFence(request: fence, identityNonce: managed.identityNonce)
             guard record.guestFence?.hasValidShape(for: record) == true,
-                managed.guestControlProtocolVersion == fence.guestProtocolVersion
+                managed.guestControlProtocolVersion == Int(fence.guestProtocolVersion)
             else {
                 throw SandboxRuntimeError.notSnapshottable("automatic suspension requires a no-NIC v5 guest")
             }
@@ -383,7 +384,7 @@ extension FirecrackerSandboxRuntime {
         activeValidationProofs.insert(proofId)
         defer { activeValidationProofs.remove(proofId) }
         let reservation = HostReservation(
-            cpus: managed.spec.cpus,
+            cpus: Int(managed.spec.cpus),
             memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: managed.spec.memoryBytes).effectiveBytes,
             diskBytes: checkpoint.artifacts.reduce(0) { total, artifact in
                 let (next, overflow) = total.addingReportingOverflow(artifact.sizeBytes)
@@ -402,7 +403,7 @@ extension FirecrackerSandboxRuntime {
             try persistWarmTemplateUID(lease.uid, templateId: proofId)
             let plan = try jailPlan(for: proofId, recordedUID: lease.uid)
             let attachments = try await prepareTemplateNIC(
-                templateId: proofId, nicCount: managed.spec.network == nil ? 0 : 1)
+                templateId: proofId, nicCount: !managed.spec.hasNetwork ? 0 : 1)
             if attachments.isEmpty { try await createNetns(plan.netnsName) }
             let overrides = try await requiredNetworkOverrides(
                 forTAP: try sandboxTAPName(attachments), operation: "validating a suspension checkpoint")
@@ -427,7 +428,8 @@ extension FirecrackerSandboxRuntime {
                 try chownPath(path, uid: plan.uid, gid: plan.gid)
             }
             let options = try makeJailerOptions(
-                plan: plan, guestMemoryBytes: managed.spec.memoryBytes, resourceClass: managed.spec.resourceClass)
+                plan: plan, guestMemoryBytes: managed.spec.memoryBytes,
+                resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil)
             let manager = try await client.restoreVM(
                 vmId: proofId, jail: options,
                 snapshot: SnapshotLoadConfig(
@@ -571,7 +573,8 @@ extension FirecrackerSandboxRuntime {
         }
         let plan = try jailPlan(for: sandboxId, recordedUID: record.jailUID)
         let options = try makeJailerOptions(
-            plan: plan, guestMemoryBytes: record.spec.memoryBytes, resourceClass: record.spec.resourceClass)
+            plan: plan, guestMemoryBytes: record.spec.memoryBytes,
+            resourceClass: record.spec.hasResourceClass ? record.spec.resourceClass : nil)
         let manager = await client.disconnectedManager(vmId: sandboxId, jail: options)
         sandboxes[sandboxId] = Managed(
             spec: record.spec, rootfsPath: plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail),

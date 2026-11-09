@@ -31,7 +31,7 @@ public struct ResourceEnforcementProducer: Sendable {
             self.backend = backend
             self.reservation = reservation
             self.guestBytes = guestBytes
-            self.cpuCount = cpuCount ?? reservation.grantedCPUs
+            self.cpuCount = cpuCount ?? Int(reservation.grantedCpUs)
         }
     }
     public struct Capture: Sendable {
@@ -59,17 +59,17 @@ public struct ResourceEnforcementProducer: Sendable {
     /// A settled running observation is necessary even when controls and
     /// accounting match; stale errors and progress cannot authorize claims.
     public static func canAcknowledge(_ record: ObservedVMState, application: Application) -> Bool {
-        application.key.kind == .vm && record.vmId == application.key.id
+        application.key.kind == .vm && UUID(uuidString: record.vmID) == application.key.id
             && record.observedGeneration == application.generation && record.status == .running
-            && record.convergencePhase == nil && record.lastError == nil
-            && record.failedGeneration == nil && record.failureClassification == nil
+            && !record.hasConvergencePhase && !record.hasLastError
+            && !record.hasFailedGeneration && !record.hasFailureClassification
     }
 
     public static func canAcknowledge(_ record: ObservedSandboxState, application: Application) -> Bool {
-        application.key.kind == .sandbox && record.sandboxId == application.key.id
+        application.key.kind == .sandbox && UUID(uuidString: record.sandboxID) == application.key.id
             && record.observedGeneration == application.generation && record.status == .running
-            && record.convergencePhase == nil && record.lastError == nil
-            && record.failedGeneration == nil && record.failureClassification == nil
+            && !record.hasConvergencePhase && !record.hasLastError
+            && !record.hasFailedGeneration && !record.hasFailureClassification
     }
 
     public func capture() -> Capture { Capture(revision: revision, applications: applications) }
@@ -97,7 +97,7 @@ public struct ResourceEnforcementProducer: Sendable {
             }
         }
         acknowledgements.sort {
-            ($0.kind.rawValue, $0.workloadId.uuidString) < ($1.kind.rawValue, $1.workloadId.uuidString)
+            ($0.kind.protocolValue, $0.workloadID) < ($1.kind.protocolValue, $1.workloadID)
         }
         let result = ResourceEnforcementSnapshot(
             agentBootID: agentBootID, sequence: sequence, sampledAt: sampledAt,
@@ -123,7 +123,7 @@ public struct ResourceEnforcementProducer: Sendable {
         guard application.generation >= 0, application.resourceClass.policy.kind == .burstable,
             (application.key.kind == .vm && application.backend == .qemuVM)
                 || (application.key.kind == .sandbox && application.backend == .jailedFirecrackerSandbox),
-            application.cpuCount > 0, application.cpuCount <= application.reservation.grantedCPUs,
+            application.cpuCount > 0, application.cpuCount <= application.reservation.grantedCpUs,
             application.guestBytes > 0, application.reservation.guestCommitmentBytes >= application.guestBytes,
             let accounted = accounting.workloadReservations[application.key.id.uuidString],
             accounted.cpuMicroUnits == application.reservation.cpuMicroUnits,
@@ -133,6 +133,10 @@ public struct ResourceEnforcementProducer: Sendable {
                 backendOverheadBytes: application.reservation.backendOverheadBytes),
             let target = try? desired.aligned(pageSizeBytes: pageSize), let evidence,
             evidence.desired == desired, evidence.alignedTarget == target,
+            evidence.appliedMemoryHighBytes.hasValue, evidence.appliedMemoryMaxBytes.hasValue,
+            evidence.appliedCPUWeight.hasValue, evidence.memoryHighUnlimited.hasValue,
+            evidence.memoryMaxUnlimited.hasValue, evidence.cpuQuotaUnlimited.hasValue,
+            evidence.ownershipVerified.hasValue, evidence.enforcementAcknowledged.hasValue,
             evidence.appliedMemoryHighBytes.value == target.memoryHighBytes,
             evidence.appliedMemoryMaxBytes.value == target.memoryMaxBytes,
             evidence.appliedCPUWeight.value == Int64(target.cpuWeight),

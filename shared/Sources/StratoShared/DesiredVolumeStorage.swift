@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 /// The Ceph messenger policy Strato permits for volume traffic.
 ///
@@ -6,8 +7,39 @@ import Foundation
 /// control channel. Keeping this as a closed enum, with no plaintext case, makes
 /// the secure transport requirement part of the desired-state contract instead
 /// of an agent-local default that different hosts could interpret differently.
-public enum CephMessengerMode: String, Codable, Equatable, Sendable {
-    case secure
+public typealias CephMessengerMode = Strato_Agent_V1_CephMessengerMode
+extension Strato_Agent_V1_CephMessengerMode: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .secure: return "secure"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "secure": self = .secure
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// Everything an agent needs to act as a client of one Ceph-backed volume.
@@ -16,7 +48,8 @@ public enum CephMessengerMode: String, Codable, Equatable, Sendable {
 /// secret material itself is carried separately as `keyring`; agents use the
 /// identity to replace that material atomically and to derive durable local and
 /// libvirt references without treating the secret contents as an identifier.
-public struct CephVolumeStorage: Codable, Equatable, Sendable {
+public typealias CephVolumeStorage = Strato_Agent_V1_CephVolumeStorage
+extension Strato_Agent_V1_CephVolumeStorage: Codable {
     /// RBD images are named from their Strato volume identity. Both sides of
     /// the reconciliation boundary use this helper so an observation cannot
     /// redirect a volume row to another image in the same project namespace.
@@ -40,25 +73,16 @@ public struct CephVolumeStorage: Codable, Equatable, Sendable {
     }
 
     /// Strato's stable identity for the external or managed Ceph cluster.
-    public let clusterId: UUID
     /// Ceph's own cluster identity, written into the generated `ceph.conf`.
-    public let fsid: String
     /// RBD pool containing the image.
-    public let pool: String
     /// Project-scoped RBD namespace. This is never shared across projects.
-    public let namespace: String
     /// Scoped cephx identity, including its `client.` prefix.
-    public let clientName: String
     /// Monitor endpoints in the form accepted by Ceph clients.
-    public let monEndpoints: [String]
     /// Opaque version identity for this credential and its libvirt secret.
     /// Rotation mints a new id and permanently revokes the old one; callers
     /// must not assume this equals a project-access identity.
-    public let credentialId: UUID
     /// Complete cephx keyring contents. This is secret material and must not be logged.
-    public let keyring: String
     /// Messenger policy agents must write into their generated configuration.
-    public let messengerMode: CephMessengerMode
 
     public init(
         clusterId: UUID,
@@ -71,15 +95,89 @@ public struct CephVolumeStorage: Codable, Equatable, Sendable {
         keyring: String,
         messengerMode: CephMessengerMode
     ) {
-        self.clusterId = clusterId
-        self.fsid = fsid
-        self.pool = pool
-        self.namespace = namespace
-        self.clientName = clientName
-        self.monEndpoints = monEndpoints
-        self.credentialId = credentialId
-        self.keyring = keyring
-        self.messengerMode = messengerMode
+        self.init()
+        self._jsonClusterId = clusterId
+        self._jsonFsid = fsid
+        self._jsonPool = pool
+        self._jsonNamespace = namespace
+        self._jsonClientName = clientName
+        self._jsonMonEndpoints = monEndpoints
+        self._jsonCredentialId = credentialId
+        self._jsonKeyring = keyring
+        self._jsonMessengerMode = messengerMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case clusterId; case fsid; case pool; case namespace; case clientName; case monEndpoints; case credentialId;
+        case keyring; case messengerMode
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonClusterId = try container.decode(UUID.self, forKey: .clusterId)
+        self._jsonFsid = try container.decode(String.self, forKey: .fsid)
+        self._jsonPool = try container.decode(String.self, forKey: .pool)
+        self._jsonNamespace = try container.decode(String.self, forKey: .namespace)
+        self._jsonClientName = try container.decode(String.self, forKey: .clientName)
+        self._jsonMonEndpoints = try container.decode([String].self, forKey: .monEndpoints)
+        self._jsonCredentialId = try container.decode(UUID.self, forKey: .credentialId)
+        self._jsonKeyring = try container.decode(String.self, forKey: .keyring)
+        self._jsonMessengerMode = try container.decode(CephMessengerMode.self, forKey: .messengerMode)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonClusterId, forKey: .clusterId)
+        try container.encode(_jsonFsid, forKey: .fsid)
+        try container.encode(_jsonPool, forKey: .pool)
+        try container.encode(_jsonNamespace, forKey: .namespace)
+        try container.encode(_jsonClientName, forKey: .clientName)
+        try container.encode(_jsonMonEndpoints, forKey: .monEndpoints)
+        try container.encode(_jsonCredentialId, forKey: .credentialId)
+        try container.encode(_jsonKeyring, forKey: .keyring)
+        try container.encode(_jsonMessengerMode, forKey: .messengerMode)
+    }
+
+    var _jsonClusterId: UUID {
+        get { UUID(uuidString: clusterID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
+        set { let value = newValue; clusterID = value.uuidString }
+    }
+    var _jsonFsid: String {
+        get { fsid }
+        set { let value = newValue; fsid = value }
+    }
+    var _jsonPool: String {
+        get { pool }
+        set { let value = newValue; pool = value }
+    }
+    var _jsonNamespace: String {
+        get { namespace }
+        set { let value = newValue; namespace = value }
+    }
+    var _jsonClientName: String {
+        get { clientName }
+        set { let value = newValue; clientName = value }
+    }
+    var _jsonMonEndpoints: [String] {
+        get { monEndpoints.values }
+        set {
+            let value = newValue;
+            monEndpoints = Strato_Agent_V1_CephVolumeStorageMonEndpointsSection.with { $0.values = value }
+        }
+    }
+    var _jsonCredentialId: UUID {
+        get { UUID(uuidString: credentialID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
+        set { let value = newValue; credentialID = value.uuidString }
+    }
+    var _jsonKeyring: String {
+        get { keyring }
+        set { let value = newValue; keyring = value }
+    }
+    var _jsonMessengerMode: CephMessengerMode {
+        get { messengerMode }
+        set { let value = newValue; messengerMode = value }
     }
 }
 
@@ -88,45 +186,4 @@ public struct CephVolumeStorage: Codable, Equatable, Sendable {
 /// Local volumes intentionally carry no configuration: the receiving agent
 /// owns their filesystem layout. Ceph volumes carry the complete client
 /// configuration because any configured agent in the site may reconcile them.
-public enum DesiredVolumeStorage: Codable, Equatable, Sendable {
-    case local
-    case ceph(CephVolumeStorage)
-
-    private enum CodingKeys: String, CodingKey {
-        case local
-        case ceph
-    }
-
-    /// Gives the payload-free local case the same `{ "local": {} }` shape as
-    /// Swift's synthesized enum representation while allowing the Ceph payload
-    /// to stay flat instead of acquiring an implementation-detail `_0` key.
-    private struct EmptyPayload: Codable {}
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard container.allKeys.count == 1, let key = container.allKeys.first else {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "DesiredVolumeStorage must contain exactly one storage case"))
-        }
-
-        switch key {
-        case .local:
-            _ = try container.decode(EmptyPayload.self, forKey: .local)
-            self = .local
-        case .ceph:
-            self = .ceph(try container.decode(CephVolumeStorage.self, forKey: .ceph))
-        }
-    }
-
-    public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .local:
-            try container.encode(EmptyPayload(), forKey: .local)
-        case .ceph(let configuration):
-            try container.encode(configuration, forKey: .ceph)
-        }
-    }
-}
+public typealias DesiredVolumeStorage = Strato_Agent_V1_DesiredVolumeStorage

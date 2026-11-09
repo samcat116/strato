@@ -255,7 +255,7 @@ struct QuotaUsageAggregatorTests {
             ready.size = 3 * 1024 * 1024 * 1024
             ready.exportedArtifacts = [
                 SandboxSnapshotExportedArtifact(
-                    kind: SandboxSnapshotArtifactKind.allCases[0],
+                    kind: SandboxSnapshotArtifactKind.knownCases[0],
                     sizeBytes: 512 * 1024 * 1024,
                     sha256: String(repeating: "0", count: 64))
             ]

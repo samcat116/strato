@@ -326,18 +326,18 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.$site.id = siteID
         self.status = status
         self.administrativelyOffline = false
-        self.totalCPU = resources.totalCPU
+        self.totalCPU = Int(resources.totalCpu)
         self.totalMemory = resources.totalMemory
-        self.memoryAccounting = resources.memoryAccounting
-        self.availableCPUMicroUnits = resources.availableCPUMicroUnits
+        self.memoryAccounting = (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
+        self.availableCPUMicroUnits = (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
         self.totalDisk = resources.totalDisk
-        self.availableCPU = resources.availableCPU
+        self.availableCPU = Int(resources.availableCpu)
         self.availableMemory = resources.availableMemory
         self.availableDisk = resources.availableDisk
         self.physicalFreeDisk = resources.physicalFreeDisk
-        self.architecture = architecture?.rawValue
+        self.architecture = architecture?.protocolValue
         self.hypervisors = hypervisors
-        self.networkCapability = networkCapability?.rawValue
+        self.networkCapability = networkCapability?.protocolValue
         self.sandboxCapable = sandboxCapable
         self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
@@ -359,7 +359,7 @@ final class Agent: Model, Content, @unchecked Sendable {
     func updateAvailableResources(_ resources: AgentResources) -> Bool {
         // A heartbeat or reconnect from an older agent must not undo a
         // server-side inventory refusal and resume placement on a blind host.
-        let cpu = manifestInventoryComplete == false ? 0 : resources.availableCPU
+        let cpu = manifestInventoryComplete == false ? 0 : Int(resources.availableCpu)
         let memory: Int64 = manifestInventoryComplete == false ? 0 : resources.availableMemory
         let disk: Int64 = manifestInventoryComplete == false ? 0 : resources.availableDisk
         guard
@@ -367,15 +367,16 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableMemory != memory
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
-                || memoryAccounting != resources.memoryAccounting
-                || availableCPUMicroUnits != resources.availableCPUMicroUnits
+                || memoryAccounting != (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
+                || availableCPUMicroUnits
+                    != (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
-        availableCPUMicroUnits = resources.availableCPUMicroUnits
-        memoryAccounting = resources.memoryAccounting
+        availableCPUMicroUnits = (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
+        memoryAccounting = (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
         return true
     }
 
@@ -491,12 +492,13 @@ extension Agent {
         }
         hostname = registration.hostname
         version = registration.version
-        architecture = registration.architecture.rawValue
-        operatingSystem = registration.operatingSystem.rawValue
-        hypervisors = registration.hypervisors
-        networkCapability = registration.networkCapability?.rawValue
-        if let hostInfo = registration.hostInfo { self.hostInfo = hostInfo }
-        resourceClassEnforcement = registration.resourceClassEnforcement
+        architecture = registration.architecture.protocolValue
+        operatingSystem = registration.operatingSystem.protocolValue
+        hypervisors = registration.hypervisors.values
+        networkCapability = registration.hasNetworkCapability ? registration.networkCapability.protocolValue : nil
+        if registration.hasHostInfo { self.hostInfo = registration.hostInfo }
+        resourceClassEnforcement =
+            registration.hasResourceClassEnforcement ? registration.resourceClassEnforcement.values : nil
         sandboxCapable = registration.sandboxCapable
         sandboxNetworkingCapable = registration.sandboxNetworkingCapable
         tpmCapable = registration.tpmCapable
@@ -504,10 +506,11 @@ extension Agent {
         metadataServiceCapable = registration.metadataServiceCapable
         self.dependencyObservations = dependencyObservations
         dependencyObservationsReceivedAt = receivedAt
-        totalCPU = registration.resources.totalCPU
+        totalCPU = Int(registration.resources.totalCpu)
         totalMemory = registration.resources.totalMemory
-        availableCPUMicroUnits = registration.resources.availableCPUMicroUnits
-        memoryAccounting = registration.resources.memoryAccounting
+        availableCPUMicroUnits =
+            registration.resources.hasAvailableCpuMicroUnits ? registration.resources.availableCpuMicroUnits : nil
+        memoryAccounting = registration.resources.hasMemoryAccounting ? registration.resources.memoryAccounting : nil
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt
@@ -574,7 +577,7 @@ extension Agent {
 
     /// Whether every fresh dependency affecting `capability` permits new work.
     func dependencyAllows(_ capability: NodeCapability, at instant: ClusterInstant) -> Bool {
-        let relevant = dependencyObservations.filter { $0.affectedCapabilities.contains(capability) }
+        let relevant = dependencyObservations.filter { $0.affectedCapabilities.values.contains(capability) }
         guard !relevant.isEmpty, let receivedAt = dependencyObservationsReceivedAt else { return false }
         return relevant.allSatisfy {
             $0.allowsNewWork(
@@ -588,7 +591,7 @@ extension Agent {
     /// including Firecracker VMs and sandboxes without networking.
     func hostMemoryProfileAllowsPlacement(at instant: ClusterInstant) -> Bool {
         guard let profile = dependencyObservations.first(where: { $0.id == .hostMemoryProfile }) else {
-            return resourceTelemetry?.memoryProfile == nil
+            return resourceTelemetry?.hasMemoryProfile != true
         }
         guard let receivedAt = dependencyObservationsReceivedAt else { return false }
         return profile.allowsNewWork(
@@ -634,7 +637,7 @@ extension Agent {
     /// so a pre-STR-270 registration cannot accept an unenforceable policy.
     func supportsVolumeIOLimits(at instant: ClusterInstant) -> Bool {
         hypervisors.contains {
-            $0.type == .qemu && $0.available && $0.supportsVolumeIOLimits == true
+            $0.type == .qemu && $0.available && $0.supportsVolumeIoLimits == true
                 && dependencyAllows(.qemuPlacement, at: instant)
         }
     }
@@ -669,6 +672,8 @@ extension Agent {
         case .sandboxSnapshot:
             guard sandboxCapable else { return false }
             backend = .firecracker
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
 
         return hypervisors.contains {
@@ -933,17 +938,17 @@ struct AgentUpdateHealthBaseline: Codable, Sendable {
 extension Agent {
     func workingUpdateCapabilities(at instant: ClusterInstant) -> Set<String> {
         var result = Set<String>()
-        for capability in NodeCapability.allCases where dependencyAllows(capability, at: instant) {
-            result.insert("dependency:" + capability.rawValue)
+        for capability in NodeCapability.knownCases where dependencyAllows(capability, at: instant) {
+            result.insert("dependency:" + capability.protocolValue)
         }
         for backend in hypervisors where supportedHypervisors(at: instant).contains(backend.type) {
-            let prefix = "hypervisor:" + backend.type.rawValue
+            let prefix = "hypervisor:" + backend.type.protocolValue
             result.insert(prefix)
             if backend.accelerated { result.insert(prefix + ":accelerated") }
             if backend.supportsSnapshots { result.insert(prefix + ":snapshots") }
             if backend.supportsVsock == true { result.insert(prefix + ":vsock") }
             if backend.supportsGuestExec == true { result.insert(prefix + ":guest_exec") }
-            if backend.supportsVolumeIOLimits == true { result.insert(prefix + ":volume_io_limits") }
+            if backend.supportsVolumeIoLimits == true { result.insert(prefix + ":volume_io_limits") }
         }
         if sandboxCapable && hostMemoryProfileAllowsPlacement(at: instant) { result.insert("sandbox") }
         if effectiveSandboxNetworkingCapable(at: instant) { result.insert("sandbox_networking") }
@@ -951,7 +956,7 @@ extension Agent {
             result.insert("overlay_networking")
             result.insert("networking")
         }
-        if networkCapability == NetworkCapability.userMode.rawValue { result.insert("networking") }
+        if networkCapability == NetworkCapability.userMode.protocolValue { result.insert("networking") }
         if tpmCapable { result.insert("tpm") }
         if effectiveResolverCapable(at: instant) { result.insert("resolver") }
         if metadataServiceCapable { result.insert("metadata_service") }
@@ -994,11 +999,11 @@ extension Agent {
         }
         let required = Set(baseline.capabilities)
         for observation in dependencyObservations where observation.desiredState == .required {
-            let requiredFeature = observation.affectedCapabilities.contains {
-                required.contains("dependency:" + $0.rawValue)
+            let requiredFeature = observation.affectedCapabilities.values.contains {
+                required.contains("dependency:" + $0.protocolValue)
             }
             if (requiredFeature || observation.id == .hostMemoryProfile), observation.functionalState != .healthy {
-                return "target-version required dependency is degraded or unhealthy: " + observation.id.rawValue
+                return "target-version required dependency is degraded or unhealthy: " + observation.id.protocolValue
             }
         }
         let lost = required.subtracting(workingUpdateCapabilities(at: instant)).sorted()

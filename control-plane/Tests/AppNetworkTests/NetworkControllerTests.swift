@@ -552,7 +552,7 @@ final class NetworkControllerTests {
             try await builder.createNetwork(
                 name: "default", project: neighbour, subnet: "10.51.0.0/24", gateway: "10.51.0.1")
 
-            func register(protocolVersion: Int, named name: String) async throws -> UUID {
+            func register(protocolMajor: Int, named name: String) async throws -> UUID {
                 let message = AgentRegisterMessage(
                     agentId: name,
                     hostname: "rollback-host",
@@ -562,7 +562,7 @@ final class NetworkControllerTests {
                         totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39
                     ),
-                    protocolVersion: protocolVersion
+                    protocolOffer: .with { $0.major = UInt32(protocolMajor) }
                 )
                 return try await app.agentService.registerAgent(
                     message, agentName: name, siteID: Self.fixtureSiteID,
@@ -571,7 +571,7 @@ final class NetworkControllerTests {
 
             await #expect(throws: AgentServiceError.self) {
                 _ = try await register(
-                    protocolVersion: WireProtocol.currentVersion - 1,
+                    protocolMajor: Int(AgentProtocolCompatibility.major) - 1,
                     named: "rolled-back-agent")
             }
             // The refusal is total: no half-registered row survives it.
@@ -580,7 +580,7 @@ final class NetworkControllerTests {
 
             // A current agent joins the same fleet without complaint.
             _ = try await register(
-                protocolVersion: WireProtocol.currentVersion, named: "current-agent")
+                protocolMajor: Int(AgentProtocolCompatibility.major), named: "current-agent")
             let current = try await Agent.query(on: app.db).filter(\.$name == "current-agent").count()
             #expect(current == 1)
         }

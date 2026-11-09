@@ -36,7 +36,7 @@ struct MissingInventoryTests {
             #expect(await agent.missingSnapshotInventoryIsUnknown())
             #expect(await agent.observedSnapshotPresence() == nil)
             let resources = await agent.getAgentResources()
-            #expect(resources.availableCPU == 0)
+            #expect(resources.availableCpu == 0)
             #expect(resources.availableMemory == 0)
             #expect(resources.availableDisk == 0)
             #expect(!FileManager.default.fileExists(atPath: root + "/vms/vm-manifest.json"))
@@ -68,7 +68,7 @@ struct MissingInventoryTests {
         }
     }
 
-    @Test("Surviving hypervisor guests keep a missing manifest quarantined", arguments: HypervisorType.allCases)
+    @Test("Surviving hypervisor guests keep a missing manifest quarantined", arguments: HypervisorType.knownCases)
     func survivingGuest(type: HypervisorType) async throws {
         try await withAgent { agent, root in
             try await agent.seedSurvivingGuest(type: type)
@@ -181,7 +181,7 @@ struct MissingInventoryTests {
 
 extension Agent {
     fileprivate func prepareMissingInventoryTest() async {
-        for type in HypervisorType.allCases {
+        for type in HypervisorType.knownCases {
             hypervisorServices[type] = MockHypervisorService(logger: logger, hypervisorType: type)
         }
         let local = MockStorageBackend(logger: logger, volumeStoragePath: configuration.volumeStoragePath)

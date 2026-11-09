@@ -26,10 +26,10 @@ public enum FirecrackerBootArtifactResolver {
         var kernelPath: String?
         var initramfsPath: String?
         var cmdline: String?
-        if case .directKernel(let specKernel, let specInitramfs, let specCmdline) = spec.boot {
-            kernelPath = specKernel.isEmpty ? nil : specKernel
-            initramfsPath = specInitramfs
-            cmdline = specCmdline
+        if case .directKernel(let boot) = spec.boot.value {
+            kernelPath = boot.kernel.isEmpty ? nil : boot.kernel
+            initramfsPath = boot.hasInitramfs ? boot.initramfs : nil
+            cmdline = boot.hasCmdline ? boot.cmdline : nil
         }
 
         if let imageInfo {
@@ -39,11 +39,11 @@ public enum FirecrackerBootArtifactResolver {
             }
             guard imageInfo.artifact(ofKind: .kernel) != nil else {
                 throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no kernel artifact")
+                    "Firecracker image \(imageInfo.imageID) has no kernel artifact")
             }
             guard imageInfo.artifact(ofKind: .rootfs) != nil else {
                 throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker image \(imageInfo.imageId) has no rootfs artifact")
+                    "Firecracker image \(imageInfo.imageID) has no rootfs artifact")
             }
 
             // An image that supplies its own kernel fully owns direct-kernel

@@ -1,10 +1,7 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 
-// The wire protocol routes every message through WireProtocol.makeEncoder()/
-// makeDecoder() on both sides (see MessageEnvelope); tests must use the same
-// coders so they exercise the real contract — including the pinned date
-// strategy and its tolerant decode.
+// Explicit legacy JSON codecs preserve stored, public API, and guest payloads.
 func encodeJSON<T: Encodable>(_ value: T) throws -> Data {
     try WireProtocol.makeEncoder().encode(value)
 }
@@ -26,9 +23,8 @@ func roundTrip<T: Codable>(_ value: T) throws -> T {
 /// envelope layer and the payload layer, and hand back the decoded message —
 /// the exact path a message takes between control plane and agent.
 func throughEnvelope<T: WebSocketMessage>(_ message: T) throws -> T {
-    let envelope = try MessageEnvelope(message: message)
-    let decodedEnvelope = try decodeJSON(MessageEnvelope.self, from: encodeJSON(envelope))
-    return try decodedEnvelope.decode(as: T.self)
+    let encoded = try WireProtocol.encodeEnvelope(message)
+    return try WireProtocol.decodeEnvelope(encoded).decode(as: T.self)
 }
 
 /// Top-level JSON keys of the encoded value, for asserting fields actually

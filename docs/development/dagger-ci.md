@@ -43,13 +43,14 @@ affected operations. Images and external module references are pinned in
 | `web-test` | Vitest unit/component tests |
 | `web-build` | Next.js production build and TypeScript |
 | `web-browser` | Chromium smoke tests with the checked-in mock backend |
+| `agent-protocol` | Protobuf schema lint/breaking checks, generation drift, independent peers, and focused compatibility tests |
 | `api-types` | Regenerate OpenAPI TypeScript and compare with checked-in output |
 | `openapi` | Redocly OpenAPI lint |
 | `agent-build`, `cli-build`, `client-build`, `control-plane-build` | Swift 6.4 Linux production compilation |
 | `swift-format` | Strict formatting of the PR CI source and test folders |
 | `docs` | VitePress build and internal page links |
 
-Swift tests remain opt-in, following the repository's existing CI policy:
+Broad Swift suites remain opt-in; `agent-protocol` runs focused compatibility tests automatically:
 
 ```bash
 dagger api call strato-ci swift-test --package shared stdout

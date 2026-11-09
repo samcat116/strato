@@ -31,7 +31,9 @@ enum ResourceAdmissionService {
         let pending = state.amounts
         let cpu = max(
             0,
-            raw.availableCPUMicroUnits ?? WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: raw.availableCPU))
+            raw.hasAvailableCpuMicroUnits
+                ? raw.availableCpuMicroUnits
+                : WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: Int(raw.availableCpu)))
         return .init(
             memory: pending.memory >= raw.availableMemory ? 0 : raw.availableMemory - pending.memory,
             disk: max(0, raw.availableDisk),
@@ -76,13 +78,19 @@ enum ResourceAdmissionService {
         _ report: ObservedStateReport, agentID: UUID, sessionID: UUID?, inventoryComplete: Bool,
         on db: any Database
     ) async throws -> ReportOutcome {
-        try await db.transaction { tx in
+        try report.validateProtocol()
+        var normalized = report
+        try normalized.normalizeProtocolIdentifiers()
+        let report = normalized
+        return try await db.transaction { tx in
             let (agent, row) = try await lockedState(agentID: agentID, on: tx)
-            guard let snapshot = report.resourceEnforcement else {
+            guard report.hasResourceEnforcement else {
                 return row.state.bootID == nil ? .legacy : .refused
             }
+            let snapshot = report.resourceEnforcement
+            let bootID = try UUID(protocolString: snapshot.agentBootID)
             guard snapshot.sequence >= 0 else { return .refused }
-            if row.state.bootID == snapshot.agentBootID {
+            if row.state.bootID == bootID {
                 guard snapshot.sequence > row.state.sequence, row.state.requestID != report.requestId else {
                     return .refused
                 }
@@ -91,10 +99,12 @@ enum ResourceAdmissionService {
             }
             var released: [String] = []
             if snapshot.inventoryComplete, inventoryComplete, accountingConsistent(report) {
-                let keys = snapshot.acknowledgements.map { "\($0.kind.rawValue):\($0.workloadId)" }
+                let keys = try snapshot.acknowledgements.values.map {
+                    "\($0.kind.protocolValue):\(try UUID(protocolString: $0.workloadID).uuidString)"
+                }
                 // Duplicates make the whole acknowledgement set unknown.
                 if Set(keys).count == keys.count {
-                    for ack in snapshot.acknowledgements {
+                    for ack in snapshot.acknowledgements.values {
                         guard observedMatches(ack, report: report),
                             try await matchesCommitted(ack, agent: agent, on: tx)
                         else { continue }
@@ -105,7 +115,7 @@ enum ResourceAdmissionService {
                 }
             }
             row.state.sessionID = sessionID
-            row.state.bootID = snapshot.agentBootID
+            row.state.bootID = bootID
             row.state.sequence = snapshot.sequence
             row.state.requestID = report.requestId
             row.state.resources = report.resources
@@ -121,14 +131,18 @@ enum ResourceAdmissionService {
     /// Necessary arithmetic consistency; producer generation/ownership authority
     /// still supplies the proof that each footprint was included exactly once.
     static func accountingConsistent(_ report: ObservedStateReport) -> Bool {
-        guard let snapshot = report.resourceEnforcement,
-            let cpu = report.resources.availableCPUMicroUnits, cpu >= 0,
-            let memory = report.resources.memoryAccounting,
+        guard report.hasResourceEnforcement, report.resources.hasAvailableCpuMicroUnits,
+            report.resources.hasMemoryAccounting
+        else { return false }
+        let snapshot = report.resourceEnforcement
+        let cpu = report.resources.availableCpuMicroUnits
+        let memory = report.resources.memoryAccounting
+        guard cpu >= 0,
             memory.physicalBytes == report.resources.totalMemory,
             memory.remainingAllocatableBytes == report.resources.availableMemory,
             memory.physicalBytes >= 0, memory.hostReservedBytes >= 0, memory.workloadEffectiveBytes >= 0,
-            cpu <= WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: report.resources.totalCPU),
-            report.resources.availableCPU == Int(cpu / 1_000_000)
+            cpu <= WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: Int(report.resources.totalCpu)),
+            report.resources.availableCpu == cpu / 1_000_000
         else { return false }
         let checked = HostMemoryAccounting(
             physicalBytes: memory.physicalBytes, hostReservedBytes: memory.hostReservedBytes,
@@ -136,7 +150,7 @@ enum ResourceAdmissionService {
         guard checked == memory else { return false }
         var acknowledgedCPU: Int64 = 0
         var acknowledgedMemory: Int64 = 0
-        for ack in snapshot.acknowledgements {
+        for ack in snapshot.acknowledgements.values {
             let (nextCPU, cpuOverflow) = acknowledgedCPU.addingReportingOverflow(ack.accountedReservation.cpuMicroUnits)
             let (nextMemory, memoryOverflow) = acknowledgedMemory.addingReportingOverflow(
                 ack.accountedReservation.effectiveMemoryBytes)
@@ -144,31 +158,35 @@ enum ResourceAdmissionService {
             acknowledgedCPU = nextCPU
             acknowledgedMemory = nextMemory
         }
-        return acknowledgedCPU <= WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(cpus: report.resources.totalCPU)
+        return acknowledgedCPU <= WorkloadResourceClassPolicy.guaranteed.cpuMicroUnits(
+            cpus: Int(report.resources.totalCpu))
             - cpu
             && acknowledgedMemory <= memory.workloadEffectiveBytes
     }
 
     static func observedMatches(_ ack: WorkloadEnforcementAcknowledgement, report: ObservedStateReport) -> Bool {
+        guard let workloadID = UUID(uuidString: ack.workloadID) else { return false }
         switch ack.kind {
         case .vm:
-            let entries = report.vms.filter { $0.vmId == ack.workloadId }
+            let entries = report.vms.values.filter { UUID(uuidString: $0.vmID) == workloadID }
             guard entries.count == 1, let entry = entries.first else { return false }
             return entry.observedGeneration == ack.appliedGeneration
-                && entry.failedGeneration != ack.appliedGeneration && entry.lastError == nil
-                && entry.convergencePhase == nil && entry.status == .running
+                && (!entry.hasFailedGeneration || entry.failedGeneration != ack.appliedGeneration)
+                && !entry.hasLastError
+                && !entry.hasConvergencePhase && entry.status == .running
         case .sandbox:
-            let entries = report.sandboxes.filter { $0.sandboxId == ack.workloadId }
+            let entries = report.sandboxes.values.filter { UUID(uuidString: $0.sandboxID) == workloadID }
             guard entries.count == 1, let entry = entries.first else { return false }
             return entry.observedGeneration == ack.appliedGeneration
-                && entry.failedGeneration != ack.appliedGeneration && entry.lastError == nil
-                && entry.convergencePhase == nil && entry.status == .running
+                && (!entry.hasFailedGeneration || entry.failedGeneration != ack.appliedGeneration)
+                && !entry.hasLastError
+                && !entry.hasConvergencePhase && entry.status == .running
         default: return false
         }
     }
 
     static func covers(_ newer: WorkloadAdmittedReservation, _ older: WorkloadAdmittedReservation) -> Bool {
-        newer.grantedCPUs >= older.grantedCPUs && newer.guestCommitmentBytes >= older.guestCommitmentBytes
+        newer.grantedCpUs >= older.grantedCpUs && newer.guestCommitmentBytes >= older.guestCommitmentBytes
             && newer.cpuMicroUnits >= older.cpuMicroUnits && newer.discountedGuestBytes >= older.discountedGuestBytes
             && newer.backendOverheadBytes >= older.backendOverheadBytes
     }
@@ -178,8 +196,9 @@ enum ResourceAdmissionService {
     static func coveredClaims(
         _ ack: WorkloadEnforcementAcknowledgement, pending: [PendingResourceCommitment]
     ) -> [String] {
+        guard let workloadID = UUID(uuidString: ack.workloadID) else { return [] }
         let claims = pending.filter {
-            $0.kind == ack.kind && $0.workloadID == ack.workloadId && $0.backend == ack.backend
+            $0.kind == ack.kind && $0.workloadID == workloadID && $0.backend == ack.backend
                 && $0.resourceClass.siteID == ack.resourceClass.siteID
                 && $0.resourceClass.classID == ack.resourceClass.classID
                 && $0.generation <= ack.appliedGeneration
@@ -203,7 +222,7 @@ enum ResourceAdmissionService {
     ) async throws -> Bool {
         guard ack.appliedGeneration >= 0, ack.ownershipVerified, ack.cpuQuotaUnlimited,
             ack.runtimeGuestBytes > 0, ack.resourceClass.policy.kind == .burstable,
-            ack.resourceClass.siteID == agent.$site.id,
+            UUID(uuidString: ack.resourceClass.siteID) == agent.$site.id,
             agent.resourceClassEnforcement?.filter({ $0.backend == ack.backend }).count == 1,
             agent.resourceClassEnforcement?.first(where: { $0.backend == ack.backend })?.supportsBurstable == true
         else { return false }
@@ -215,7 +234,9 @@ enum ResourceAdmissionService {
         let backend: WorkloadResourceClassBackend?
         switch ack.kind {
         case .vm:
-            guard let vm = try await VM.find(ack.workloadId, on: db), !vm.isTerminating else { return false }
+            guard let vm = try await VM.find(try UUID(protocolString: ack.workloadID), on: db), !vm.isTerminating else {
+                return false
+            }
             snapshot = vm.resourceClass
             ledger = vm.admittedReservation
             generation = vm.generation
@@ -223,7 +244,9 @@ enum ResourceAdmissionService {
             owner = vm.hypervisorId
             backend = vm.hypervisorType == .qemu ? .qemuVM : nil
         case .sandbox:
-            guard let sandbox = try await Sandbox.find(ack.workloadId, on: db), !sandbox.isTerminating else {
+            guard let sandbox = try await Sandbox.find(try UUID(protocolString: ack.workloadID), on: db),
+                !sandbox.isTerminating
+            else {
                 return false
             }
             snapshot = sandbox.resourceClass

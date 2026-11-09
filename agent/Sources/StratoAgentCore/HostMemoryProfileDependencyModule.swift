@@ -20,11 +20,12 @@ public struct HostMemoryProfileDependencyModule: NodeDependencyModule {
     public func inspect() async -> NodeDependencyInspection {
         let sample = await observation()
         let warning = sample == nil ? nil : await warnings().first
-        let reason = sample?.reason ?? warning
+        let profileFailure = sample.flatMap { $0.hasReason ? $0.reason : nil }
+        let reason = profileFailure ?? warning
         return NodeDependencyInspection(
             supervisorState: .notApplicable,
-            compatibility: sample?.reason == nil ? .compatible : .incompatible,
-            functionalState: sample?.reason != nil ? .unhealthy : (warning == nil ? .healthy : .degraded),
+            compatibility: profileFailure == nil ? .compatible : .incompatible,
+            functionalState: profileFailure != nil ? .unhealthy : (warning == nil ? .healthy : .degraded),
             reason: reason.map { NodeDependencyFailureReason(code: .functionalProbeFailed, message: $0) })
     }
 }

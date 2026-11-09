@@ -39,8 +39,9 @@ extension Reconciler {
         }
         // A same-generation pass still re-observes guest drift. This step is
         // always real work: VM convergence cannot advance before its read-back.
-        for entry in desired where entry.desiredStatus == .running && entry.guestConfig?.isEmpty == false {
-            let id = entry.vmId.uuidString
+        for entry in desired where entry.desiredStatus == .running && entry.hasGuestConfig && !entry.guestConfig.isEmpty
+        {
+            let id = entry.vmID
             guard entry.generation >= (lastApplied[id] ?? 0) else { continue }
             if let index = plan.items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
                 guard !plan.items[index].steps.contains(.adopt), !plan.items[index].steps.contains(.delete) else {
@@ -70,7 +71,7 @@ extension Reconciler {
         appliedEdges: [String: AppliedEdgeNonces]
     ) {
         for entry in desired where !entry.wantsAbsent {
-            let id = entry.vmId.uuidString
+            let id = entry.vmID
             // Same staleness rule as the core diff and resize pass: equal
             // generations may correct drift, but an older replay must never
             // restore an obsolete NIC or MMDS policy.
@@ -84,7 +85,7 @@ extension Reconciler {
                 // their configuration and seed from desired state before cold boot.
                 continue
             case .qemu:
-                needsReconfiguration = observed != entry.spec.networks
+                needsReconfiguration = observed != entry.spec.networks.values
             case .firecracker:
                 // Firecracker cannot change MMDS's interface allow-list after
                 // boot. Other NIC edits remain unsupported post-create, but a
@@ -94,9 +95,11 @@ extension Reconciler {
                     presentFirecrackerMMDSInterfaces[id]
                     ?? FirecrackerMMDSInterfacePlan.interfaceIDs(for: observed)
                 let desiredInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
-                    for: entry.spec.networks,
-                    metadataServiceEnabled: entry.metadata?.isServiceEnabled ?? false)
+                    for: entry.spec.networks.values,
+                    metadataServiceEnabled: entry.hasMetadata && entry.metadata.isServiceEnabled)
                 needsReconfiguration = observedInterfaces != desiredInterfaces
+            case .unspecified, .UNRECOGNIZED:
+                preconditionFailure("Planning requires a validated hypervisor type")
             }
             guard needsReconfiguration else { continue }
 
@@ -194,7 +197,7 @@ extension Reconciler {
     ) {
         guard !sizing.isEmpty else { return }
         for entry in desired where !entry.wantsAbsent {
-            let id = entry.vmId.uuidString
+            let id = entry.vmID
             guard case .managed(let status)? = present[id],
                 let observed = sizing[id]
             else { continue }
@@ -269,7 +272,7 @@ extension Reconciler {
         tombstones: [DesiredWorkloadTombstone] = []
     ) -> ReconcilePlan {
         var plan = ReconcilePlan()
-        for family in SnapshotArtifactKind.allCases {
+        for family in SnapshotArtifactKind.knownCases {
             let familyDesired = desired.filter { $0.kind == family }
             let familyPresent = present.filter { _, presence in
                 guard case .managed(let artifact) = presence else { return false }
@@ -301,6 +304,8 @@ extension Reconciler {
         case .volumeSnapshot: return planned(VolumeSnapshotFamily.self)
         case .vmCheckpoint: return planned(VMCheckpointFamily.self)
         case .sandboxSnapshot: return planned(SandboxSnapshotFamily.self)
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Planning requires a validated snapshot family")
         }
     }
 
@@ -322,7 +327,7 @@ extension Reconciler {
     public static func snapshotSteps(
         desired: DesiredSnapshotState, observed: ObservedSnapshotArtifact
     ) -> [ReconcileStep] {
-        guard desired.export != nil, !observed.exported else { return [] }
+        guard desired.hasExport, !observed.exported else { return [] }
         return [.export]
     }
 
@@ -368,7 +373,7 @@ extension Reconciler {
         var desiredIds = Set<String>()
         let kind = Desired.workloadKind
         let tombstonesById = Dictionary(
-            tombstones.lazy.filter { $0.kind == kind }.map { ($0.workloadId.uuidString, $0) },
+            tombstones.lazy.filter { $0.kind == kind }.map { ($0.workloadID, $0) },
             uniquingKeysWith: { first, second in first.generation >= second.generation ? first : second }
         )
 
@@ -511,7 +516,7 @@ extension Reconciler {
         // control plane retires them once the agent stops reporting the id.
 
         return ReconcilePlan(
-            items: items, unrecognized: unrecognized.sorted { $0.workloadId.uuidString < $1.workloadId.uuidString })
+            items: items, unrecognized: unrecognized.sorted { $0.workloadID < $1.workloadID })
     }
 
     /// The steps for the edge nonces a desired entry carries (ADR 0001 stage 9,
@@ -625,6 +630,8 @@ extension Reconciler {
             return [.shutdown]
         case .absent:
             return [.delete]
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Planning requires a validated desired status")
         }
     }
 
@@ -664,16 +671,17 @@ extension Reconciler {
         // grow on every sync. Growing first still holds for an attachment that
         // is merely moving, where the resize is the thing that has to land
         // before the slot changes underneath it.
-        if desired.attachment == nil, observed.attachedVMId != nil {
+        if !desired.hasAttachment, observed.attachedVMId != nil {
             return [.detach]
         }
         // Once the disk is attached in the right slot, a limit change outranks
         // a grow. A live grow may remain blocked while the guest runs; that
         // must not starve an independently enforceable fairness policy.
-        if let attachment = desired.attachment,
-            observed.attachedVMId == attachment.vmId.uuidString,
-            observed.deviceName == attachment.deviceName.rawValue,
-            !ioLimitsMatch(desired: desired.ioLimits, observed: observed.ioLimits)
+        let attachment = desired.attachment
+        if desired.hasAttachment,
+            observed.attachedVMId == attachment.vmID,
+            observed.deviceName == attachment.deviceName,
+            !ioLimitsMatch(desired: desired.hasIoLimits ? desired.ioLimits : nil, observed: observed.ioLimits)
         {
             return [.throttle]
         }
@@ -686,13 +694,13 @@ extension Reconciler {
         // with nothing to attach to — which the actuator answers with a
         // *permanent* failure, degrading a volume whose only problem was a
         // leftover field.
-        guard let attachment = desired.attachment else {
+        guard desired.hasAttachment else {
             // Detached and desired detached — the clause above already handled
             // the case where it is still plugged in.
             return unconfirmedSizeSteps(observed)
         }
-        if observed.attachedVMId == attachment.vmId.uuidString,
-            observed.deviceName == attachment.deviceName.rawValue
+        if observed.attachedVMId == attachment.vmID,
+            observed.deviceName == attachment.deviceName
         {
             return unconfirmedSizeSteps(observed)
         }
@@ -711,8 +719,10 @@ extension Reconciler {
         desired: VolumeIOLimits?, observed: VolumeIOLimits?
     ) -> Bool {
         guard let observed else { return false }
-        return desired?.iopsTotal == observed.iopsTotal
-            && desired?.bpsTotal == observed.bpsTotal
+        return desired.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil }
+            == (observed.hasIopsTotal ? observed.iopsTotal : nil)
+            && desired.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil }
+                == (observed.hasBpsTotal ? observed.bpsTotal : nil)
     }
 
     /// What to do about a volume whose size the agent could not read, once
@@ -746,6 +756,8 @@ extension Reconciler {
             return [.shutdown]
         case .absent:
             return [.delete]
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Planning requires a validated desired status")
         }
     }
 }

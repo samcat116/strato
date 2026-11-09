@@ -29,10 +29,10 @@ struct GuestAgentBootstrapTests {
     @Test func optionalBootstrapAndObservationDecodeForOlderPeers() throws {
         let metadata = InstanceMetadata(instanceId: UUID(), projectId: UUID(), serviceEnabled: true)
         let data = try JSONEncoder().encode(metadata)
-        #expect(try JSONDecoder().decode(InstanceMetadata.self, from: data).guestAgentRelease == nil)
+        #expect(try JSONDecoder().decode(InstanceMetadata.self, from: data)._jsonGuestAgentRelease == nil)
         let observation = ObservedVMState(vmId: UUID(), status: .running, observedGeneration: 1)
         #expect(
             try JSONDecoder().decode(ObservedVMState.self, from: JSONEncoder().encode(observation))
-                .guestAgentObservation == nil)
+                .hasGuestAgentObservation == false)
     }
 }

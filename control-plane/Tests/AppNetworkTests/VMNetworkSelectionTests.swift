@@ -370,10 +370,10 @@ final class VMNetworkSelectionTests {
             let spec = try VMSpecBuilder.buildVMSpec(
                 from: vm, image: image, volumes: volumes, networkInterfaces: nics,
                 networks: [try network.requireID(): network])
-            #expect(spec.networks.map(\.interfaceId) == nics.map(\.id))
-            #expect(spec.networks.map(\.deviceName) == ["net0", "net1"])
-            #expect(spec.networks.map(\.orderIndex) == [0, 1])
-            #expect(spec.networks.map(\.mtu) == [1400, 9000])
+            #expect(spec.networks.values.map(\.interfaceID) == nics.compactMap { $0.id?.uuidString })
+            #expect(spec.networks.values.map(\.deviceName) == ["net0", "net1"])
+            #expect(spec.networks.values.map(\.orderIndex) == [0, 1])
+            #expect(spec.networks.values.map(\.mtu) == [1400, 9000])
         }
     }
 

@@ -33,9 +33,7 @@ extension Agent {
     private func routeInboundMessage(_ frame: ControlPlaneInboundFrame) async {
         let envelope = frame.envelope
         await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
-            guard let self,
-                await self.websocketClient?.isCurrentConnection(frame.generation) == true
-            else { return }
+            guard let self else { return }
             await self.handleMessage(
                 envelope,
                 sourceGeneration: frame.generation,
@@ -45,9 +43,10 @@ extension Agent {
 
     /// Route a decoded inbound frame onto its per-resource serial lane. Frames for the same
     /// resource run in arrival order; frames for unrelated resources run concurrently.
-    func routeInboundMessage(_ envelope: MessageEnvelope) async {
+    func routeInboundMessage(_ envelope: MessageEnvelope, inventorySessionID: String? = nil) async {
         await messageQueue.enqueue(keys: envelope.serializationKeys) { [weak self] in
-            await self?.handleMessage(envelope)
+            guard let self else { return }
+            await self.handleMessage(envelope, inventorySessionID: inventorySessionID)
         }
     }
 
@@ -73,31 +72,39 @@ extension Agent {
     func handleMessage(
         _ envelope: MessageEnvelope,
         sourceGeneration: ControlPlaneWebSocketState.Generation? = nil,
-        wireByteCount: Int? = nil
+        wireByteCount: Int? = nil,
+        inventorySessionID: String? = nil
     ) async {
+        if let sourceGeneration {
+            guard await websocketClient?.isCurrentConnection(sourceGeneration) == true else { return }
+        }
+        if let inventorySessionID {
+            guard protocolAgreement?.inventorySessionID == inventorySessionID else { return }
+        }
         do {
+            if envelope.type != .agentRegisterResponse {
+                if let agreement = protocolAgreement {
+                    try AgentProtocolCompatibility.require(
+                        envelope.requirements, agreement: agreement,
+                        offered: AgentProtocolCompatibility.localOffer)
+                } else if envelope.type != .error || !envelope.requiredCapabilities.isEmpty {
+                    throw AgentProtocolCompatibility.Failure.invalidSession
+                }
+            }
             switch envelope.type {
             case .agentRegisterResponse:
-                let message: AgentRegisterResponseMessage
-                do {
-                    message = try decodeInboundMessage(
-                        envelope,
-                        as: AgentRegisterResponseMessage.self,
-                        wireByteCount: wireByteCount)
-                } catch DecodingError.keyNotFound(let key, _)
-                    where key.stringValue == "protocolVersion"
-                {
-                    let reason =
-                        "Control plane registration response omitted the required wire protocol version; "
-                        + "this agent requires exactly v\(WireProtocol.currentVersion). Deploy a matching "
-                        + "control-plane build."
-                    logger.error("Registration rejected: \(reason)")
-                    if let continuation = takeRegistrationContinuation() {
-                        continuation.resume(throwing: AgentError.registrationRejected(reason))
-                    }
-                    return
+                let message = try decodeInboundMessage(
+                    envelope,
+                    as: AgentRegisterResponseMessage.self,
+                    wireByteCount: wireByteCount)
+                try AgentProtocolCompatibility.require(
+                    envelope.requirements, agreement: message.agreement,
+                    offered: AgentProtocolCompatibility.localOffer)
+                let expectedRegistrationGeneration = registrationGeneration
+                if let sourceGeneration {
+                    guard await websocketClient?.acceptRegistration(for: sourceGeneration) == true else { return }
                 }
-                await handleRegistrationResponse(message)
+                await handleRegistrationResponse(message, registrationGeneration: expectedRegistrationGeneration)
             // No VM frames remain: reboot and restore became edge-nonces on the
             // desired entry at wire v34 (STR-151), joining capture and delete,
             // which became desired artifacts at v33 (STR-150).
@@ -114,24 +121,24 @@ extension Agent {
                 // `metadataNetworks` is declared out here because the
                 // guest-facing listeners below are driven from the same list,
                 // after the reconciler has run.
-                let derivations = DesiredStateDerivations(message: message)
+                let derivations = try DesiredStateDerivations(message: message)
                 // Invalidate a stale suspension admission before network or
                 // reconciliation work can suspend this message's caller.
-                for desired in message.sandboxes {
+                for desired in message.sandboxes.values {
                     await sandboxRuntime?.noteSandboxIdleControlPlane(desired)
                     await sandboxRuntime?.noteSandboxIntent(
-                        sandboxId: desired.sandboxId.uuidString, generation: desired.generation,
+                        sandboxId: desired.sandboxID, generation: desired.generation,
                         desiredRunning: desired.desiredStatus == .running)
                 }
                 do {
                     // DNS zones (STR-39): nil means this agent is not the
                     // topology authority — leave every managed `DNS` row
                     // alone. Only an explicit list is an instruction.
-                    let dnsZones = message.dnsZones
+                    let dnsZones = message.hasDnsZones ? message.dnsZones.values : nil
                     observedNetworkFabric =
                         await networkService?.reconcileNetworks(
-                            message.networks, authoritative: message.networksAuthoritative,
-                            securityGroups: message.securityGroups,
+                            message.networks.values, authoritative: message.networksAuthoritative,
+                            securityGroups: message.hasSecurityGroups ? message.securityGroups.values : nil,
                             portMemberships: derivations.portMemberships,
                             metadataNetworks: derivations.metadataNetworkIDs,
                             resolverNetworks: derivations.resolverNetworks,
@@ -160,12 +167,12 @@ extension Agent {
                 // a snapshot held by each VMM. Refresh managed microVMs from
                 // the generation-guarded store after `apply`, including
                 // equal-generation metadata-only edits and withdrawals.
-                await refreshFirecrackerMetadata(for: message.vms)
+                await refreshFirecrackerMetadata(for: message.vms.values)
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
                 // arrives with the lanes already drained.
-                await handleDesiredAgentUpdate(message.desiredAgentUpdate)
+                await handleDesiredAgentUpdate(message.hasDesiredAgentUpdate ? message.desiredAgentUpdate : nil)
             case .consoleConnect:
                 let message = try decodeInboundMessage(
                     envelope,
@@ -238,6 +245,11 @@ extension Agent {
             }
         } catch {
             WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
+            if envelope.type == .agentRegisterResponse, let continuation = takeRegistrationContinuation() {
+                continuation.resume(
+                    throwing: AgentError.registrationRejected(
+                        "Control plane registration response has an invalid protocol agreement"))
+            }
         }
     }
 
@@ -245,18 +257,19 @@ extension Agent {
     /// sync. Each cleanup is independent so one failure cannot block unrelated
     /// desired state or a different credential's retry.
     func applyCephCredentialRevocations(_ message: DesiredStateMessage) async {
-        guard let storageBackends, !message.cephCredentialRevocations.isEmpty else { return }
+        guard let storageBackends, !message.cephCredentialRevocations.values.isEmpty else { return }
 
         let activeStorages =
-            message.volumes.map(\.storage)
-            + message.snapshots.compactMap(\.volumeStorage)
-        let activeAttachments = message.vms.flatMap { vm in
-            vm.spec.volumes.compactMap(\.attachment)
+            message.volumes.values.map(\.storage)
+            + message.snapshots.values.compactMap { $0.hasVolumeStorage ? $0.volumeStorage : nil }
+        let activeAttachments = message.vms.values.flatMap { vm in
+            vm.spec.volumes.values.compactMap { $0.hasAttachment ? $0.attachment : nil }
         }
 
-        for revocation in message.cephCredentialRevocations {
-            let clusterId = revocation.clusterId
-            let credentialId = revocation.credentialId
+        for revocation in message.cephCredentialRevocations.values {
+            guard let clusterId = UUID(uuidString: revocation.clusterID),
+                let credentialId = UUID(uuidString: revocation.credentialID)
+            else { continue }
             guard
                 !StorageBackendRegistry.referencesCredential(
                     clusterId: clusterId, credentialId: credentialId,
@@ -287,9 +300,9 @@ extension Agent {
             }
 
             desiredVolumeStates = desiredVolumeStates.filter { _, desired in
-                guard case .ceph(let configuration) = desired.storage else { return true }
-                return configuration.clusterId != clusterId
-                    || configuration.credentialId != credentialId
+                guard case .ceph(let ceph) = desired.storage.value else { return true }
+                return ceph.configuration.clusterID != clusterId.uuidString
+                    || ceph.configuration.credentialID != credentialId.uuidString
             }
 
             if snapshotInventoryUnreadable {
@@ -754,7 +767,7 @@ extension Agent {
                 artifactURL: update.artifactURL,
                 sha256: update.sha256,
                 artifactKind: update.artifactKind,
-                tarballMember: update.tarballMember
+                tarballMember: update.hasTarballMember ? update.tarballMember : nil
             )
         } catch {
             let reason = (error as? AgentUpdateError)?.description ?? "\(error)"
@@ -809,6 +822,7 @@ extension Agent {
         message: String,
         operation: String? = nil
     ) async {
+        guard protocolAgreement != nil else { return }
         let logMessage = VMLogMessage(
             vmId: vmId,
             level: level,
@@ -836,12 +850,13 @@ extension Agent {
     /// which does route, and is what stops the tab waiting on a console that is
     /// never going to open.
     func failConsoleConnect(_ message: ConsoleConnectMessage, reason: String) async {
-        await sendConsoleDisconnected(vmId: message.vmId, sessionId: message.sessionId, reason: reason)
+        await sendConsoleDisconnected(vmId: message.vmID, sessionId: message.sessionID, reason: reason)
     }
 
     /// Tell the control plane a console session is over, and why, so it can
     /// close the browser's socket instead of leaving it attached to nothing.
     func sendConsoleDisconnected(vmId: String, sessionId: String, reason: String) async {
+        guard protocolAgreement != nil else { return }
         do {
             try await websocketClient?.sendMessage(
                 ConsoleDisconnectedMessage(vmId: vmId, sessionId: sessionId, reason: reason))
@@ -855,35 +870,35 @@ extension Agent {
         logger.info(
             "Console connect request received",
             metadata: [
-                "strato.vm.id": .string(message.vmId),
-                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                "strato.vm.id": .string(message.vmID),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
                 "strato.request.id": .string(message.requestId),
-                "stream": .string(stream.rawValue),
+                "stream": .string(stream.protocolValue),
             ])
 
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
+        guard let service = getHypervisorServiceForVM(vmId: message.vmID) else {
             logger.error(
                 "Hypervisor service not available for console connect",
-                metadata: ["strato.vm.id": .string(message.vmId)])
+                metadata: ["strato.vm.id": .string(message.vmID)])
             await failConsoleConnect(message, reason: "Hypervisor service not available for VM")
             return
         }
 
         // Try serial socket first, then fall back to virtio-console if connect fails.
-        logger.debug("Looking up console endpoint", metadata: ["strato.vm.id": .string(message.vmId)])
+        logger.debug("Looking up console endpoint", metadata: ["strato.vm.id": .string(message.vmID)])
         let endpoint: ConsoleEndpoint?
         do {
-            endpoint = try await service.consoleEndpoint(vmId: message.vmId)
+            endpoint = try await service.consoleEndpoint(vmId: message.vmID)
         } catch {
             logger.error(
                 "Console not available",
                 metadata: [
-                    "strato.vm.id": .string(message.vmId),
+                    "strato.vm.id": .string(message.vmID),
                     "error": .string(error.localizedDescription),
                 ])
             await failConsoleConnect(
                 message,
-                reason: "Console not available for VM \(message.vmId): \(error.localizedDescription)")
+                reason: "Console not available for VM \(message.vmID): \(error.localizedDescription)")
             return
         }
 
@@ -898,23 +913,26 @@ extension Agent {
             guard !candidatePaths.isEmpty else {
                 logger.error(
                     "No console socket found (tried serial and virtio-console)",
-                    metadata: ["strato.vm.id": .string(message.vmId)])
-                await failConsoleConnect(message, reason: "Console socket not found for VM \(message.vmId)")
+                    metadata: ["strato.vm.id": .string(message.vmID)])
+                await failConsoleConnect(message, reason: "Console socket not found for VM \(message.vmID)")
                 return
             }
         case .vnc:
             guard let vncPath = endpoint?.vncSocketPath else {
-                logger.error("No VNC socket found", metadata: ["strato.vm.id": .string(message.vmId)])
+                logger.error("No VNC socket found", metadata: ["strato.vm.id": .string(message.vmID)])
                 // The display device is fixed in the QEMU process's arguments,
                 // so this is not something a restart fixes — say so rather than
                 // leaving the operator to guess.
                 await failConsoleConnect(
                     message,
-                    reason: "VM \(message.vmId) has no graphics console: it was created without a display. "
+                    reason: "VM \(message.vmID) has no graphics console: it was created without a display. "
                         + "Recreate the VM with the display enabled.")
                 return
             }
             candidatePaths = [vncPath]
+        case .unspecified, .UNRECOGNIZED:
+            await failConsoleConnect(message, reason: "Unsupported console stream")
+            return
         }
 
         guard let consoleManager = consoleSocketManager else {
@@ -931,16 +949,16 @@ extension Agent {
         // so two viewers of the same framebuffer is a supported case rather
         // than a stale one.
         if stream != .vnc {
-            let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmId, stream: stream)
+            let existingSessions = await consoleManager.getSessionsForVM(vmId: message.vmID, stream: stream)
             if !existingSessions.isEmpty {
                 logger.info(
                     "Cleaning up existing console sessions for VM",
                     metadata: [
-                        "strato.vm.id": .string(message.vmId),
-                        "stream": .string(stream.rawValue),
+                        "strato.vm.id": .string(message.vmID),
+                        "stream": .string(stream.protocolValue),
                         "sessionCount": .stringConvertible(existingSessions.count),
                     ])
-                await consoleManager.disconnectAllForVM(vmId: message.vmId, stream: stream)
+                await consoleManager.disconnectAllForVM(vmId: message.vmID, stream: stream)
             }
         }
 
@@ -950,19 +968,19 @@ extension Agent {
         for candidatePath in candidatePaths {
             do {
                 try await consoleManager.connect(
-                    vmId: message.vmId, sessionId: message.sessionId, stream: stream, socketPath: candidatePath)
+                    vmId: message.vmID, sessionId: message.sessionID, stream: stream, socketPath: candidatePath)
                 connectedPath = candidatePath
                 logger.debug(
                     "Connected to console socket",
-                    metadata: ["stream": .string(stream.rawValue), "socketPath": .string(candidatePath)])
+                    metadata: ["stream": .string(stream.protocolValue), "socketPath": .string(candidatePath)])
                 break
             } catch {
                 lastError = error
                 logger.warning(
                     "Failed to connect to console socket",
                     metadata: [
-                        "strato.vm.id": .string(message.vmId),
-                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                        "strato.vm.id": .string(message.vmID),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
                         "socketPath": .string(candidatePath),
                         "error": .string(error.localizedDescription),
                     ])
@@ -975,8 +993,8 @@ extension Agent {
             logger.error(
                 "Failed to connect to console",
                 metadata: [
-                    "strato.vm.id": .string(message.vmId),
-                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                    "strato.vm.id": .string(message.vmID),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
                     "error": .string(lastError?.localizedDescription ?? "unknown"),
                 ])
             return
@@ -985,8 +1003,8 @@ extension Agent {
         // Send connected confirmation
         let connectedMessage = ConsoleConnectedMessage(
             requestId: message.requestId,
-            vmId: message.vmId,
-            sessionId: message.sessionId
+            vmId: message.vmID,
+            sessionId: message.sessionID
         )
         do {
             try await websocketClient?.sendMessage(connectedMessage)
@@ -997,9 +1015,9 @@ extension Agent {
         logger.info(
             "Console connected",
             metadata: [
-                "strato.vm.id": .string(message.vmId),
+                "strato.vm.id": .string(message.vmID),
                 "strato.session.kind": .string("console"),
-                "strato.session.id": .string(message.sessionId),
+                "strato.session.id": .string(message.sessionID),
                 "socketPath": .string(connectedPath ?? "unknown"),
             ])
     }
@@ -1008,8 +1026,8 @@ extension Agent {
         logger.info(
             "Console disconnect request",
             metadata: [
-                "vmId": .string(message.vmId),
-                "sessionId": .string(message.sessionId),
+                "vmId": .string(message.vmID),
+                "sessionId": .string(message.sessionID),
             ])
 
         guard let consoleManager = consoleSocketManager else {
@@ -1018,17 +1036,17 @@ extension Agent {
             // rather than on a correlated `error` nothing reads (STR-152) —
             // otherwise the tab waits out a socket that will never close.
             await sendConsoleDisconnected(
-                vmId: message.vmId, sessionId: message.sessionId, reason: "Console manager not available")
+                vmId: message.vmID, sessionId: message.sessionID, reason: "Console manager not available")
             return
         }
 
-        await consoleManager.disconnect(sessionId: message.sessionId)
+        await consoleManager.disconnect(sessionId: message.sessionID)
 
         // Send disconnected confirmation
         let disconnectedMessage = ConsoleDisconnectedMessage(
             requestId: message.requestId,
-            vmId: message.vmId,
-            sessionId: message.sessionId,
+            vmId: message.vmID,
+            sessionId: message.sessionID,
             reason: "User requested disconnect"
         )
         do {
@@ -1040,8 +1058,8 @@ extension Agent {
         logger.info(
             "Console disconnected",
             metadata: [
-                "strato.vm.id": .string(message.vmId),
-                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                "strato.vm.id": .string(message.vmID),
+                "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
             ])
     }
 
@@ -1052,18 +1070,18 @@ extension Agent {
             return
         }
 
-        guard let data = message.rawData else {
-            logger.warning("Invalid console data received (failed to decode base64)")
+        guard message.hasData else {
+            logger.warning("Console data frame omitted bytes")
             return
         }
 
         do {
-            try await consoleManager.write(sessionId: message.sessionId, data: data)
+            try await consoleManager.write(sessionId: message.sessionID, data: message.data)
         } catch {
             logger.error(
                 "Failed to write to console",
                 metadata: [
-                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                    "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1071,6 +1089,7 @@ extension Agent {
 
     /// Called by ConsoleSocketManager when data arrives from VM console
     func sendConsoleData(vmId: String, sessionId: String, data: Data) async {
+        guard protocolAgreement != nil else { return }
         let message = ConsoleDataMessage(
             vmId: vmId,
             sessionId: sessionId,
@@ -1153,7 +1172,7 @@ extension Agent {
             await service.startObservingLifecycle()
             logger.info(
                 "Observing hypervisor lifecycle events",
-                metadata: ["hypervisor": .string(type.rawValue)])
+                metadata: ["hypervisor": .string(type.protocolValue)])
         }
     }
 
@@ -1183,7 +1202,7 @@ extension Agent {
             logger.debug(
                 "Hypervisor reported a VM lifecycle transition",
                 metadata: [
-                    "hypervisor": .string(type.rawValue),
+                    "hypervisor": .string(type.protocolValue),
                     "strato.vm.id": .string(id),
                     "event": .string(reason),
                 ])
@@ -1191,7 +1210,7 @@ extension Agent {
             logger.debug(
                 "Hypervisor asked for a full re-reading",
                 metadata: [
-                    "hypervisor": .string(type.rawValue),
+                    "hypervisor": .string(type.protocolValue),
                     "reason": .string(reason),
                 ])
         }
@@ -1206,18 +1225,18 @@ extension Agent {
             guard let sourceGeneration else {
                 logger.debug(
                     "Discarding interactive guest exec start without a control-plane connection generation",
-                    metadata: ["sessionId": .string(message.sessionId)])
+                    metadata: ["sessionId": .string(message.sessionID)])
                 return
             }
             guard interactiveSessionFence.accepts(generation: sourceGeneration) else {
                 if await websocketClient?.isCurrentConnection(sourceGeneration) == true {
                     await sendGuestExecClosed(
-                        sessionId: message.sessionId,
+                        sessionId: message.sessionID,
                         reason: "interactive guest exec is unavailable while agent registration completes")
                 } else {
                     logger.debug(
                         "Discarding interactive guest exec start from an inactive control-plane connection",
-                        metadata: ["sessionId": .string(message.sessionId)])
+                        metadata: ["sessionId": .string(message.sessionID)])
                 }
                 return
             }
@@ -1226,34 +1245,36 @@ extension Agent {
         logger.info(
             "Guest exec start request received",
             metadata: [
-                "resourceKind": .string(message.resourceKind.rawValue),
+                "resourceKind": .string(message.resourceKind.protocolValue),
                 LogMetadata.guestResourceIDKey(for: message.resourceKind): .string(
-                    message.resourceId),
-                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
-                "guestExecSessionKind": .string(message.sessionKind.rawValue),
+                    message.resourceID),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionID),
+                "guestExecSessionKind": .string(message.sessionKind.protocolValue),
                 "tty": .stringConvertible(message.tty),
             ])
 
         let request = SandboxExecRequest(
-            command: message.command, env: message.env, workingDir: message.workingDir,
-            tty: message.tty, rows: message.rows, cols: message.cols)
+            command: message.command.values, env: message.hasEnv ? message.env.values : nil,
+            workingDir: message.hasWorkingDir ? message.workingDir : nil,
+            tty: message.tty, rows: message.hasRows ? Int(message.rows) : nil,
+            cols: message.hasCols ? Int(message.cols) : nil)
 
-        if let existing = guestExecSessions[message.sessionId] {
+        if let existing = guestExecSessions[message.sessionID] {
             if existing.sessionKind == .recorded, message.sessionKind == .recorded,
                 let snapshot = await vmExecSessionManager.recordedSessionSnapshot(
-                    sessionId: message.sessionId)
+                    sessionId: message.sessionID)
             {
                 await sendRecordedExecState(snapshot)
                 return
             }
             await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "exec session already exists")
+                sessionId: message.sessionID, reason: "exec session already exists")
             return
         }
 
         guard message.sessionKind == .interactive || message.resourceKind == .virtualMachine else {
             await sendGuestExecClosed(
-                sessionId: message.sessionId,
+                sessionId: message.sessionID,
                 reason: "recorded guest exec is supported only for virtual machines")
             return
         }
@@ -1261,17 +1282,17 @@ extension Agent {
         // Register the route before starting. A guest can emit exec_started
         // immediately; pre-registration keeps a terminal event racing the
         // handshake from leaving a stale route behind.
-        guestExecSessions[message.sessionId] = GuestExecSessionRoute(
+        guestExecSessions[message.sessionID] = GuestExecSessionRoute(
             resourceKind: message.resourceKind, sessionKind: message.sessionKind)
         let continuation = sandboxExecEventsContinuation
-        let sessionId = message.sessionId
+        let sessionId = message.sessionID
         do {
             switch message.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else {
                     throw SandboxRuntimeError.runtimeUnavailable
                 }
-                let sandboxId = message.resourceId
+                let sandboxId = message.resourceID
                 try await runtime.startExec(
                     sandboxId: sandboxId, sessionId: sessionId, request: request
                 ) { event in
@@ -1283,8 +1304,8 @@ extension Agent {
                 // compromised control-plane replica from choosing an
                 // arbitrary fleet CID on this host.
                 let placement = try VMGuestExecPlacement.resolve(
-                    vmId: message.resourceId, managedVMs: managedVMs)
-                let vmId = message.resourceId
+                    vmId: message.resourceID, managedVMs: managedVMs)
+                let vmId = message.resourceID
                 let cid = placement.vsockCID
                 try await vmExecSessionManager.startExec(
                     placement: placement, sessionId: sessionId,
@@ -1295,14 +1316,16 @@ extension Agent {
                 ) { event in
                     continuation.yield((sessionId, .virtualMachine, event))
                 }
+            case .unspecified, .UNRECOGNIZED:
+                throw AgentProtocolDecodeError.invalidField
             }
         } catch {
             logger.error(
                 "Failed to start guest exec session",
                 metadata: [
-                    "resourceKind": .string(message.resourceKind.rawValue),
+                    "resourceKind": .string(message.resourceKind.protocolValue),
                     LogMetadata.guestResourceIDKey(for: message.resourceKind): .string(
-                        message.resourceId),
+                        message.resourceID),
                     "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
@@ -1331,79 +1354,64 @@ extension Agent {
     }
 
     func handleGuestExecInput(_ message: GuestExecInputMessage) async {
-        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+        if guestExecSessions[message.sessionID]?.sessionKind == .recorded {
             logger.warning(
                 "Ignoring interactive input for a recorded guest exec session",
-                metadata: ["sessionId": .string(message.sessionId)])
-            return
-        }
-        if message.data != nil && message.rawData == nil {
-            // The payload is present but not decodable base64: the stream is
-            // corrupt, and forwarding nothing would silently swallow
-            // keystrokes. Treat it as session-fatal, like the handler's other
-            // failure paths: tear the session down and tell the control plane.
-            logger.warning(
-                "Invalid guest exec input received (failed to decode base64); closing session",
-                metadata: [
-                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
-                ])
-            await closeGuestExec(sessionId: message.sessionId)
-            await sendGuestExecClosed(
-                sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
+                metadata: ["sessionId": .string(message.sessionID)])
             return
         }
         do {
-            switch guestExecSessions[message.sessionId]?.resourceKind {
+            switch guestExecSessions[message.sessionID]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.sendExecInput(
-                    sessionId: message.sessionId, data: message.rawData, eof: message.eof)
+                    sessionId: message.sessionID, data: message.hasData ? message.data : nil, eof: message.eof)
             case .virtualMachine:
                 try await vmExecSessionManager.sendExecInput(
-                    sessionId: message.sessionId, data: message.rawData, eof: message.eof)
-            case nil:
-                throw VMExecBridgeError.sessionNotFound(message.sessionId)
+                    sessionId: message.sessionID, data: message.hasData ? message.data : nil, eof: message.eof)
+            case nil, .unspecified, .UNRECOGNIZED:
+                throw VMExecBridgeError.sessionNotFound(message.sessionID)
             }
         } catch {
             logger.warning(
                 "Failed to write guest exec input",
                 metadata: [
-                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionID),
                     "error": .string(error.localizedDescription),
                 ])
-            await closeGuestExec(sessionId: message.sessionId)
-            await sendGuestExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+            await closeGuestExec(sessionId: message.sessionID)
+            await sendGuestExecClosed(sessionId: message.sessionID, reason: error.localizedDescription)
         }
     }
 
     func handleGuestExecResize(_ message: GuestExecResizeMessage) async {
-        if guestExecSessions[message.sessionId]?.sessionKind == .recorded {
+        if guestExecSessions[message.sessionID]?.sessionKind == .recorded {
             logger.warning(
                 "Ignoring resize for a recorded guest exec session",
-                metadata: ["sessionId": .string(message.sessionId)])
+                metadata: ["sessionId": .string(message.sessionID)])
             return
         }
         do {
-            switch guestExecSessions[message.sessionId]?.resourceKind {
+            switch guestExecSessions[message.sessionID]?.resourceKind {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.resizeExec(
-                    sessionId: message.sessionId, rows: message.rows, cols: message.cols)
+                    sessionId: message.sessionID, rows: Int(message.rows), cols: Int(message.cols))
             case .virtualMachine:
                 try await vmExecSessionManager.resizeExec(
-                    sessionId: message.sessionId, rows: message.rows, cols: message.cols)
-            case nil:
-                throw VMExecBridgeError.sessionNotFound(message.sessionId)
+                    sessionId: message.sessionID, rows: Int(message.rows), cols: Int(message.cols))
+            case nil, .unspecified, .UNRECOGNIZED:
+                throw VMExecBridgeError.sessionNotFound(message.sessionID)
             }
         } catch {
             logger.warning(
                 "Failed to resize guest exec session",
                 metadata: [
-                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
+                    "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionID),
                     "error": .string(error.localizedDescription),
                 ])
-            await closeGuestExec(sessionId: message.sessionId)
-            await sendGuestExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+            await closeGuestExec(sessionId: message.sessionID)
+            await sendGuestExecClosed(sessionId: message.sessionID, reason: error.localizedDescription)
         }
     }
 
@@ -1411,13 +1419,13 @@ extension Agent {
         logger.info(
             "Guest exec close request received",
             metadata: [
-                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionId),
-                "reason": .string(message.reason ?? ""),
+                "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionID),
+                "reason": .string(message.hasReason ? message.reason : ""),
             ])
         // The control plane already tore its side down; closing is terminal
         // and needs no reply. Guest-side, this kills the exec process group if
         // exec_exit has not arrived.
-        await closeGuestExec(sessionId: message.sessionId, reason: message.reason)
+        await closeGuestExec(sessionId: message.sessionID, reason: message.hasReason ? message.reason : nil)
     }
 
     func closeGuestExec(sessionId: String, reason: String? = nil) async {
@@ -1434,6 +1442,8 @@ extension Agent {
             if route.sessionKind == .recorded {
                 await sendNextRecordedExecTerminalState()
             }
+        case .unspecified, .UNRECOGNIZED:
+            guestExecSessions.removeValue(forKey: sessionId)
         }
     }
 
@@ -1443,6 +1453,7 @@ extension Agent {
     func sendGuestExecEvent(
         sessionId: String, resourceKind: GuestResourceKind, event: SandboxExecEvent
     ) async {
+        guard protocolAgreement != nil else { return }
         guard let route = guestExecSessions[sessionId], route.resourceKind == resourceKind else {
             return
         }
@@ -1477,7 +1488,15 @@ extension Agent {
                 "Dropping sandbox exec event: no control plane connection",
                 metadata: [
                     "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
-                    "event": .string(String(describing: event)),
+                    "event": .string(
+                        {
+                            switch event {
+                            case .started: return "started"
+                            case .output: return "output"
+                            case .exited: return "exited"
+                            case .closed: return "closed"
+                            }
+                        }()),
                 ])
             return
         }
@@ -1504,6 +1523,7 @@ extension Agent {
     }
 
     func sendRecordedExecState(_ snapshot: RecordedVMExecSessionSnapshot) async {
+        guard protocolAgreement != nil else { return }
         guard let websocketClient else { return }
         do {
             try await websocketClient.sendMessage(
@@ -1524,7 +1544,7 @@ extension Agent {
                 "Could not offer recorded VM command state; it remains retained for replay",
                 metadata: [
                     "sessionId": .string(snapshot.sessionId),
-                    "status": .string(snapshot.status.rawValue),
+                    "status": .string(snapshot.status.protocolValue),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -1540,6 +1560,7 @@ extension Agent {
     }
 
     func sendNextRecordedExecTerminalState() async {
+        guard let agreement = protocolAgreement else { return }
         guard !recordedResultSendInProgress else { return }
         recordedResultSendInProgress = true
         defer { recordedResultSendInProgress = false }
@@ -1547,6 +1568,7 @@ extension Agent {
         while let snapshot = await vmExecSessionManager.recordedTerminalSnapshot(
             after: lastOfferedRecordedResultSessionId)
         {
+            guard protocolAgreement?.inventorySessionID == agreement.inventorySessionID else { return }
             lastOfferedRecordedResultSessionId = snapshot.sessionId
             await sendRecordedExecState(snapshot)
             guard
@@ -1562,18 +1584,19 @@ extension Agent {
     func handleGuestExecRecordedAck(_ message: GuestExecRecordedAckMessage) async {
         guard
             await vmExecSessionManager.acknowledgeRecordedSession(
-                sessionId: message.sessionId)
+                sessionId: message.sessionID)
         else {
             logger.debug(
                 "Ignoring recorded VM command ACK without retained terminal state",
-                metadata: ["sessionId": .string(message.sessionId)])
+                metadata: ["sessionId": .string(message.sessionID)])
             return
         }
-        guestExecSessions.removeValue(forKey: message.sessionId)
+        guestExecSessions.removeValue(forKey: message.sessionID)
         await sendNextRecordedExecTerminalState()
     }
 
     func sendGuestExecClosed(sessionId: String, reason: String?) async {
+        guard protocolAgreement != nil else { return }
         guard let websocketClient else {
             // Terminal for the session but undeliverable; see
             // `sendGuestExecEvent` for why a warning is enough.
@@ -1605,7 +1628,7 @@ extension Agent {
             sandboxLogLines.recordDrop(reason: .shutdown)
             return
         }
-        guard let websocketClient else {
+        guard protocolAgreement != nil, let websocketClient else {
             sandboxLogLines.recordDrop(reason: .deliveryFailure)
             return
         }

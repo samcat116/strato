@@ -8,7 +8,7 @@ public struct BurstableResourceLimits: Sendable, Equatable {
     public var desired: WorkloadRuntimeLimits { intent }
     public var memoryHighBytes: Int64 { intent.memoryHighBytes }
     public var memoryMaxBytes: Int64 { intent.memoryMaxBytes }
-    public var cpuWeight: Int { intent.cpuWeight }
+    public var cpuWeight: Int { Int(intent.cpuWeight) }
 
     public init(guestGrantBytes: Int64, backendOverheadBytes: Int64, memoryHighPercent: Int, cpuWeight: Int) throws {
         let policy = try WorkloadResourceClassPolicy(

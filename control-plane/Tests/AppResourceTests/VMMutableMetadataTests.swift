@@ -116,11 +116,11 @@ final class VMMutableMetadataTests {
             #expect(updated.sshPublicKey == Self.secondKey)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentID)
-            let desired = try #require(sync.vms.first { $0.vmId == vmID })
+            let desired = try #require(sync.vms.values.first { $0.vmID == vmID.uuidString })
             #expect(desired.generation == startingGeneration + 1)
-            #expect(desired.metadata?.tags == request.tags)
-            #expect(desired.metadata?.sshAuthorizedKeys == [Self.secondKey])
-            #expect(desired.spec.sshAuthorizedKeys == [Self.secondKey])
+            #expect(desired.metadata.tags.values == request.tags)
+            #expect(desired.metadata.sshAuthorizedKeys.values == [Self.secondKey])
+            #expect(desired.spec.sshAuthorizedKeys.values == [Self.secondKey])
 
             let messages = await collector.waitFor(count: 1)
             #expect(

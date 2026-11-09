@@ -28,15 +28,21 @@ enum SandboxSuspensionService {
     }
 
     static func apply(_ observed: ObservedSandboxState, to sandbox: Sandbox, on db: any Database) async throws -> Bool {
+        try observed.validateProtocol()
+        var normalized = observed
+        try normalized.normalizeProtocolIdentifiers()
+        let observed = normalized
         var changed = false
-        if let estimate = observed.suspensionStorageEstimateBytes, estimate > 0,
+        if let estimate = observed.hasSuspensionStorageEstimateBytes ? observed.suspensionStorageEstimateBytes : nil,
+            estimate > 0,
             estimate != sandbox.suspensionStorageEstimateBytes
         {
             sandbox.suspensionStorageEstimateBytes = estimate
             changed = true
         }
-        if observed.convergencePhase == nil, observed.failedGeneration == sandbox.generation,
-            observed.status == .running, let retained = observed.suspensionStorageReservedBytes,
+        if !observed.hasConvergencePhase, observed.hasFailedGeneration, observed.failedGeneration == sandbox.generation,
+            observed.status == .running,
+            let retained = observed.hasSuspensionStorageReservedBytes ? observed.suspensionStorageReservedBytes : nil,
             retained >= 0, retained < sandbox.suspensionStorageBytes
         {
             sandbox.suspensionStorageBytes = retained
@@ -45,8 +51,10 @@ enum SandboxSuspensionService {
             changed = true
         }
         guard observed.observedGeneration == sandbox.generation,
-            observed.convergencePhase == nil, observed.failedGeneration != sandbox.generation,
-            let evidence = observed.suspension, evidence.verified, evidence.storageBytes > 0
+            !observed.hasConvergencePhase,
+            (!observed.hasFailedGeneration || observed.failedGeneration != sandbox.generation),
+            let evidence = observed.hasSuspension ? observed.suspension : nil, evidence.verified,
+            evidence.storageBytes > 0
         else { return changed }
         let release = evidence.permitsComputeRelease(
             for: observed, desiredGeneration: sandbox.generation,

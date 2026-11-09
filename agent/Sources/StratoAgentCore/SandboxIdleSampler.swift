@@ -11,7 +11,7 @@ public struct SandboxIdleSampler: Sendable {
     private var sequence: UInt64 = 0
     private var highestGuestSequence: UInt64 = 0
     private struct GuestIdentity: Equatable, Sendable {
-        let monitor: UUID
+        let monitor: String
         let sandbox: String
         let nonce: String
     }
@@ -24,7 +24,7 @@ public struct SandboxIdleSampler: Sendable {
     ) {
         sequence = sequence == UInt64(Int64.max) ? sequence : sequence + 1
         let identity = guest.map {
-            GuestIdentity(monitor: $0.monitorIncarnation, sandbox: $0.sandboxId, nonce: $0.nonce)
+            GuestIdentity(monitor: $0.monitorIncarnation, sandbox: $0.sandboxID, nonce: $0.nonce)
         }
         let replay =
             guest.map { identity == highestGuestIdentity && $0.sampleSequence <= highestGuestSequence } ?? false
@@ -39,7 +39,7 @@ public struct SandboxIdleSampler: Sendable {
                 previous.map { old in
                     current.monitorIncarnation == old.monitorIncarnation && current.sampleSequence > old.sampleSequence
                         && current.activityEpoch >= old.activityEpoch && current.nonce == old.nonce
-                        && current.sandboxId == old.sandboxId
+                        && current.sandboxID == old.sandboxID
                         && current.workloadCpuMicroseconds == old.workloadCpuMicroseconds
                         && current.workloadReadBytes == old.workloadReadBytes
                         && current.workloadWriteBytes == old.workloadWriteBytes

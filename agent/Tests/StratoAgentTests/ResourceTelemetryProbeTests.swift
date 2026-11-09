@@ -28,11 +28,11 @@ struct ResourceTelemetryProbeTests {
             ], directories: ["/sys/block": ["sda", "zram0"]])
 
         let host = probe.sample(targets: [], at: sampleDate).host
-        #expect(host.sampledAt == sampleDate)
+        #expect(host.sampledAt.date == sampleDate)
         #expect(host.health == .pressured)
-        #expect(host.cpuPressure.some?.average10 == 12.5)
-        #expect(host.cpuPressure.full == nil)
-        #expect(host.memoryPressure.full?.totalMicroseconds == 900)
+        #expect(host.cpuPressure.some.average10 == 12.5)
+        #expect(!host.cpuPressure.hasFull)
+        #expect(host.memoryPressure.full.totalMicroseconds == 900)
         #expect(host.swapTotalBytes == .available(4_194_304))
         #expect(host.swapUsedBytes == .available(3_145_728))
         #expect(host.zswapStoredBytes == .available(524_288))
@@ -85,8 +85,8 @@ struct ResourceTelemetryProbeTests {
         #expect(workload.memoryCurrentBytes == .available(536_870_912))
         #expect(workload.memoryEvents.high == 8)
         #expect(workload.memoryEvents.oom == 1)
-        #expect(workload.memoryPressure.full?.average10 == 0.75)
-        #expect(workload.cpuPressure.some?.average10 == 18)
+        #expect(workload.memoryPressure.full.average10 == 0.75)
+        #expect(workload.cpuPressure.some.average10 == 18)
         #expect(workload.cpuUsageMicroseconds == .available(123_456))
         #expect(workload.cpuThrottledPeriodsTotal == .available(17))
         #expect(workload.cpuThrottledMicroseconds == .available(9_000))
@@ -183,9 +183,9 @@ struct HostMemoryProfileObservationTests {
     @Test("configured and effective tiers agree; secondary MGLRU bits do not mean enabled")
     func configuredEffective() {
         let host = probe().sample(targets: []).host
-        #expect(host.memoryProfile?.reason == nil)
-        #expect(host.memoryProfile?.configured?.tier == .zram)
-        #expect(host.memoryProfile?.effectiveTier == .zram)
+        #expect(!host.memoryProfile.hasReason)
+        #expect(host.memoryProfile.configured.tier == .zram)
+        #expect(host.memoryProfile.effectiveTier == .zram)
         #expect(host.mglruEnabled == .available(false))
     }
 
@@ -203,7 +203,7 @@ struct HostMemoryProfileObservationTests {
             "/sys/kernel/mm/ksm/pages_sharing": "0",
         ]
         let observer = ResourceTelemetryProbe(read: { files[$0] }, listDirectory: { _ in [] })
-        #expect(observer.memoryProfileObservation()?.reason == nil)
+        #expect(observer.memoryProfileObservation()?.hasReason == false)
         #expect(observer.memoryProfileObservation()?.effectiveTier == .zram)
     }
 
@@ -242,11 +242,11 @@ struct HostMemoryProfileObservationTests {
         #expect(compressed.zramUsedBytes == .available(2048))
         #expect(compressed.swapInPagesPerSecond == 2)
         #expect(compressed.swapOutPagesPerSecond == 4)
-        #expect(compressed.memoryWarnings == ["swap_thrashing", "oom_kill"])
+        #expect(compressed.memoryWarnings.values == ["swap_thrashing", "oom_kill"])
         let reset = probe(["/proc/vmstat": "pswpin 0\npswpout 0\noom_kill 0"])
             .sample(targets: [], at: start.addingTimeInterval(30), previousHost: compressed).host
-        #expect(reset.swapInPagesPerSecond == nil)
-        #expect(reset.memoryWarnings == [])
+        #expect(!reset.hasSwapInPagesPerSecond)
+        #expect(reset.memoryWarnings.values == [])
     }
 
     @Test("profile dependency is observe-only and withholds placement for a failed profile")

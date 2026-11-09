@@ -111,7 +111,7 @@ final class FloatingIPControllerTests {
             address: fixedIP, prefixLength: 24, gateway: network.gateway
         ).save(on: app.db)
         try await placeVM(
-            vm, app: app, org: org, protocolVersion: WireProtocol.currentVersion,
+            vm, app: app, org: org, protocolMajor: Int(AgentProtocolCompatibility.major),
             named: "agent-\(UUID().uuidString.prefix(8))")
         return (vm, nic)
     }
@@ -499,7 +499,7 @@ final class FloatingIPControllerTests {
     /// Registers an agent at the given wire protocol version and places the
     /// VM on it, so attach hits the realizing-agent version gate.
     private func placeVM(
-        _ vm: VM, app: Application, org: Organization, protocolVersion: Int, named: String = "fip-agent"
+        _ vm: VM, app: Application, org: Organization, protocolMajor: Int, named: String = "fip-agent"
     ) async throws {
         let message = AgentRegisterMessage(
             agentId: named,
@@ -511,7 +511,7 @@ final class FloatingIPControllerTests {
                 totalDisk: 1 << 39, availableDisk: 1 << 39
             ),
             networkCapability: .overlay,
-            protocolVersion: protocolVersion,
+            protocolOffer: .with { $0.major = UInt32(protocolMajor) },
             dependencyObservations: [Self.healthyOverlayObservation()]
         )
         let agentUUID = try await app.agentService.registerAgent(
@@ -632,7 +632,8 @@ final class FloatingIPControllerTests {
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39),
-                    networkCapability: .overlay, protocolVersion: WireProtocol.currentVersion,
+                    networkCapability: .overlay,
+                    protocolOffer: .with { $0.major = UInt32(Int(AgentProtocolCompatibility.major)) },
                     dependencyObservations: [Self.healthyOverlayObservation()]),
                 agentName: "fip-offline-ctl", siteID: site.id,
                 organizationScope: .organization(org.id!))

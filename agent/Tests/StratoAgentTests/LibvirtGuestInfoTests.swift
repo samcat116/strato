@@ -44,14 +44,14 @@ struct LibvirtGuestInfoTests {
 
         #expect(info.qgaAvailable)
         #expect(info.hostname == "web-01")
-        #expect(info.interfaces.map(\.name) == ["lo", "enp1s0"])
+        #expect(info.interfaces.values.map(\.name) == ["lo", "enp1s0"])
         // Lowercased, because it is the join key the control plane matches a
         // `VMNetworkInterface` MAC against.
-        #expect(info.interfaces[1].hardwareAddress == "52:54:00:ab:cd:ef")
-        #expect(info.interfaces[1].addresses.map(\.family) == [.ipv4, .ipv6])
-        #expect(info.interfaces[1].addresses[0].address == "10.0.0.42")
-        #expect(info.interfaces[1].addresses[0].prefixLength == 24)
-        #expect(info.interfaces[1].addresses[1].address == "fe80::5054:ff:feab:cdef")
+        #expect(info.interfaces.values[1].hardwareAddress == "52:54:00:ab:cd:ef")
+        #expect(info.interfaces.values[1].addresses.values.map(\.family) == [.ipv4, .ipv6])
+        #expect(info.interfaces.values[1].addresses.values[0].address == "10.0.0.42")
+        #expect(info.interfaces.values[1].addresses.values[0].prefixLength == 24)
+        #expect(info.interfaces.values[1].addresses.values[1].address == "fe80::5054:ff:feab:cdef")
     }
 
     /// The two calls fail separately, and either answering is a positive
@@ -62,13 +62,13 @@ struct LibvirtGuestInfoTests {
             LibvirtGuestInfo.parse(hostnameParams: Self.hostname("web-01"), interfaces: nil))
         #expect(noInterfaces.qgaAvailable)
         #expect(noInterfaces.hostname == "web-01")
-        #expect(noInterfaces.interfaces.isEmpty)
+        #expect(noInterfaces.interfaces.values.isEmpty)
 
         let noHostname = try #require(
             LibvirtGuestInfo.parse(hostnameParams: nil, interfaces: Self.interfaces))
         #expect(noHostname.qgaAvailable)
-        #expect(noHostname.hostname == nil)
-        #expect(noHostname.interfaces.count == 2)
+        #expect(!noHostname.hasHostname)
+        #expect(noHostname.interfaces.values.count == 2)
     }
 
     /// A guest with no agent installed, or one still booting: a normal outcome
@@ -84,16 +84,16 @@ struct LibvirtGuestInfoTests {
     func emptyHostname() throws {
         #expect(
             try #require(LibvirtGuestInfo.parse(hostnameParams: Self.hostname(""), interfaces: nil))
-                .hostname == nil)
+                .hasHostname == false)
         #expect(
-            try #require(LibvirtGuestInfo.parse(hostnameParams: [], interfaces: nil)).hostname == nil)
+            try #require(LibvirtGuestInfo.parse(hostnameParams: [], interfaces: nil)).hasHostname == false)
         // A parameter of the wrong shape is ignored rather than stringified.
         #expect(
             try #require(
                 LibvirtGuestInfo.parse(
                     hostnameParams: [TypedParam(field: "hostname", value: .uint(7))],
                     interfaces: nil)
-            ).hostname == nil)
+            ).hasHostname == false)
     }
 
     /// `virIPAddrType` is append-only upstream, and reporting an address under
@@ -110,9 +110,9 @@ struct LibvirtGuestInfoTests {
             ])
         let info = try #require(LibvirtGuestInfo.parse(hostnameParams: nil, interfaces: [iface]))
 
-        #expect(info.interfaces[0].addresses.map(\.address) == ["10.0.0.7"])
+        #expect(info.interfaces.values[0].addresses.values.map(\.address) == ["10.0.0.7"])
         // Some guests report loopback with no hardware address at all.
-        #expect(info.interfaces[0].hardwareAddress == nil)
+        #expect(!info.interfaces.values[0].hasHardwareAddress)
     }
 
     /// A prefix that cannot be one is reported as absent rather than passed
@@ -122,6 +122,6 @@ struct LibvirtGuestInfoTests {
         let iface = DomainInterface(
             name: "eth0", hwaddr: nil, addrs: [DomainIPAddr(type: 1, addr: "2001:db8::1", prefix: 4096)])
         let info = try #require(LibvirtGuestInfo.parse(hostnameParams: nil, interfaces: [iface]))
-        #expect(info.interfaces[0].addresses[0].prefixLength == nil)
+        #expect(!info.interfaces.values[0].addresses.values[0].hasPrefixLength)
     }
 }

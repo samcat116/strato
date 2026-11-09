@@ -8,9 +8,9 @@ struct AppleVirtualizationSupportTests {
         let support = HypervisorSupport(type: .appleVirtualization, available: true, accelerated: true)
         let encoded = try WireProtocol.makeEncoder().encode(support)
         let decoded = try WireProtocol.makeDecoder().decode(HypervisorSupport.self, from: encoded)
-        #expect(decoded.type == .appleVirtualization)
-        #expect(!decoded.supportsSnapshots)
-        #expect(decoded.supportsGuestExec != true)
+        #expect(decoded._jsonType == .appleVirtualization)
+        #expect(!decoded._jsonSupportsSnapshots)
+        #expect(decoded._jsonSupportsGuestExec != true)
         #expect(String(decoding: encoded, as: UTF8.self).contains("apple_virtualization"))
     }
 

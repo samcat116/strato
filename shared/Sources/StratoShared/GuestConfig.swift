@@ -1,46 +1,47 @@
 import Foundation
+import SwiftProtobuf
 
 /// Small, level-triggered guest intent (STR-90), guarded by DesiredVMState.generation.
 /// Omission withdraws management; it never deletes files, removes packages, or resets settings.
 /// Consumers must validate before acting and must never log this value or file contents.
-public struct GuestConfig: Codable, Sendable, Equatable {
+public typealias GuestConfig = Strato_Agent_V1_GuestConfig
+extension Strato_Agent_V1_GuestConfig: Codable {
+    public static var empty: Self { .init(packages: [], files: [], services: [], sysctls: []) }
+
     public static let maxEntriesPerSection = 128
     public static let maxFileBytes = 65_536
     public static let maxTotalFileBytes = 262_144
-    public let packages: [GuestPackage]
-    public let files: [GuestFile]
-    public let services: [GuestService]
-    public let sysctls: [GuestSysctl]
 
     public init(
         packages: [GuestPackage] = [], files: [GuestFile] = [],
         services: [GuestService] = [], sysctls: [GuestSysctl] = []
     ) {
-        self.packages = packages
-        self.files = files
-        self.services = services
-        self.sysctls = sysctls
+        self.init()
+        self._jsonPackages = packages
+        self._jsonFiles = files
+        self._jsonServices = services
+        self._jsonSysctls = sysctls
     }
 
     /// Shared API and wire boundary validation. Errors contain rules, never caller values.
     public func validate() throws {
         for (section, count) in [
-            ("packages", packages.count), ("files", files.count),
-            ("services", services.count), ("sysctls", sysctls.count),
+            ("packages", _jsonPackages.count), ("files", _jsonFiles.count),
+            ("services", _jsonServices.count), ("sysctls", _jsonSysctls.count),
         ] {
             guard count <= Self.maxEntriesPerSection else {
                 throw GuestConfigValidationError(field: section, rule: "at most 128 entries")
             }
         }
-        try unique(packages.map(\.name), field: "packages")
-        try unique(files.map(\.path), field: "files")
-        try unique(services.map(\.name), field: "services")
-        try unique(sysctls.map(\.key), field: "sysctls")
-        for entry in packages { try entry.validate() }
-        for entry in files { try entry.validate() }
-        for entry in services { try entry.validate() }
-        for entry in sysctls { try entry.validate() }
-        guard files.reduce(0, { $0 + $1.content.utf8.count }) <= Self.maxTotalFileBytes else {
+        try unique(_jsonPackages.map(\._jsonName), field: "packages")
+        try unique(_jsonFiles.map(\._jsonPath), field: "files")
+        try unique(_jsonServices.map(\._jsonName), field: "services")
+        try unique(_jsonSysctls.map(\._jsonKey), field: "sysctls")
+        for entry in _jsonPackages { try entry.validate() }
+        for entry in _jsonFiles { try entry.validate() }
+        for entry in _jsonServices { try entry.validate() }
+        for entry in _jsonSysctls { try entry.validate() }
+        guard _jsonFiles.reduce(0, { $0 + $1._jsonContent.utf8.count }) <= Self.maxTotalFileBytes else {
             throw GuestConfigValidationError(field: "files", rule: "at most 262144 total content bytes")
         }
     }
@@ -52,180 +53,271 @@ public struct GuestConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case packages, files, services, sysctls }
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         try rejectGuestConfigUnknownKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.packages = try container.decode([GuestPackage].self, forKey: .packages)
-        self.files = try container.decode([GuestFile].self, forKey: .files)
-        self.services = try container.decode([GuestService].self, forKey: .services)
-        self.sysctls = try container.decode([GuestSysctl].self, forKey: .sysctls)
+        self._jsonPackages = try container.decode([GuestPackage].self, forKey: .packages)
+        self._jsonFiles = try container.decode([GuestFile].self, forKey: .files)
+        self._jsonServices = try container.decode([GuestService].self, forKey: .services)
+        self._jsonSysctls = try container.decode([GuestSysctl].self, forKey: .sysctls)
         try validate()
     }
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(packages, forKey: .packages)
-        try container.encode(files, forKey: .files)
-        try container.encode(services, forKey: .services)
-        try container.encode(sysctls, forKey: .sysctls)
+        try container.encode(_jsonPackages, forKey: .packages)
+        try container.encode(_jsonFiles, forKey: .files)
+        try container.encode(_jsonServices, forKey: .services)
+        try container.encode(_jsonSysctls, forKey: .sysctls)
+    }
+
+    var _jsonPackages: [GuestPackage] {
+        get { packages.values }
+        set { let value = newValue; packages = Strato_Agent_V1_GuestConfigPackagesSection.with { $0.values = value } }
+    }
+    var _jsonFiles: [GuestFile] {
+        get { files.values }
+        set { let value = newValue; files = Strato_Agent_V1_GuestConfigFilesSection.with { $0.values = value } }
+    }
+    var _jsonServices: [GuestService] {
+        get { services.values }
+        set { let value = newValue; services = Strato_Agent_V1_GuestConfigServicesSection.with { $0.values = value } }
+    }
+    var _jsonSysctls: [GuestSysctl] {
+        get { sysctls.values }
+        set { let value = newValue; sysctls = Strato_Agent_V1_GuestConfigSysctlsSection.with { $0.values = value } }
     }
 }
 
-public enum GuestPackageState: String, Codable, Sendable, Equatable {
-    case present
-    case absent
+public typealias GuestPackageState = Strato_Agent_V1_GuestPackageState
+extension Strato_Agent_V1_GuestPackageState: Codable {
 
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
         let container = try decoder.singleValueContainer()
         guard let state = Self(rawValue: try container.decode(String.self)) else {
             throw GuestConfigValidationError(field: "packages.state", rule: "present or absent required")
         }
         self = state
     }
+
+    public var protocolValue: String {
+        switch self {
+        case .present: return "present"
+        case .absent: return "absent"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "present": self = .present
+        case "absent": self = .absent
+        default: return nil
+        }
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
-public struct GuestPackage: Codable, Sendable, Equatable {
-    public let name: String
-    public let state: GuestPackageState
+public typealias GuestPackage = Strato_Agent_V1_GuestPackage
+extension Strato_Agent_V1_GuestPackage: Codable {
 
     public init(name: String, state: GuestPackageState) {
-        self.name = name
-        self.state = state
+        self.init()
+        self._jsonName = name
+        self._jsonState = state
     }
 
     public func validate() throws {
-        try guestName(name, field: "packages.name", extra: ".+_:-")
+        try guestName(_jsonName, field: "packages.name", extra: ".+_:-")
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case name, state }
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         try rejectGuestConfigUnknownKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.name = try container.decode(String.self, forKey: .name)
-        self.state = try container.decode(GuestPackageState.self, forKey: .state)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonState = try container.decode(GuestPackageState.self, forKey: .state)
         try validate()
     }
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-        try container.encode(state, forKey: .state)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonState, forKey: .state)
+    }
+
+    var _jsonName: String {
+        get { name }
+        set { let value = newValue; name = value }
+    }
+    var _jsonState: GuestPackageState {
+        get { state }
+        set { let value = newValue; state = value }
     }
 }
 
-public struct GuestFile: Codable, Sendable, Equatable {
-    public let path: String
-    public let content: String
-    public let mode: String
+public typealias GuestFile = Strato_Agent_V1_GuestFile
+extension Strato_Agent_V1_GuestFile: Codable {
 
     public init(path: String, content: String, mode: String) {
-        self.path = path
-        self.content = content
-        self.mode = mode
+        self.init()
+        self._jsonPath = path
+        self._jsonContent = content
+        self._jsonMode = mode
     }
 
     public func validate() throws {
-        let components = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard path.utf8.count <= 4096, path.hasPrefix("/"), path != "/",
-            !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+        let components = _jsonPath.split(separator: "/", omittingEmptySubsequences: false)
+        guard _jsonPath.utf8.count <= 4096, _jsonPath.hasPrefix("/"), _jsonPath != "/",
+            !_jsonPath.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
             !components.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
         else {
             throw GuestConfigValidationError(
                 field: "files.path", rule: "a canonical absolute non-root path is required")
         }
-        guard mode.utf8.count == 4, mode.first == "0", mode.utf8.allSatisfy({ $0 >= 48 && $0 <= 55 }) else {
+        guard _jsonMode.utf8.count == 4, _jsonMode.first == "0", _jsonMode.utf8.allSatisfy({ $0 >= 48 && $0 <= 55 })
+        else {
             throw GuestConfigValidationError(
                 field: "files.mode", rule: "four octal digits with no special permission bits")
         }
-        guard content.utf8.count <= GuestConfig.maxFileBytes, !content.contains("\0") else {
+        guard _jsonContent.utf8.count <= GuestConfig.maxFileBytes, !_jsonContent.contains("\0") else {
             throw GuestConfigValidationError(
                 field: "files.content", rule: "UTF-8 text without NUL, at most 65536 bytes")
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case path, content, mode }
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         try rejectGuestConfigUnknownKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.path = try container.decode(String.self, forKey: .path)
-        self.content = try container.decode(String.self, forKey: .content)
-        self.mode = try container.decode(String.self, forKey: .mode)
+        self._jsonPath = try container.decode(String.self, forKey: .path)
+        self._jsonContent = try container.decode(String.self, forKey: .content)
+        self._jsonMode = try container.decode(String.self, forKey: .mode)
         try validate()
     }
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(path, forKey: .path)
-        try container.encode(content, forKey: .content)
-        try container.encode(mode, forKey: .mode)
+        try container.encode(_jsonPath, forKey: .path)
+        try container.encode(_jsonContent, forKey: .content)
+        try container.encode(_jsonMode, forKey: .mode)
+    }
+
+    var _jsonPath: String {
+        get { path }
+        set { let value = newValue; path = value }
+    }
+    var _jsonContent: String {
+        get { content }
+        set { let value = newValue; content = value }
+    }
+    var _jsonMode: String {
+        get { mode }
+        set { let value = newValue; mode = value }
     }
 }
 
-public struct GuestService: Codable, Sendable, Equatable {
-    public let name: String
-    public let enabled: Bool
+public typealias GuestService = Strato_Agent_V1_GuestService
+extension Strato_Agent_V1_GuestService: Codable {
 
     public init(name: String, enabled: Bool) {
-        self.name = name
-        self.enabled = enabled
+        self.init()
+        self._jsonName = name
+        self._jsonEnabled = enabled
     }
 
     public func validate() throws {
-        try guestName(name, field: "services.name", extra: "._-@:")
+        try guestName(_jsonName, field: "services.name", extra: "._-@:")
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case name, enabled }
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         try rejectGuestConfigUnknownKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.name = try container.decode(String.self, forKey: .name)
-        self.enabled = try container.decode(Bool.self, forKey: .enabled)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonEnabled = try container.decode(Bool.self, forKey: .enabled)
         try validate()
     }
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-        try container.encode(enabled, forKey: .enabled)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonEnabled, forKey: .enabled)
+    }
+
+    var _jsonName: String {
+        get { name }
+        set { let value = newValue; name = value }
+    }
+    var _jsonEnabled: Bool {
+        get { enabled }
+        set { let value = newValue; enabled = value }
     }
 }
 
-public struct GuestSysctl: Codable, Sendable, Equatable {
-    public let key: String
-    public let value: String
+public typealias GuestSysctl = Strato_Agent_V1_GuestSysctl
+extension Strato_Agent_V1_GuestSysctl: Codable {
 
     public init(key: String, value: String) {
-        self.key = key
-        self.value = value
+        self.init()
+        self._jsonKey = key
+        self._jsonValue = value
     }
 
     public func validate() throws {
-        try guestName(key, field: "sysctls.key", extra: "._-")
-        guard key.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty }),
-            key.contains(".")
+        try guestName(_jsonKey, field: "sysctls.key", extra: "._-")
+        guard _jsonKey.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty }),
+            _jsonKey.contains(".")
         else {
             throw GuestConfigValidationError(field: "sysctls.key", rule: "nonempty dot-separated components required")
         }
-        guard !value.isEmpty, value.utf8.count <= 1024,
-            !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\t" })
+        guard !_jsonValue.isEmpty, _jsonValue.utf8.count <= 1024,
+            !_jsonValue.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) && $0 != "\t" })
         else {
             throw GuestConfigValidationError(field: "sysctls.value", rule: "one nonempty line, at most 1024 bytes")
         }
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable { case key, value }
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         try rejectGuestConfigUnknownKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.rawValue)))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.key = try container.decode(String.self, forKey: .key)
-        self.value = try container.decode(String.self, forKey: .value)
+        self._jsonKey = try container.decode(String.self, forKey: .key)
+        self._jsonValue = try container.decode(String.self, forKey: .value)
         try validate()
     }
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
         try validate()
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(key, forKey: .key)
-        try container.encode(value, forKey: .value)
+        try container.encode(_jsonKey, forKey: .key)
+        try container.encode(_jsonValue, forKey: .value)
+    }
+
+    var _jsonKey: String {
+        get { key }
+        set { let value = newValue; key = value }
+    }
+    var _jsonValue: String {
+        get { value }
+        set { let value = newValue; self.value = value }
     }
 }
 
@@ -254,7 +346,7 @@ private struct GuestConfigKey: CodingKey {
     init?(intValue: Int) { return nil }
 }
 
-private func rejectGuestConfigUnknownKeys(_ decoder: any Decoder, allowed: Set<String>) throws {
+private func rejectGuestConfigUnknownKeys(_ decoder: any Swift.Decoder, allowed: Set<String>) throws {
     let container = try decoder.container(keyedBy: GuestConfigKey.self)
     guard container.allKeys.allSatisfy({ allowed.contains($0.stringValue) }) else {
         throw GuestConfigValidationError(field: "schema", rule: "unknown fields are not accepted")

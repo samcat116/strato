@@ -85,7 +85,7 @@ extension AgentService {
         }
         do {
             let report = try envelope.decode(as: ObservedStateReport.self)
-            guard let agentID = UUID(uuidString: report.agentId) else { return }
+            guard let agentID = UUID(uuidString: report.agentID) else { return }
             let outcome = try await InventorySessionFence.withLock(
                 agentID: agentID, on: app.db, logger: app.logger
             ) { db -> ObservedStateApplier.UnrecognizedOutcome? in
@@ -99,7 +99,7 @@ extension AgentService {
             if let outcome {
                 await recordVolumeIOTelemetry(report: report, agentName: Self.displayName(forKey: agentKey))
                 if outcome.authorizedTeardown || outcome.desiredStateChanged {
-                    await syncDesiredState(agentId: report.agentId)
+                    await syncDesiredState(agentId: report.agentID)
                 }
             }
         } catch {
@@ -118,19 +118,19 @@ extension AgentService {
             return nil
         }
 
-        guard let agentUUID = UUID(uuidString: report.agentId),
+        guard let agentUUID = UUID(uuidString: report.agentID),
             let agent = try? await Agent.find(agentUUID, on: db)
         else {
             app.logger.warning(
                 "Observed-state report from unknown agent",
-                metadata: ["strato.agent.claimed.id": .string(report.agentId)])
+                metadata: ["strato.agent.claimed.id": .string(report.agentID)])
             return nil
         }
         guard agent.identity.key == agentKey else {
             app.logger.warning(
                 "Observed-state report claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "strato.agent.claimed.id": .string(report.agentId),
+                    "strato.agent.claimed.id": .string(report.agentID),
                     "strato.agent.connection.identity": .string(agentKey),
                 ])
             return nil
@@ -144,13 +144,13 @@ extension AgentService {
         } catch {
             app.logger.warning(
                 "Failed to read PostgreSQL time for observed-state report: \(error)",
-                metadata: ["strato.agent.id": .string(report.agentId)])
+                metadata: ["strato.agent.id": .string(report.agentID)])
             return nil
         }
 
         var inventoryCounts: [ObservedInventoryGuard.Section: ObservedInventoryGuard.Counts] = [:]
         var inventoryRefusal: String?
-        if report.manifestStatus?.inventoryComplete != false {
+        if (!report.hasManifestStatus || report.manifestStatus.inventoryComplete) {
             do {
                 inventoryCounts = try await ObservedInventoryGuard.counts(for: report, on: db)
                 inventoryRefusal = ObservedInventoryGuard(configuration: app.controlPlaneConfiguration).refusal(
@@ -161,7 +161,7 @@ extension AgentService {
                 app.logger.error(
                     "Observed inventory validation failed",
                     metadata: [
-                        "strato.agent.id": .string(report.agentId), "error": .string("\(error)"),
+                        "strato.agent.id": .string(report.agentID), "error": .string("\(error)"),
                     ])
                 inventoryRefusal =
                     "Control-plane inventory guard could not validate this report; check control-plane logs. "
@@ -176,19 +176,20 @@ extension AgentService {
         let effectiveManifestStatus =
             inventoryRefusal.map {
                 ObservedManifestStatus(inventoryComplete: false, quarantinedEntries: 0, reason: $0)
-            } ?? report.manifestStatus
+            } ?? (report.hasManifestStatus ? report.manifestStatus : nil)
         let admissionOutcome: ResourceAdmissionService.ReportOutcome
         do {
             admissionOutcome = try await ResourceAdmissionService.accept(
                 report, agentID: agentUUID, sessionID: inventorySession,
-                inventoryComplete: inventoryRefusal == nil && report.manifestStatus?.inventoryComplete != false,
+                inventoryComplete: inventoryRefusal == nil
+                    && (!report.hasManifestStatus || report.manifestStatus.inventoryComplete),
                 on: db)
             if case .refused = admissionOutcome { return nil }
             if case .accepted(let released) = admissionOutcome {
                 // Durable net resources and claim removal committed first. A
                 // failed release only leaves conservative double charging.
                 for key in released {
-                    await app.coordination.releaseReservation(agentId: report.agentId, vmId: key)
+                    await app.coordination.releaseReservation(agentId: report.agentID, vmId: key)
                 }
             }
         } catch {
@@ -203,7 +204,7 @@ extension AgentService {
         if applyPeriodicAgentState(
             report.resources,
             dependencyObservations: nil,
-            hostResourceTelemetry: report.hostResourceTelemetry,
+            hostResourceTelemetry: report.hasHostResourceTelemetry ? report.hostResourceTelemetry : nil,
             to: agent,
             at: instant)
         {
@@ -211,14 +212,16 @@ extension AgentService {
         }
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
-        applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
+        applyReportedUpdateStatus(report.hasAgentUpdateStatus ? report.agentUpdateStatus : nil, to: agent)
         if agent.updateBlockedReason != previousBlockedReason
             || agent.updateFailureReason != previousFailureReason
         {
             agentChanged = true
             agent.lastHeartbeat = instant.date
         }
-        if applyReportedTeardownRefusal(report.teardownRefusal, to: agent, at: instant) {
+        if applyReportedTeardownRefusal(
+            report.hasTeardownRefusal ? report.teardownRefusal : nil, to: agent, at: instant)
+        {
             agentChanged = true
         }
         if agentChanged {
@@ -227,7 +230,7 @@ extension AgentService {
             } catch {
                 app.logger.warning(
                     "Failed to persist agent resources from observed-state report: \(error)",
-                    metadata: ["strato.agent.id": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentID)])
                 return nil
             }
         }
@@ -245,7 +248,8 @@ extension AgentService {
         // Storage inventory has its own completeness contract and transaction.
         // A malformed or unavailable disk snapshot must not prevent valid VM,
         // sandbox, volume, or network observations in this report from applying.
-        if let storageDevices = report.storageDevices {
+        if report.hasStorageDevices {
+            let storageDevices = report.storageDevices.values
             do {
                 try await StorageDeviceInventoryReconciler(database: db).apply(
                     storageDevices,
@@ -254,13 +258,13 @@ extension AgentService {
             } catch {
                 app.logger.error(
                     "Failed to apply storage-device inventory: \(error)",
-                    metadata: ["strato.agent.id": .string(report.agentId)])
+                    metadata: ["strato.agent.id": .string(report.agentID)])
             }
         }
 
         do {
             let outcome = try await app.observedStateApplier.apply(report, at: instant, on: db)
-            if report.manifestStatus?.inventoryComplete != false,
+            if (!report.hasManifestStatus || report.manifestStatus.inventoryComplete),
                 observedInventorySessions[agentKey] == inventorySession
             {
                 acceptedInventorySections[agentKey, default: []].formUnion(inventoryCounts.keys)
@@ -276,7 +280,7 @@ extension AgentService {
         } catch {
             app.logger.error(
                 "Failed to apply observed-state report: \(error)",
-                metadata: ["strato.agent.id": .string(report.agentId)])
+                metadata: ["strato.agent.id": .string(report.agentID)])
             return nil
         }
     }
@@ -285,24 +289,27 @@ extension AgentService {
     /// full volume report that drove convergence. Unknown/spoofed volume ids do
     /// not enter metrics: only rows currently placed on this agent are sampled.
     private func recordVolumeIOTelemetry(report: ObservedStateReport, agentName: String) async {
-        guard let observedVolumes = report.volumes else { return }
+        guard report.hasVolumes else { return }
+        let observedVolumes = report.volumes.values
         do {
-            let volumes = try await VolumeService.volumes(onAgent: report.agentId, on: app.db)
+            let volumes = try await VolumeService.volumes(onAgent: report.agentID, on: app.db)
             let observedByID = Dictionary(
-                observedVolumes.map { ($0.volumeId, $0) },
+                observedVolumes.compactMap { observed in
+                    UUID(uuidString: observed.volumeID).map { ($0, observed) }
+                },
                 uniquingKeysWith: { first, _ in first })
             let samples = volumes.map { volume in
                 let observed = volume.id.flatMap { observedByID[$0] }
                 return Telemetry.VolumeIOSample(
                     configured: volume.ioLimits,
-                    applied: observed?.ioLimits,
-                    observedRate: observed?.ioObservedRate)
+                    applied: observed.flatMap { $0.hasIoLimits ? $0.ioLimits : nil },
+                    observedRate: observed.flatMap { $0.hasIoObservedRate ? $0.ioObservedRate : nil })
             }
             Telemetry.recordVolumeIO(agentName: agentName, samples: samples)
         } catch {
             app.logger.warning(
                 "Failed to record volume I/O telemetry: \(error)",
-                metadata: ["strato.agent.id": .string(report.agentId)])
+                metadata: ["strato.agent.id": .string(report.agentID)])
         }
     }
 
@@ -336,17 +343,17 @@ extension AgentService {
             agent.teardownRefusedAt = nil
             return true
         }
-        guard reportedTeardownRefusalSyncIds[agent.name] != refusal.syncId else {
+        guard reportedTeardownRefusalSyncIds[agent.name] != refusal.syncID else {
             // Same refused sync, re-reported on a heartbeat. Already logged,
             // already counted, already on the row.
             return agent.teardownRefusalReason != refusal.reason
         }
-        reportedTeardownRefusalSyncIds[agent.name] = refusal.syncId
+        reportedTeardownRefusalSyncIds[agent.name] = refusal.syncID
         app.logger.error(
             "Agent refused a sync's workload teardowns",
             metadata: [
                 "strato.agent.name": .string(agent.name),
-                "syncId": .string(refusal.syncId),
+                "syncId": .string(refusal.syncID),
                 "requestedTeardowns": .stringConvertible(refusal.requestedTeardowns),
                 "presentWorkloads": .stringConvertible(refusal.presentWorkloads),
                 "reason": .string(refusal.reason),

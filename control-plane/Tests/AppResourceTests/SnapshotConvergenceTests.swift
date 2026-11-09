@@ -52,7 +52,7 @@ final class SnapshotConvergenceTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
+        app: Application, named name: String, protocolMajor: Int = Int(AgentProtocolCompatibility.major)
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
             on: app,
@@ -64,7 +64,7 @@ final class SnapshotConvergenceTests {
                 HypervisorSupport(
                     type: .firecracker, available: true, accelerated: true),
             ],
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             sandboxCapable: true)
     }
 
@@ -135,15 +135,15 @@ final class SnapshotConvergenceTests {
                 on: app, user: user, project: project, vm: vm, agentId: agentId)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots.first)
-            #expect(entry.snapshotId == snapshot.id)
+            let entry = try #require(message.snapshots.values.first)
+            #expect(entry.snapshotID == snapshot.id?.uuidString)
             #expect(entry.kind == .vmCheckpoint)
-            #expect(entry.parentId == vm.id)
+            #expect(entry.parentID == vm.id?.uuidString)
             #expect(entry.desiredStatus == .present)
             // Neither a path nor a size travels outbound: the agent owns
             // artifact layout and is the only party that can measure what it
             // wrote, so both come back on the report instead.
-            #expect(entry.export == nil)
+            #expect(!entry.hasExport)
         }
     }
 
@@ -170,11 +170,11 @@ final class SnapshotConvergenceTests {
             try await snapshot.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
-            #expect(entry.capture?.sandboxMode == .stop)
+            let entry = try #require(message.snapshots.values.first { $0.kind == .sandboxSnapshot })
+            #expect(entry.capture.sandboxMode == .stop)
             // No export desired, so no upload slots — an export is a placement
             // fact the operator has to ask for.
-            #expect(entry.export == nil)
+            #expect(!entry.hasExport)
         }
     }
 
@@ -198,12 +198,13 @@ final class SnapshotConvergenceTests {
             try await snapshot.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
-            let export = try #require(entry.export)
-            #expect(Set(export.uploads.map(\.kind)) == Set(SandboxSnapshotArtifactKind.allCases))
+            let entry = try #require(message.snapshots.values.first { $0.kind == .sandboxSnapshot })
+            try #require(entry.hasExport)
+            let export = entry.export
+            #expect(Set(export.uploads.values.map(\.kind)) == Set(SandboxSnapshotArtifactKind.knownCases))
             // Control-plane-relative paths presented with the agent's SVID, so
             // nothing here expires and the entry is safe to sit in a sync.
-            #expect(export.uploads.allSatisfy { $0.uploadURL.hasPrefix("/api/") })
+            #expect(export.uploads.values.allSatisfy { $0.uploadURL.hasPrefix("/api/") })
         }
     }
 
@@ -240,7 +241,7 @@ final class SnapshotConvergenceTests {
             #expect(settled.status == .ready)
             #expect(settled.size == 4096)
             #expect(settled.qemuVersion == "9.1.0")
-            #expect(settled.architecture == CPUArchitecture.x86_64.rawValue)
+            #expect(settled.architecture == CPUArchitecture.x86_64.protocolValue)
             #expect(settled.observedGeneration == 1)
             #expect(settled.conditions.converged)
         }
@@ -507,7 +508,7 @@ final class SnapshotConvergenceTests {
 
             // The upload route's completion is what settles it — never the
             // agent's word.
-            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.knownCases.map {
                 SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
             }
             snapshot.exportedAt = Date()

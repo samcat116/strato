@@ -94,6 +94,19 @@ type StratoCi {
       .withMountedCache(".build", cacheVolume("swift-6.4-" + package), sharing: CacheSharingMode.LOCKED)
   }
 
+  """Pinned agent schemas, generated output, and independent binary compatibility peers."""
+  pub agentProtocol(ws: Workspace!): Void @check {
+    swiftBase
+      .withExec(["sh", "-ec", "apt-get update && apt-get install -y --no-install-recommends python3 curl git ca-certificates"])
+      .withDirectory(".", ws.directory("/", include: [".swift-format", "buf.yaml", "buf.gen.yaml", "scripts/*agent-protocol*.sh", "scripts/generate-agent-protocol-validation.py", "tests/agent-protocol-peers/**", "shared/**", "agent/Package.resolved", "control-plane/Package.resolved"], exclude: ["**/.build", "**/.swiftpm"]))
+      .withMountedCache(".build/agent-protocol-tools", cacheVolume("agent-protocol-tools-1.73.0-1.38.1"), sharing: CacheSharingMode.LOCKED)
+      .withMountedCache("shared/.build", cacheVolume("agent-protocol-shared-tests"), sharing: CacheSharingMode.LOCKED)
+      .withExec(["bash", "scripts/install-agent-protocol-tools.sh"])
+      .withExec(["bash", "-ec", "source .build/agent-protocol-tools/env.sh; bash scripts/check-agent-protocol.sh"])
+      .sync
+    null
+  }
+
   """Compile the Linux agent and its path dependencies."""
   pub agentBuild(ws: Workspace!): Void @check {
     swiftEnv(ws, "agent").withExec(["swift", "build", "-j", "4", "--force-resolved-versions"]).sync

@@ -25,10 +25,10 @@ extension Agent {
             entry.spec.admittedReservation == target.spec.admittedReservation,
             entry.spec.memoryBytes == target.spec.memoryBytes, entry.spec.cpus == target.spec.cpus
         {
-            resourceClass = entry.spec.resourceClass
-            reservation = entry.spec.admittedReservation
+            resourceClass = entry.spec.hasResourceClass ? entry.spec.resourceClass : nil
+            reservation = entry.spec.hasAdmittedReservation ? entry.spec.admittedReservation : nil
             guestBytes = entry.spec.memoryBytes
-            cpuCount = entry.spec.cpus
+            cpuCount = Int(entry.spec.cpus)
             backend = .qemuVM
         } else if let target = item.desiredSandbox, let entry = managedSandboxes[item.id],
             let spec = entry.sandboxSpec, entry.jailerUsed == true,
@@ -36,10 +36,10 @@ extension Agent {
             spec.admittedReservation == target.spec.admittedReservation,
             spec.memoryBytes == target.spec.memoryBytes, spec.cpus == target.spec.cpus
         {
-            resourceClass = spec.resourceClass
-            reservation = spec.admittedReservation
+            resourceClass = spec.hasResourceClass ? spec.resourceClass : nil
+            reservation = spec.hasAdmittedReservation ? spec.admittedReservation : nil
             guestBytes = spec.memoryBytes
-            cpuCount = spec.cpus
+            cpuCount = Int(spec.cpus)
             backend = .jailedFirecrackerSandbox
         } else {
             return nil
@@ -70,13 +70,13 @@ extension Agent {
             let id = application.key.id.uuidString
             let observedGeneration: Int64?
             if application.key.kind == .vm {
-                let records = observedVMs.filter { $0.vmId == application.key.id }
+                let records = observedVMs.filter { UUID(uuidString: $0.vmID) == application.key.id }
                 observedGeneration =
                     records.count == 1
                         && ResourceEnforcementProducer.canAcknowledge(records[0], application: application)
                     ? records[0].observedGeneration : nil
             } else {
-                let records = observedSandboxes.filter { $0.sandboxId == application.key.id }
+                let records = observedSandboxes.filter { UUID(uuidString: $0.sandboxID) == application.key.id }
                 observedGeneration =
                     records.count == 1
                         && ResourceEnforcementProducer.canAcknowledge(records[0], application: application)

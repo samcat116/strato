@@ -169,7 +169,7 @@ struct VMResponse: Content {
         self.name = vm.name
         self.description = vm.description
         self.environment = vm.environment
-        self.status = vm.status.rawValue
+        self.status = vm.status.protocolValue
         self.cpu = vm.cpu
         self.memory = vm.memory
         self.disk = vm.disk

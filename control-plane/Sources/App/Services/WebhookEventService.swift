@@ -416,8 +416,8 @@ enum WebhookEvents {
             resource: WebhookEvent.Resource(
                 kind: OperationResourceKind.virtualMachine.rawValue, id: vmID, name: vm.name),
             data: [
-                "previousStatus": .string(previous.rawValue),
-                "newStatus": .string(current.rawValue),
+                "previousStatus": .string(previous.protocolValue),
+                "newStatus": .string(current.protocolValue),
             ])
         await emit(event, on: db, logger: logger)
     }

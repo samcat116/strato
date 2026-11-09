@@ -1,212 +1,94 @@
 # Wire Protocol (StratoShared)
 
-The `shared/` package (library product **StratoShared**) defines everything the
-control plane and agent agree on: the WebSocket message catalog, the
-reconciliation contract, and the DTOs both sides serialize. It is the only
-code shared between the two services — if a type crosses the socket, it lives
-here.
-
-The package deliberately has almost no dependencies (swift-nio is declared for
-consumers; the StratoShared sources themselves import only Foundation) and no
-I/O of its own. It is a vocabulary, not a client. The package also ships a
-second product, **SPIFFEVerification** — the SPIFFE peer-identity verifier
-both services pin certificates with — kept as a separate target precisely so
-StratoShared consumers don't inherit its NIOSSL and swift-certificates
-dependencies.
+The agent/control-plane workload contract is defined by Protobuf schemas in
+`shared/proto/strato/agent/v1`. SwiftProtobuf generates checked-in Swift messages
+for `StratoShared`. Generated messages are used by handlers and reconciliation;
+handwritten extensions hold validation and domain behavior. The module depends
+on SwiftProtobuf, while SPIFFE certificate verification remains a separate target.
 
 ## Envelope and encoding
 
-Every WebSocket frame carries a `MessageEnvelope`
-(`shared/Sources/StratoShared/WebSocketProtocol.swift`):
+Agent WebSockets carry binary Protobuf envelopes with a typed `oneof` body.
+HTTP desired-state polling carries the same contract with `application/protobuf`.
+Console and exec payloads are bytes, not base64 text. The migration is a hard
+cutover: JSON/text workload frames are rejected.
 
-```swift
-struct MessageEnvelope {
-    let type: MessageType   // discriminator for dispatch
-    let payload: Data       // inner message, JSON-encoded
-}
-```
+The transport choice does not change reconciliation. Agents still pull complete,
+generation-guarded desired state. Contentless Valkey doorbells optimize latency;
+periodic unconditional fetches recover missed notifications. Replica forwarding
+must retain the original binary message rather than decode/rebuild a payload,
+so unfamiliar additive fields survive the relay.
 
-- Encoding is **JSON end to end** — the envelope and the payload both go
-  through the single pinned coder pair `WireProtocol.makeEncoder()` /
-  `makeDecoder()`. Never use an ad-hoc `JSONEncoder` for wire types; date
-  strategy compatibility depends on the pinned pair.
-- Binary data (console output, exec stdin/stdout, and recorded-session output
-  snapshots) travels as **base64 strings** inside JSON messages, with `rawData`
-  or stream-specific `rawStdout`/`rawStderr` conveniences on the message
-  structs.
-- Every concrete message conforms to `WebSocketMessage`: a `type`
-  discriminator, a `requestId`, and a `timestamp`. **Nothing correlates on
-  `requestId` any more** — the generic pending-request apparatus went with the
-  last imperative exchange (STR-152), so the field survives as a log-correlation
-  handle. Streaming messages (console, guest exec) correlate by `sessionId`
-  and take their ordering from the WebSocket itself (see the header comment in
-  `GuestExecMessages.swift`).
-- `SuccessMessage` and `ErrorMessage` survive as **unsolicited** frames, sent
-  control plane → agent only: an acknowledgement the agent logs (register,
-  heartbeat, unregister), and a registration rejection whose machine-readable
-  `code` (`invalid_token`, `unsupported_protocol_version`) the agent's reconnect
-  loop reads. `SuccessMessage.data` went with the correlation (STR-152) —
-  every typed reply that rode it is a field on `ObservedStateReport` now.
+JSON remains the representation at existing storage, public API, browser, guest,
+and auxiliary HTTP interfaces. Explicit codecs preserve their dates, enum names,
+union shapes, integers, and base64 values. ProtoJSON is not a drop-in replacement
+for those formats. ETags use a canonical semantic representation with volatile
+fields excluded; raw Protobuf serialization is not a canonical hash input.
 
 ## Versioning
 
-`WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 71). The required registration fields
-`AgentRegisterMessage.protocolVersion` and
-`AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
-Envelopes intentionally carry no duplicate version.
+Protocol **major 1** is the complete initial workload baseline. Compatible schema
+additions do not increment it. Registration advertises immutable capability IDs;
+peers negotiate their intersection and bind the result to a registration session.
+Protocol support does not imply that a host has the hardware or services required
+to realize a feature.
 
-**Strato deploys the control plane and its agents as one coordinated wire-
-contract change.** Both sides require exact equality with `currentVersion` and
-refuse missing, older, and future versions before desired or observed state is
-exchanged. There is no rolling mixed-version window and no per-feature protocol
-gate.
+Unknown advertised capability names can be ignored. Required capabilities on a
+message must be understood before any mutation or generation acknowledgement.
+Reject an unsupported desired-state snapshot as a whole: never filter unsupported
+resources out of an authoritative inventory. The same policy applies at admission,
+assembly, and delivery, including HTTP polls served by another replica.
 
-Wire v72 adds the `apple_virtualization` backend identity to the v71 contract.
-Control plane and agent builds must both use v72; v71 agents cannot decode the
-new backend and are rejected at registration.
+Collections with authority or optionality use message wrappers. A missing section
+means no opinion where allowed; an explicitly empty section is authoritative.
+Missing mandatory sections fail validation. Binary validators reject unspecified
+or unknown values in actionable enum fields. UUID strings are validated and
+canonicalized throughout nested messages at binary encode/decode boundaries,
+preserving the case-insensitive identity semantics of the former UUID models
+without dropping unknown Protobuf fields. Stored-manifest quarantine and salvage
+remain separate from wire compatibility.
 
-Wire v71 carries explicit terminal guest-step failures and their durable retry fence.
+### Schema development
 
-Wire v70 realizes guest configuration for running, opted-in VMs before their
-VM generation is acknowledged and carries generation-scoped guest configuration
-observations (STR-91). A v69 agent cannot register with a v70 control plane and
-acknowledge guest intent without performing that work. The independent guest-control
-protocol remains v4; the guest must advertise `guest_config_convergence` before
-receiving convergence intent. The [update-only bridge](#update-only-bridge) can
-repair supported workload-version skew before registration without exchanging
-workload state.
+Install task-local tools and run the same checks as CI:
 
-Wire v69 adds ordered sandbox idle evidence and automatic-fence provenance; v68
-adds generation-bound sandbox suspension and storage admission. Wire v67 carries
-resource-class snapshots, fractional CPU capacity, and coherent enforcement
-observations. Wire v66 adds net host memory accounting and backend allowances;
-v65 adds optional host memory profile observations, swap counters/rates, compressed
-zram original bytes, and bounded memory warnings. GuestConfig was staged vocabulary
-in those earlier versions; v70 ships its realization consumer and observations
-together.
+```sh
+bash scripts/install-agent-protocol-tools.sh
+source .build/agent-protocol-tools/env.sh
+bash scripts/agent-protocol.sh generate
+bash scripts/check-agent-protocol.sh origin/main
+```
 
-Wire v63 requires first-boot installation of the selected Strato guest-agent
-release for opted-in VMs across ISO and IMDS delivery, and adds independent
-guest-agent reachability observations. Older agents only understand the channel
-flag and cannot fulfill that installation intent. Rejecting v62 peers prevents
-an opted-in VM from being created without its guest daemon during mixed builds.
+Tools are pinned to Buf 1.73.0 and SwiftProtobuf 1.38.1; ordinary application builds
+use the checked-in generated sources and do not need Buf. The checks enforce
+formatting, STANDARD lint, FILE breaking rules, the frozen initial v1 descriptor,
+generated-output consistency, and independent baseline/next peer fixtures. On PRs,
+CI additionally compares against the target branch. The initial cutover explicitly
+bootstraps this check when the target has no Protobuf schema.
 
-Wire v44 generalized the interactive exec stream across VMs and sandboxes with
-`guest_exec_*` messages and a resource-kind discriminator on start.
+Never reuse field numbers or removed names; reserve them. Regenerate after rebasing
+rather than resolving generated code manually. A passing schema diff cannot prove
+that a changed acknowledgement or default still means the same thing: semantic
+changes require a capability and behavioral tests. Intentional incompatible changes
+need a new protocol major and an explicit migration.
 
-Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
-per-hypervisor host capability used to keep those VMs off nodes without
-`/dev/vhost-vsock`.
+### Previous workload transport
 
-Wire v46 adds authoritative native-OVN load-balancer desired state, programming,
-and backend-health observations.
-
-Wire v47 adds typed dependency observations to agent registration and heartbeats.
-
-Wire v60 splits host-local disk reporting into committed availability
-(`availableDisk`) and live filesystem headroom (`physicalFreeDisk`). Placement
-uses the former; operational utilization uses the latter.
-The control plane uses the latest received snapshot for feature-scoped placement
-gates without terminating workloads that are already running.
-
-Wire v48 adds `VMSpec.metadataSource`, the create-time choice between the full
-NoCloud seed ISO and an IMDS `seedfrom` stub. IMDS-backed metadata also carries
-the optional per-VM NoCloud seed capability; old snapshots decode it as nil.
-Older persisted agent manifests decode a missing source as `iso`; a live
-control plane and agent still require the same v48 handshake.
-
-Wire v49 adds `AgentRegisterMessage.metadataServiceCapable`. The agent reports
-true only after it initializes the guest-facing listener supervisor; the
-control plane requires the explicit signal for IMDS-backed VM placement.
-
-Wire v50 preserves stdout/stderr identity on captured guest-exec output.
-
-Wire v51 replaces file-only volume paths with `DiskAttachment`: `.file`
-includes its declared format, `.blockDevice` carries a host device, and `.rbd`
-carries pool, image, cephx user, and monitor hosts. The agent reports the value,
-the control plane stores it on `VolumeReplica`, and `VMSpec.volumes` returns it
-verbatim to the VM's agent. This is a coordinated exact-version cutover, not a
-host capability: capability answers whether a node can use Ceph, while v51
-answers whether both peers can decode the attachment value at all.
-
-Wire v52 adds the agent's optional complete whole-disk inventory. A missing
-`storageDevices` field means enumeration failed and the control plane retains
-its last observation; an empty list means enumeration succeeded and found no
-whole disks. WWN or serial identifies a physical disk across path renumbering,
-while devices without either identifier remain visible but cannot become
-OSD-eligible.
-
-Wire v53 adds `DesiredNetworkState.networkACLs`, carrying the optional ordered
-network ACL and its full rule set to the site's topology authority. `nil` keeps
-the semantic no-op convention; current control planes send `[]` to
-authoritatively remove managed switch ACLs or a one-element list for the
-schema-enforced policy. This is an exact-version payload change, not a
-`supportsNetworkACLs` capability: the existing live overlay-network capability
-already decides whether an agent may author OVN topology.
-
-Wire v56 makes `GuestExecStartMessage.sessionKind` required: `interactive`
-sessions remain live streams whose frontend owns their lifetime, while
-`recorded` sessions survive a control-plane WebSocket reconnect for as long as
-the same agent process remains alive. It also adds a level-triggered recorded
-state and terminal-result replay. This is an exact-version cutover; a missing
-session kind does not decode to an implicit default.
-
-Wire v57 adds the failure classification to reconciliation observations. This
-distinguishes a blocked refusal, which retains the desired state and retries,
-from a terminal failure, which ends the mutation. The exact-version handshake
-prevents an older control plane from treating a blocked report as terminal.
-
-Wire v61 adds optional network-fabric observations to `ObservedStateReport`:
-authority-scoped logical-network and security-group results plus per-agent port
-membership results. Nil topology fields mean the reporting agent has no
-authority-side opinion; they must never be interpreted as an empty healthy set.
-
-Two consequences worth knowing:
-
-- **A rejected agent cannot self-update.** Declarative self-update rides the
-  desired-state sync, which starts only after registration. Update a rejected
-  agent manually by re-running `install.sh` or replacing its image with the
-  matching release, then restart it so it can register again.
-- **Capabilities still exist, and they are not versions.** A capability
-  (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`, `metadataServiceCapable`, or QEMU `supportsVsock`) is
-  evidence that a *host* can realize a feature — a runtime, a binary, a guest
-  image — all installed independently of the agent binary. Version says "the
-  peer understands the payload"; capability says "the host can act on it". The
-  exact handshake answers the first question; capabilities keep answering the
-  second per host, re-probed at every registration.
-
-The current contract includes the per-instance metadata kill switch (STR-185):
-`InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
-the per-workload lever for denying one VM the link-local service. The listener
-refuses an identified caller and a drop ACL on `pg_strato_no_metadata` keeps
-the packet off the chassis; the two layers cover unmanaged NICs, authority
-skew, and probe resistance.
-
-`serviceEnabled` is required. Missing policy fails decoding rather than
-silently enabling metadata for a VM whose operator disabled it.
-
-Nil-tolerance conventions remain for semantic absence within one version: a
-nil `volumes` or `snapshots` list
-still means "the sender said nothing about that family" and is never planned
-against (STR-148/150), `dnsZones: nil` still means "not the topology
-authority", and a nil per-NIC `resolverEnabled` is still the control plane
-withholding an opinion about a host it cannot describe.
-
-Adding an enum case to a strictly decoded wire type (see `DesiredVMStatus`
-below), or changing a field's representation or semantics, requires a version
-bump and a coordinated deployment of both sides.
+The former JSON workload protocol used an exact-version counter, ending at v72.
+Those peers cannot join a Protobuf workload session. The separately frozen
+[update-only bridge](#update-only-bridge) remains available to bridge-capable
+binaries; it is not a workload compatibility adapter.
 
 ## Message catalog
 
-`MessageType` in `WebSocketProtocol.swift` is the master list. By direction:
+`workload.proto` defines the envelope body cases. `MessageType` provides their
+application-facing names. By direction:
 
 **Control plane → agent**
 
 | Message | Purpose |
 |---|---|
-| `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
+| `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, returns the negotiated protocol agreement and session |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) plus required `sessionKind` (`interactive` or `recorded`, v56+) |
@@ -224,7 +106,7 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 
 | Message | Purpose |
 |---|---|
-| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, `metadataServiceCapable`, protocol version |
+| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, `metadataServiceCapable`, protocol offer |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
@@ -241,8 +123,8 @@ change.
 ### Recorded exec reconnect state (STR-260, wire v56)
 
 `GuestExecRecordedStateMessage` is a complete level-triggered snapshot, never
-an output delta. Its `stdout` and `stderr` fields contain the full base64-encoded
-capture retained by the agent, with a combined decoded ceiling of 1,048,576
+an output delta. Its `stdout` and `stderr` fields contain the full byte
+capture retained by the agent, with a combined ceiling of 1,048,576
 bytes. `truncated` is true when bytes exceeded that ceiling or when the channel
 closed without an authoritative `exec_exit`, so the capture may be incomplete.
 The agent advances a per-session `revision` whenever that authoritative state
@@ -274,9 +156,9 @@ design; the short version:
 
 - `DesiredVMStatus`: `running` / `shutdown` / `paused` / `absent`. It is a
   goal, never a report — there are no transitional or diagnostic cases.
-  Decoding is **strict** (unlike the tolerant `VMStatus`): misreading a
-  desired status could stop or delete a live VM, so an unknown value fails
-  the decode rather than degrading. `isSatisfied(by:)` encodes convergence
+  Boundary validation is **strict**: misreading a desired status could stop
+  or delete a live VM, so an unspecified or unknown value fails validation
+  before reconciliation. `isSatisfied(by:)` encodes convergence
   rules — e.g. `.shutdown` is satisfied by an observed `.shutdown` *or*
   `.created`, and `.absent` is only ever confirmed by the VM's omission from
   the observed set.
@@ -345,9 +227,8 @@ quartet. The control plane persists that disk attachment without interpreting
 it and projects it into `VMSpec.volumes` for VM realization. A nil `volumes` on
 the *report* has two causes and the control plane
 treats them identically, because the right response to both is to do nothing:
-an agent below v31 does not speak the field, and a v31 agent that cannot
-enumerate its volume store says so this way rather than claiming an empty
-inventory — the volume counterpart of
+a peer withholding inventory or an agent that cannot enumerate its volume
+store omits the section rather than claiming an empty inventory — the volume counterpart of
 `manifestStatus.inventoryComplete == false`.
 
 ### Desired snapshot artifacts (wire v33)
@@ -411,9 +292,8 @@ agent safe: it sends only the frozen header size under a name whose meaning did
 not change, and the nil in the new field means "does not re-measure".
 
 A nil `snapshots` on the report has v31's two causes and the same response:
-an agent below v33 does not speak the field, and a v33 agent that cannot read
-its snapshot record file says so this way rather than claiming an empty
-inventory.
+a peer withholding inventory or an agent that cannot read its snapshot
+record file omits the section rather than claiming an empty inventory.
 
 ### Generations
 
@@ -567,10 +447,10 @@ The rest of the package is vocabulary used on both sides:
   synthesized, so a missing required key inside `metadata` throws out of the
   whole `DesiredStateMessage` and stops that agent converging on everything.
 
-  `serviceEnabled` (v39) is the one field that is not published — it decides
+  `serviceEnabled` is the one field that is not published — it decides
   whether the rest is served. It lives on the document so policy and payload
   cannot drift and so `MetadataStore`'s durable restore brings both back after
-  a restart. Nil means enabled for the rolling-upgrade reason above.
+  a restart. A live payload must explicitly carry this policy; absence must not enable it.
 
   `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
   paths. That is deliberate — the agent must serve exactly what the last sync
@@ -582,13 +462,14 @@ The rest of the package is vocabulary used on both sides:
   per host all at the user-data cap. If it ever needs moving, the lever is an
   IMDS-specific limit below `CloudInitUserDataFormat.maxBytes`, not a second
   transport.
-- **`HypervisorType`** (`HypervisorTypes.swift`) — `qemu` / `firecracker`,
+- **`HypervisorType`** (`HypervisorTypes.swift`) — `qemu` / `firecracker` / `apple_virtualization`,
   the driver-registry key. `HypervisorSupport` and `HypervisorCapabilities`
   describe what each agent probed at registration (acceleration, pause,
   snapshots, direct kernel boot, limits).
-- **`VMStatus`** (`VMModels.swift`) — observed status with tolerant decoding
-  to `.unknown` (contrast with the strict `DesiredVMStatus`), plus
-  `isTransitional`.
+- **`VMStatus`** (`VMModels.swift`) — observed status with legacy JSON decoding
+  that maps unknown strings to `.unknown`, plus `isTransitional`. Binary protocol
+  validation rejects unspecified and unrecognized enum tags; the tolerant JSON
+  behavior does not apply to binary workload messages.
 - **Sandbox types** (`SandboxModels.swift`) — `SandboxSpec`, `SandboxStatus`
   (adds `.exited`/`.stopped`), `RegistryCredential`.
 - **Images** — `ArtifactKind` (`disk-image`/`kernel`/`initramfs`/`rootfs`),
@@ -617,8 +498,8 @@ expected encode/decode flows and compatibility behavior.
 
 STR-90 introduced the shared vocabulary without a live realization capability.
 STR-91 enables the agent consumer and generation-scoped guest observations on
-exact wire v72. Control plane and agent builds must match; v69 agents cannot
-register and acknowledge guest intent without realizing it.
+Protobuf major 1. Its semantics are part of the baseline; successful
+registration must not let an agent acknowledge guest intent without realizing it.
 
 `DesiredVMState.guestConfig: GuestConfig?` extends the VM's existing desired
 state. It uses **the enclosing VM generation**: every accepted edit must bump
@@ -676,13 +557,12 @@ capability checks, generation guarding, and content-free observations. STR-92
 owns persistence, API/UI/CLI integration, transactionally accepted generation
 bumps, and projection into desired state. Schema availability alone does not
 mean a guest agent supports realization. Older stored payloads missing the field
-remain decodable; realization-capable live peers use the current exact wire v72
-registration.
+remain decodable; live workload peers negotiate Protobuf major 1.
 
-STR-265 reserves wire v66 for `AgentResources.memoryAccounting`, with physical,
+The major 1 baseline includes `AgentResources.memoryAccounting`, with physical,
 host-reserved, workload-effective, remaining allocatable, and QEMU allowance
 bytes. Remaining bytes are already net of host reserve and backend overhead.
-Control plane and agent builds must be coordinated; v65 carries host density.
+These accounting semantics are part of the baseline.
 
 ### Guest realization observations (STR-91, following STR-90)
 
@@ -694,7 +574,7 @@ sysctls (`key`, nullable `value`). No file contents or command output are report
 Success requires complete identities and no error; failure may contain partial
 facts but also sets the existing VM `lastError` / `failedGeneration` fields.
 Stored payloads without this optional field decode as nil. Guest realization
-and observations ship together on exact wire v72.
+and observations are part of Protobuf major 1.
 
 Host/VM guest control adds `converge_guest_config` (`generation`, `guest_config`)
 and `guest_config_state` (`nonce`, `observation`). These are additive to the
@@ -703,13 +583,13 @@ daemon advertises `capabilities: ["guest_config_convergence"]` in its v4 `pong`.
 The host requires that capability before sending the request; v0.1.2 and other
 non-advertising guests wait for an explicit upgrade without receiving intent.
 First-boot installation is pinned to v0.1.3, whose capability-bearing guest
-artifacts and manifest must be published before wire-v72 rollout. Existing VMs
+artifacts and manifest must be published before deploying guest realization. Existing VMs
 are never automatically updated. The host client performs the v4 ping handshake
 on the same connection, and every reply is checked against that boot nonce. Generic guest-control lines
 remain bounded at 1 MiB. Only `converge_guest_config` requests and their response
 line use a 4 MiB bound, including when convergence is the first control frame.
 The bound derives from worst-case JSON escaping of the existing STR-90 field
-limits; the guest-control protocol remains v4, independently of workload wire v72.
+limits; the guest-control protocol remains v4, independently of workload Protobuf major 1.
 
 Item-level failures are explicit: optional `failedItem` contains `section`
 (`packages`, `files`, `services`, or `sysctls`), `identity` (package/service
@@ -722,10 +602,10 @@ metadata journal.
 ## Update-only bridge
 
 `GET /agent/update/v1` is a separate frozen, SVID-authenticated contract for
-bridge-capable binaries. It carries only the control plane's workload version
-and an already authorized update artifact. It neither registers a workload
-session nor relaxes exact workload equality. Bridge desired-state polls carry
-`Strato-Workload-Wire-Version`; mismatches are rejected before assembly.
+bridge-capable binaries. It carries only the control plane's protocol
+major and an already authorized update artifact. It does not register a workload
+session. Workload desired-state polls carry the negotiated session ID in
+`Strato-Agent-Session`; stale or absent sessions are rejected before assembly.
 See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).
 
 ### Guest configuration terminal retry fence (STR-92, wire v71)
@@ -739,5 +619,5 @@ operation outcome. Dependency waits remain retryable and do not stamp this field
 The persisted verdict returns as `DesiredVMState.guestConfigFailedGeneration`.
 A restarted agent may adopt the VM and perform preceding host steps, but refuses
 the guest step at that generation before invoking its transport. Only a newer VM
-generation permits another attempt. The control plane and agent must both use
-wire v71; the independent guest-control protocol remains v4.
+generation permits another attempt. This retry fence belongs to the Protobuf major 1 baseline; the independent
+guest-control protocol remains v4.

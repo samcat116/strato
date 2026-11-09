@@ -365,7 +365,7 @@ enum Telemetry {
         at instant: ClusterInstant,
         factory: (any MetricsFactory)? = nil
     ) {
-        let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
+        let dimensions = [("agent", agentName), ("dependency", observation.id.protocolValue)]
         let available = observation.allowsNewWork(
             receivedAt: receivedAt,
             at: instant.date,
@@ -390,7 +390,7 @@ enum Telemetry {
     ) {
         for observation in observations {
             recordDependencyAvailability(
-                dimensions: [("agent", agentName), ("dependency", observation.id.rawValue)],
+                dimensions: [("agent", agentName), ("dependency", observation.id.protocolValue)],
                 available: false,
                 factory: factory)
         }
@@ -404,10 +404,10 @@ enum Telemetry {
         currentObservations: [NodeDependencyObservation],
         factory: (any MetricsFactory)? = nil
     ) {
-        let currentIDs = Set(currentObservations.map { $0.id.rawValue })
+        let currentIDs = Set(currentObservations.map { $0.id.protocolValue })
         recordDependenciesUnavailable(
             agentName: agentName,
-            observations: previousObservations.filter { !currentIDs.contains($0.id.rawValue) },
+            observations: previousObservations.filter { !currentIDs.contains($0.id.protocolValue) },
             factory: factory)
     }
 
@@ -536,15 +536,15 @@ enum Telemetry {
         recordVolumeIODimension(
             agentName: agentName,
             dimension: "iops",
-            configured: samples.map { $0.configured?.iopsTotal },
-            applied: samples.map { $0.applied?.iopsTotal },
+            configured: samples.map { $0.configured.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil } },
+            applied: samples.map { $0.applied.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil } },
             observed: samples.map { $0.observedRate?.iops },
             factory: factory)
         recordVolumeIODimension(
             agentName: agentName,
             dimension: "bytes_per_second",
-            configured: samples.map { $0.configured?.bpsTotal },
-            applied: samples.map { $0.applied?.bpsTotal },
+            configured: samples.map { $0.configured.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil } },
+            applied: samples.map { $0.applied.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil } },
             observed: samples.map { $0.observedRate?.bytesPerSecond },
             factory: factory)
     }
@@ -858,17 +858,32 @@ enum Telemetry {
                 label: label, value: value, factory: factory)
         }
         for (signal, label, value) in [
-            ("swap_in_pages_total", "strato_agent_swap_in_pages_total", telemetry.swapInPagesTotal),
-            ("swap_out_pages_total", "strato_agent_swap_out_pages_total", telemetry.swapOutPagesTotal),
-            ("zram_original_bytes", "strato_agent_zram_original_bytes", telemetry.zramOriginalBytes),
+            (
+                "swap_in_pages_total", "strato_agent_swap_in_pages_total",
+                (telemetry.hasSwapInPagesTotal ? telemetry.swapInPagesTotal : nil)
+            ),
+            (
+                "swap_out_pages_total", "strato_agent_swap_out_pages_total",
+                (telemetry.hasSwapOutPagesTotal ? telemetry.swapOutPagesTotal : nil)
+            ),
+            (
+                "zram_original_bytes", "strato_agent_zram_original_bytes",
+                (telemetry.hasZramOriginalBytes ? telemetry.zramOriginalBytes : nil)
+            ),
         ] {
             recordRemoteValue(
                 prefix: "strato_agent", base: base, signal: signal,
                 label: label, value: value ?? .unavailable, factory: factory)
         }
         for (signal, label, value) in [
-            ("swap_in_pages_per_second", "strato_agent_swap_in_pages_per_second", telemetry.swapInPagesPerSecond),
-            ("swap_out_pages_per_second", "strato_agent_swap_out_pages_per_second", telemetry.swapOutPagesPerSecond),
+            (
+                "swap_in_pages_per_second", "strato_agent_swap_in_pages_per_second",
+                (telemetry.hasSwapInPagesPerSecond ? telemetry.swapInPagesPerSecond : nil)
+            ),
+            (
+                "swap_out_pages_per_second", "strato_agent_swap_out_pages_per_second",
+                (telemetry.hasSwapOutPagesPerSecond ? telemetry.swapOutPagesPerSecond : nil)
+            ),
         ] {
             recordGauge(
                 label: "strato_agent_resource_signal_available", dimensions: base + [("signal", signal)],
@@ -876,8 +891,16 @@ enum Telemetry {
             if let value { recordGauge(label: label, dimensions: base, value: value, factory: factory) }
         }
         for (tier, original, compressed) in [
-            ("zswap", telemetry.zswapStoredBytes.value, telemetry.zswapPoolBytes.value),
-            ("zram", telemetry.zramOriginalBytes?.value, telemetry.zramUsedBytes.value),
+            (
+                "zswap", (telemetry.zswapStoredBytes.hasValue ? telemetry.zswapStoredBytes.value : nil),
+                (telemetry.zswapPoolBytes.hasValue ? telemetry.zswapPoolBytes.value : nil)
+            ),
+            (
+                "zram",
+                (telemetry.hasZramOriginalBytes && telemetry.zramOriginalBytes.hasValue
+                    ? telemetry.zramOriginalBytes.value : nil),
+                (telemetry.zramUsedBytes.hasValue ? telemetry.zramUsedBytes.value : nil)
+            ),
         ] {
             if let original, let compressed, compressed > 0 {
                 recordGauge(
@@ -888,24 +911,28 @@ enum Telemetry {
         for warning in ["swap_thrashing", "oom_kill"] {
             recordGauge(
                 label: "strato_agent_memory_warning", dimensions: base + [("warning", warning)],
-                value: telemetry.memoryWarnings?.contains(warning) == true ? 1 : 0, factory: factory)
+                value: telemetry.hasMemoryWarnings && telemetry.memoryWarnings.values.contains(warning) ? 1 : 0,
+                factory: factory)
         }
         recordGauge(
             label: "strato_agent_memory_profile_enabled", dimensions: base,
-            value: telemetry.memoryProfile == nil ? 0 : 1, factory: factory)
-        for tier in HostMemoryProfileConfiguration.Tier.allCases {
-            let dimensions = base + [("tier", tier.rawValue)]
+            value: telemetry.hasMemoryProfile ? 1 : 0, factory: factory)
+        for tier in HostMemoryProfileConfiguration.Tier.knownCases {
+            let dimensions = base + [("tier", tier.protocolValue)]
             recordGauge(
                 label: "strato_agent_memory_profile_configured_tier", dimensions: dimensions,
-                value: telemetry.memoryProfile?.configured?.tier == tier ? 1 : 0, factory: factory)
+                value: telemetry.hasMemoryProfile && telemetry.memoryProfile.hasConfigured
+                    && telemetry.memoryProfile.configured.tier == tier ? 1 : 0, factory: factory)
             recordGauge(
                 label: "strato_agent_memory_profile_effective_tier", dimensions: dimensions,
-                value: telemetry.memoryProfile?.effectiveTier == tier ? 1 : 0, factory: factory)
+                value: telemetry.hasMemoryProfile && telemetry.memoryProfile.hasEffectiveTier
+                    && telemetry.memoryProfile.effectiveTier == tier ? 1 : 0, factory: factory)
         }
-        if let profile = telemetry.memoryProfile {
+        if telemetry.hasMemoryProfile {
+            let profile = telemetry.memoryProfile
             recordGauge(
                 label: "strato_agent_memory_profile_healthy", dimensions: base,
-                value: profile.reason == nil ? 1 : 0, factory: factory)
+                value: profile.hasReason ? 0 : 1, factory: factory)
         }
         let mglru = telemetry.mglruEnabled
         recordRemoteValue(
@@ -913,7 +940,7 @@ enum Telemetry {
             label: "strato_agent_mglru_enabled",
             value: ResourceTelemetryValue(
                 availability: mglru.availability,
-                value: mglru.value.map { $0 ? 1 : 0 }),
+                value: mglru.hasValue ? (mglru.value ? 1 : 0) : nil),
             factory: factory)
     }
 
@@ -931,7 +958,7 @@ enum Telemetry {
         let base = [
             ("agent_id", agentID),
             ("workload_id", workloadID),
-            ("kind", kind.rawValue),
+            ("kind", kind.protocolValue),
         ]
 
         if let telemetry {
@@ -1048,7 +1075,8 @@ enum Telemetry {
             ),
             (
                 "balloon_actual_bytes", "strato_workload_balloon_actual_bytes",
-                balloon.flatMap(\.balloonActualBytes).map(ResourceTelemetryValue.available)
+                balloon.flatMap { $0.hasBalloonActualBytes ? $0.balloonActualBytes : nil }.map(
+                    ResourceTelemetryValue.available)
                     ?? .unavailable
             ),
         ] {
@@ -1070,7 +1098,7 @@ enum Telemetry {
         let base = [
             ("agent_id", agentID),
             ("workload_id", workloadID),
-            ("kind", kind.rawValue),
+            ("kind", kind.protocolValue),
         ]
         recordWorkloadResourceTelemetry(
             agentID: agentID, workloadID: workloadID, kind: kind,
@@ -1105,7 +1133,9 @@ enum Telemetry {
         pressure: PressureStallTelemetry,
         factory: (any MetricsFactory)?
     ) {
-        for (stall, sample) in [("some", pressure.some), ("full", pressure.full)] {
+        for (stall, sample) in [
+            ("some", pressure.hasSome ? pressure.some : nil), ("full", pressure.hasFull ? pressure.full : nil),
+        ] {
             let dimensions = base + [("resource", resource), ("stall", stall)]
             let available = pressure.availability == .available && sample != nil
             recordAvailability(
@@ -1142,18 +1172,18 @@ enum Telemetry {
         scale: Double = 1,
         factory: (any MetricsFactory)?
     ) {
-        let available = value.availability == .available && value.value != nil
+        let available = value.availability == .available && value.hasValue
         recordAvailability(
             prefix: prefix, base: base, signal: signal,
             available: available, factory: factory)
         let dimensions = base + extraDimensions
-        guard let raw = value.value, available else {
+        guard available else {
             destroyGauge(label: label, dimensions: dimensions, factory: factory)
             return
         }
         recordGauge(
             label: label, dimensions: dimensions,
-            value: Double(raw) * scale, factory: factory)
+            value: Double(value.value) * scale, factory: factory)
     }
 
     private static func recordAvailability(
@@ -1228,7 +1258,7 @@ enum Telemetry {
 private extension ResourcePressureHealth {
     var metricValue: Double {
         switch self {
-        case .unknown: 0
+        case .unknown, .unspecified, .UNRECOGNIZED: 0
         case .healthy: 1
         case .pressured: 2
         case .critical: 3

@@ -56,7 +56,7 @@ final class VolumeIOLimitsTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion,
+        app: Application, named name: String, protocolMajor: Int = Int(AgentProtocolCompatibility.major),
         supportsVolumeIOLimits: Bool? = true, includeFirecracker: Bool = false
     ) async throws -> String {
         var hypervisors = [
@@ -71,7 +71,7 @@ final class VolumeIOLimitsTests {
         return try await TestDataBuilder(db: app.db).registerAgent(
             on: app, named: name, hostname: "\(name).test",
             hypervisors: hypervisors,
-            protocolVersion: protocolVersion)
+            protocolMajor: protocolMajor)
     }
 
     /// Inserts a resting volume owned by `user`, with the creator's admin
@@ -421,9 +421,9 @@ final class VolumeIOLimitsTests {
                 iopsTotal: 500, bpsTotal: nil)
 
             var message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            var entry = try #require(message.volumes.first)
-            #expect(entry.ioLimits?.iopsTotal == 500)
-            #expect(entry.ioLimits?.bpsTotal == nil)
+            var entry = try #require(message.volumes.values.first)
+            #expect(entry.hasIoLimits && entry.ioLimits.hasIopsTotal && entry.ioLimits.iopsTotal == 500)
+            #expect(!entry.ioLimits.hasBpsTotal)
 
             // An all-null pair leaves as an *absent* field, not as a
             // present-but-empty object. Two spellings of "uncapped" is what
@@ -433,8 +433,8 @@ final class VolumeIOLimitsTests {
             try await volume.save(on: app.db)
 
             message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            entry = try #require(message.volumes.first)
-            #expect(entry.ioLimits == nil)
+            entry = try #require(message.volumes.values.first)
+            #expect(!entry.hasIoLimits)
         }
     }
 
@@ -557,7 +557,7 @@ final class VolumeIOLimitsTests {
 
             let stored = try #require(try await Volume.find(volume.id!, on: app.db))
             #expect(stored.appliedIOLimits?.iopsTotal == 500)
-            #expect(stored.appliedIOLimits?.bpsTotal == nil)
+            #expect(stored.appliedIOLimits?.hasBpsTotal == false)
             // Requested and applied agree, which is the only way a caller can
             // tell a ceiling is actually in force.
             #expect(stored.ioLimits == stored.appliedIOLimits)

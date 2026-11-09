@@ -55,7 +55,7 @@ struct InventoryPresenceConnectionTests {
             #expect((refreshed != nil) == !revoked)
             let persisted = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(persisted.administrativelyOffline == revoked)
-            if !revoked { #expect(persisted.availableCPU == resources.availableCPU) }
+            if !revoked { #expect(persisted.availableCPU == resources.availableCpu) }
             // A subsequent fenced operation must also be able to use the only
             // connection: the report must release its connection and lock.
             let agentID = try agent.requireID()

@@ -13,8 +13,8 @@ struct SandboxCheckpointManifestTests {
         let directory = NSTemporaryDirectory() + "checkpoint-integrity-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: directory) }
-        for kind in SandboxSnapshotArtifactKind.allCases {
-            try Data("\(kind.rawValue)-checkpoint".utf8).write(
+        for kind in SandboxSnapshotArtifactKind.knownCases {
+            try Data("\(kind.protocolValue)-checkpoint".utf8).write(
                 to: URL(fileURLWithPath: directory + "/" + kind.filename))
         }
         try body(directory)
@@ -51,7 +51,7 @@ struct SandboxCheckpointManifestTests {
         }
     }
 
-    @Test(arguments: SandboxSnapshotArtifactKind.allCases)
+    @Test(arguments: SandboxSnapshotArtifactKind.knownCases)
     func corruptionFailsClosed(_ kind: SandboxSnapshotArtifactKind) throws {
         try withArchive { directory in
             try publish(directory)
@@ -65,7 +65,7 @@ struct SandboxCheckpointManifestTests {
         }
     }
 
-    @Test(arguments: SandboxSnapshotArtifactKind.allCases)
+    @Test(arguments: SandboxSnapshotArtifactKind.knownCases)
     func missingArtifactPreventsPublish(_ kind: SandboxSnapshotArtifactKind) throws {
         try withArchive { directory in
             try FileManager.default.removeItem(atPath: directory + "/" + kind.filename)
@@ -121,7 +121,7 @@ struct SandboxCheckpointManifestTests {
         }
     }
 
-    @Test(arguments: SandboxSnapshotArtifactKind.allCases)
+    @Test(arguments: SandboxSnapshotArtifactKind.knownCases)
     func symlinkArtifactIsRejected(_ kind: SandboxSnapshotArtifactKind) throws {
         try withArchive { directory in
             let path = directory + "/" + kind.filename

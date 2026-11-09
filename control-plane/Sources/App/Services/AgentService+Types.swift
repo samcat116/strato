@@ -15,10 +15,9 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
             return "Invalid response from agent: \(message)"
         case .unsupportedProtocolVersion(let agentName, let version):
             return
-                "Agent '\(agentName)' registered with wire protocol version \(version); this control plane "
-                + "requires exactly v\(WireProtocol.currentVersion). Strato deploys the control plane and "
-                + "agents together. Deploy matching builds; an agent rejected before self-update must be "
-                + "updated manually."
+                "Agent '\(agentName)' offered protocol major \(version); this control plane "
+                + "requires Protobuf protocol major \(AgentProtocolCompatibility.major)."
+
         case .missingOrganizationScope(let agentName):
             return
                 "Agent '\(agentName)' is new but its registration token carries no organization; "

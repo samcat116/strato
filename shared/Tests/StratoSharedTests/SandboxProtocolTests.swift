@@ -51,26 +51,26 @@ struct SandboxProtocolTests {
         )
         let decoded = try throughEnvelope(message)
 
-        #expect(decoded.sandboxes.count == 1)
-        let sandbox = try #require(decoded.sandboxes.first)
-        #expect(sandbox.sandboxId == sandboxId)
-        #expect(sandbox.desiredStatus == .running)
-        #expect(sandbox.generation == 3)
-        #expect(sandbox.spec.image == "ghcr.io/acme/worker:v3")
-        #expect(sandbox.spec.imageDigest?.hasPrefix("sha256:") == true)
-        #expect(sandbox.spec.cpus == 2)
-        #expect(sandbox.spec.memoryBytes == 1 << 30)
-        #expect(sandbox.spec.entrypoint == ["/usr/bin/worker"])
-        #expect(sandbox.spec.cmd == ["--queue", "default"])
-        #expect(sandbox.spec.env == ["LOG_LEVEL": "debug", "QUEUE_URL": "amqp://mq"])
-        #expect(sandbox.spec.workingDir == "/srv")
-        #expect(sandbox.spec.network?.network == "default")
-        #expect(sandbox.spec.network?.ipAddress == "192.168.1.20")
-        #expect(sandbox.registryCredential?.registry == "ghcr.io")
-        #expect(sandbox.registryCredential?.username == "pull-bot")
-        #expect(sandbox.registryCredential?.password == "short-lived-token")
-        #expect(sandbox.registryCredential?.expiresAt == Fixtures.laterDate)
-        #expect(sandbox.registryCredential?.bearer == true)
+        #expect(decoded._jsonSandboxes.count == 1)
+        let sandbox = try #require(decoded._jsonSandboxes.first)
+        #expect(sandbox._jsonSandboxId == sandboxId)
+        #expect(sandbox._jsonDesiredStatus == .running)
+        #expect(sandbox._jsonGeneration == 3)
+        #expect(sandbox._jsonSpec._jsonImage == "ghcr.io/acme/worker:v3")
+        #expect(sandbox._jsonSpec._jsonImageDigest?.hasPrefix("sha256:") == true)
+        #expect(sandbox._jsonSpec._jsonCpus == 2)
+        #expect(sandbox._jsonSpec._jsonMemoryBytes == 1 << 30)
+        #expect(sandbox._jsonSpec._jsonEntrypoint == ["/usr/bin/worker"])
+        #expect(sandbox._jsonSpec._jsonCmd == ["--queue", "default"])
+        #expect(sandbox._jsonSpec._jsonEnv == ["LOG_LEVEL": "debug", "QUEUE_URL": "amqp://mq"])
+        #expect(sandbox._jsonSpec._jsonWorkingDir == "/srv")
+        #expect(sandbox._jsonSpec._jsonNetwork?._jsonNetwork == "default")
+        #expect(sandbox._jsonSpec._jsonNetwork?._jsonIpAddress == "192.168.1.20")
+        #expect(sandbox._jsonRegistryCredential?._jsonRegistry == "ghcr.io")
+        #expect(sandbox._jsonRegistryCredential?._jsonUsername == "pull-bot")
+        #expect(sandbox._jsonRegistryCredential?._jsonPassword == "short-lived-token")
+        #expect(sandbox._jsonRegistryCredential?._jsonExpiresAt == Fixtures.laterDate)
+        #expect(sandbox._jsonRegistryCredential?._jsonBearer == true)
     }
 
     @Test("RegistryCredential requires its authentication mode")
@@ -91,15 +91,15 @@ struct SandboxProtocolTests {
         )
         let decoded = try roundTrip(state)
 
-        #expect(decoded.spec.image == "docker.io/library/alpine:3.20")
-        #expect(decoded.spec.imageDigest == nil)
-        #expect(decoded.spec.entrypoint == nil)
-        #expect(decoded.spec.cmd == nil)
-        #expect(decoded.spec.env.isEmpty)
-        #expect(decoded.spec.workingDir == nil)
-        #expect(decoded.spec.network == nil)
-        #expect(decoded.registryCredential == nil)
-        #expect(decoded.desiredStatus == .stopped)
+        #expect(decoded._jsonSpec._jsonImage == "docker.io/library/alpine:3.20")
+        #expect(decoded._jsonSpec._jsonImageDigest == nil)
+        #expect(decoded._jsonSpec._jsonEntrypoint == nil)
+        #expect(decoded._jsonSpec._jsonCmd == nil)
+        #expect(decoded._jsonSpec._jsonEnv.isEmpty)
+        #expect(decoded._jsonSpec._jsonWorkingDir == nil)
+        #expect(decoded._jsonSpec._jsonNetwork == nil)
+        #expect(decoded._jsonRegistryCredential == nil)
+        #expect(decoded._jsonDesiredStatus == .stopped)
     }
 
     @Test("Fork restore reference round-trips in spec and desired state")
@@ -118,7 +118,7 @@ struct SandboxProtocolTests {
             generation: 1)
 
         let decoded = try roundTrip(state)
-        #expect(decoded.spec.restoreFrom == restore)
+        #expect(decoded._jsonSpec._jsonRestoreFrom == restore)
     }
 
     @Test("Captured facts advertise fork layout and decode legacy omission")
@@ -131,7 +131,7 @@ struct SandboxProtocolTests {
             guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
             forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
         let decoded = try roundTrip(facts)
-        #expect(decoded.forkLayoutVersion == SandboxSnapshotForkLayout.currentVersion)
+        #expect(decoded._jsonForkLayoutVersion == SandboxSnapshotForkLayout.currentVersion)
 
         // Every field is optional and absence means "unknown", never "zero":
         // a footprint the agent could not measure must not silently become a
@@ -141,9 +141,9 @@ struct SandboxProtocolTests {
              "storagePath":"/snapshots/1","firecrackerVersion":"1.13.1","architecture":"x86_64"}
             """
         let sparse = try decodeJSON(ObservedSnapshotFacts.self, from: legacy)
-        #expect(sparse.forkLayoutVersion == nil)
-        #expect(sparse.cpuTemplate == nil)
-        #expect(sparse.sizeBytes == 10)
+        #expect(sparse._jsonForkLayoutVersion == nil)
+        #expect(sparse._jsonCpuTemplate == nil)
+        #expect(sparse._jsonSizeBytes == 10)
     }
 
     @Test("Sandbox fields actually reach the wire")
@@ -195,17 +195,17 @@ struct SandboxProtocolTests {
         )
         let decoded = try throughEnvelope(report)
 
-        #expect(decoded.sandboxes.count == 2)
-        #expect(decoded.sandboxes[0].sandboxId == Fixtures.uuidA)
-        #expect(decoded.sandboxes[0].status == .exited)
-        #expect(decoded.sandboxes[0].observedGeneration == 5)
-        #expect(decoded.sandboxes[0].exitCode == 137)
-        #expect(decoded.sandboxes[1].status == .starting)
-        #expect(decoded.sandboxes[1].convergencePhase == "pulling image")
-        #expect(decoded.sandboxes[1].lastError == "previous attempt: registry unreachable")
-        #expect(decoded.sandboxes[1].failedGeneration == 2)
-        #expect(decoded.sandboxes[1].failureClassification == .transient)
-        #expect(decoded.sandboxes[1].exitCode == nil)
+        #expect(decoded._jsonSandboxes.count == 2)
+        #expect(decoded._jsonSandboxes[0]._jsonSandboxId == Fixtures.uuidA)
+        #expect(decoded._jsonSandboxes[0]._jsonStatus == .exited)
+        #expect(decoded._jsonSandboxes[0]._jsonObservedGeneration == 5)
+        #expect(decoded._jsonSandboxes[0]._jsonExitCode == 137)
+        #expect(decoded._jsonSandboxes[1]._jsonStatus == .starting)
+        #expect(decoded._jsonSandboxes[1]._jsonConvergencePhase == "pulling image")
+        #expect(decoded._jsonSandboxes[1]._jsonLastError == "previous attempt: registry unreachable")
+        #expect(decoded._jsonSandboxes[1]._jsonFailedGeneration == 2)
+        #expect(decoded._jsonSandboxes[1]._jsonFailureClassification == .transient)
+        #expect(decoded._jsonSandboxes[1]._jsonExitCode == nil)
     }
 
     @Test("The current observed schema rejects a missing sandbox inventory")
@@ -247,7 +247,7 @@ struct SandboxProtocolTests {
         #expect(DesiredSandboxStatus.stopped.isSatisfied(by: .exited))
         #expect(!DesiredSandboxStatus.stopped.isSatisfied(by: .running))
         // Absence is confirmed by omission from the observed set, never by a status.
-        for status in SandboxStatus.allCases {
+        for status in SandboxStatus.knownCases {
             #expect(!DesiredSandboxStatus.absent.isSatisfied(by: status))
         }
     }

@@ -115,12 +115,12 @@ struct LoadBalancerReconcilerTests {
             observedAt: checkedAt)
 
         #expect(result.count == 2)
-        #expect(result[0].id == firstBackendID)
+        #expect(result[0].id == firstBackendID.uuidString)
         #expect(result[0].healthStatus == .online)
-        #expect(result[0].lastCheckedAt == checkedAt)
-        #expect(result[1].id == secondBackendID)
+        #expect(result[0].lastCheckedAt.date == checkedAt)
+        #expect(result[1].id == secondBackendID.uuidString)
         #expect(result[1].healthStatus == .offline)
-        #expect(result[1].lastCheckedAt == checkedAt)
+        #expect(result[1].lastCheckedAt.date == checkedAt)
     }
 
     @Test("A missing service monitor remains unknown without a fabricated timestamp")
@@ -132,7 +132,7 @@ struct LoadBalancerReconcilerTests {
 
         let backend = try #require(result.first)
         #expect(backend.healthStatus == .unknown)
-        #expect(backend.lastCheckedAt == nil)
+        #expect(!backend.hasLastCheckedAt)
     }
 
     @Test("A backend stays unknown until every listener monitor has reported")
@@ -159,7 +159,7 @@ struct LoadBalancerReconcilerTests {
 
         let backend = try #require(result.first)
         #expect(backend.healthStatus == .unknown)
-        #expect(backend.lastCheckedAt == checkedAt)
+        #expect(backend.lastCheckedAt.date == checkedAt)
     }
 
     @Test("Reconciliation is idempotent, preserves observed health, and removes stale rows")
@@ -188,8 +188,8 @@ struct LoadBalancerReconcilerTests {
 
         #expect(first == second)
         #expect(first.first?.status == .active)
-        #expect(first.first?.backends.first?.healthStatus == .offline)
-        #expect(first.first?.backends.first?.lastCheckedAt == checkedAt)
+        #expect(first.first?.backends.values.first?.healthStatus == .offline)
+        #expect(first.first?.backends.values.first?.lastCheckedAt.date == checkedAt)
         #expect(await actuator.createCount() == 1)
         #expect(await actuator.rowCount() == 1)
         #expect(
@@ -295,7 +295,7 @@ private actor FakeLoadBalancerActuator: LoadBalancerActuator {
         }
         rows[rowUUID] = ManagedLoadBalancerObservation(
             rowUUID: rowUUID,
-            ownerID: desired.id,
+            ownerID: validatedProtocolUUID(desired.id),
             networkID: networkID,
             switchNames: switchNames,
             routerNames: [routerName])

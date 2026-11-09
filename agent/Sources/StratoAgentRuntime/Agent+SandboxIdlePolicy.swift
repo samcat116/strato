@@ -13,14 +13,15 @@ extension Agent {
         guard policy.enabled, dependenciesReady else { return .disabled }
         guard item.kind == .sandbox, let desired = item.desiredSandbox,
             desired.desiredStatus == .suspended, desired.generation == item.generation,
-            UUID(uuidString: item.id) == desired.sandboxId,
-            let admittedBytes = desired.suspensionStorageBudgetBytes, admittedBytes > 0,
-            let fence = desired.automaticSuspensionFence, fence.isValid, fence.generation == item.generation
+            UUID(uuidString: item.id) == UUID(uuidString: desired.sandboxID),
+            desired.hasSuspensionStorageBudgetBytes, desired.suspensionStorageBudgetBytes > 0,
+            desired.hasAutomaticSuspensionFence, desired.automaticSuspensionFence.isValid,
+            desired.automaticSuspensionFence.generation == item.generation
         else { return .unknownActivity }
         let runtime = try requireSandboxRuntime()
         let verdict = await runtime.prepareIdleSuspension(sandboxId: item.id, policy: policy)
         guard verdict == .eligible else { return verdict }
-        try await sandboxReconcileSuspend(item, automatic: true, fence: fence)
+        try await sandboxReconcileSuspend(item, automatic: true, fence: desired.automaticSuspensionFence)
         return .eligible
     }
 }

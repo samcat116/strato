@@ -11,7 +11,7 @@ import AppTestSupport
 struct VMFleetRunTests {
     private actor Deliveries {
         var ids: [String] = []
-        func record(_ message: GuestExecStartMessage) { ids.append(message.sessionId) }
+        func record(_ message: GuestExecStartMessage) { ids.append(message.sessionID) }
         func count() -> Int { ids.count }
     }
 

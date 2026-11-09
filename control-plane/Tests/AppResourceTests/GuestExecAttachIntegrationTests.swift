@@ -284,7 +284,7 @@ struct GuestExecAttachIntegrationTests {
                 url: "ws://127.0.0.1:\(port)/agent/ws?name=\(agentName)",
                 headers: agentHeaders,
                 on: app.eventLoopGroup)
-            agent.send(text: try encodeGuestExecAgentRegister(agentName: agentName))
+            agent.send(binary: try encodeGuestExecAgentRegister(agentName: agentName))
             let registered = try await agent.nextEnvelope()
             #expect(registered.type == .agentRegisterResponse)
 
@@ -310,6 +310,9 @@ struct GuestExecAttachIntegrationTests {
             let collection: String
             let resourceId: String
             switch resourceKind {
+            case .unspecified, .UNRECOGNIZED:
+                Issue.record("Unexpected workload kind in exec test fixture")
+                return
             case .sandbox:
                 let sandbox = try await builder.createSandbox(name: "exec-ws-sb", project: project)
                 sandbox.hypervisorId = try registeredAgent.requireID().uuidString
@@ -358,6 +361,9 @@ struct GuestExecAttachIntegrationTests {
                 .filter(\.$eventType == "vm.exec.requested")
                 .all()
             switch resourceKind {
+            case .unspecified, .UNRECOGNIZED:
+                Issue.record("Unexpected workload kind in exec test fixture")
+                return
             case .sandbox:
                 #expect(requested.isEmpty)
             case .virtualMachine:
@@ -415,11 +421,11 @@ struct GuestExecAttachIntegrationTests {
                     return try envelope.decode(as: GuestExecStartMessage.self)
                 }
             }()
-            #expect(start.sessionId == session.sessionId)
+            #expect(start.sessionID == session.sessionId)
             #expect(start.resourceKind == resourceKind)
-            #expect(start.resourceId == resourceId)
-            #expect(start.command == ["/bin/echo", "hello"])
-            #expect(start.env == ["STR84_SECRET": environmentSentinel])
+            #expect(start.resourceID == resourceId)
+            #expect(start.command.values == ["/bin/echo", "hello"])
+            #expect(start.env.values == ["STR84_SECRET": environmentSentinel])
             #expect(start.workingDir == workingDirectorySentinel)
             #expect(start.tty == true)
 
@@ -440,7 +446,7 @@ struct GuestExecAttachIntegrationTests {
 
             // Agent reports the spawn; the browser sees the ready frame.
             agent.send(
-                text: try encodeEnvelope(
+                binary: try encodeEnvelope(
                     GuestExecStartedMessage(sessionId: session.sessionId)))
             let ready = try await browser.nextControlFrame()
             #expect(ready.type == "ready")
@@ -449,6 +455,9 @@ struct GuestExecAttachIntegrationTests {
                 .filter(\.$eventType == "vm.exec.started")
                 .all()
             switch resourceKind {
+            case .unspecified, .UNRECOGNIZED:
+                Issue.record("Unexpected workload kind in exec test fixture")
+                return
             case .sandbox:
                 #expect(startedEvents.isEmpty)
             case .virtualMachine:
@@ -470,7 +479,7 @@ struct GuestExecAttachIntegrationTests {
 
             // Output bytes flow to the browser as a binary frame.
             agent.send(
-                text: try encodeEnvelope(
+                binary: try encodeEnvelope(
                     GuestExecOutputMessage(
                         sessionId: session.sessionId, stream: "stdout",
                         rawData: Data("hello\n".utf8))))
@@ -480,7 +489,7 @@ struct GuestExecAttachIntegrationTests {
                     == .binary(
                         outputMode.frame(streamTag: 0x01, payload: Data("hello\n".utf8))))
             agent.send(
-                text: try encodeEnvelope(
+                binary: try encodeEnvelope(
                     GuestExecOutputMessage(
                         sessionId: session.sessionId, stream: "stderr",
                         rawData: Data("warning\n".utf8))))
@@ -497,7 +506,7 @@ struct GuestExecAttachIntegrationTests {
             let resizeEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
             #expect(resizeEnvelope.type == .guestExecResize)
             let resize = try resizeEnvelope.decode(as: GuestExecResizeMessage.self)
-            #expect(resize.sessionId == session.sessionId)
+            #expect(resize.sessionID == session.sessionId)
             #expect(resize.cols == 120)
             #expect(resize.rows == 40)
 
@@ -506,7 +515,7 @@ struct GuestExecAttachIntegrationTests {
             let inputEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
             #expect(inputEnvelope.type == .guestExecInput)
             let input = try inputEnvelope.decode(as: GuestExecInputMessage.self)
-            #expect(input.sessionId == session.sessionId)
+            #expect(input.sessionID == session.sessionId)
             #expect(input.rawData == Data("ls\n".utf8))
             #expect(input.eof == false)
 
@@ -516,7 +525,7 @@ struct GuestExecAttachIntegrationTests {
             let eofEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
             #expect(eofEnvelope.type == .guestExecInput)
             let eof = try eofEnvelope.decode(as: GuestExecInputMessage.self)
-            #expect(eof.sessionId == session.sessionId)
+            #expect(eof.sessionID == session.sessionId)
             #expect(eof.rawData == nil)
             #expect(eof.eof == true)
 
@@ -537,7 +546,7 @@ struct GuestExecAttachIntegrationTests {
                 await app.guestExecSessionManager.maintainSessions()
                 let closed = try await agent.nextEnvelope(skipping: [.desiredState])
                 #expect(closed.type == .guestExecClose)
-                #expect(try closed.decode(as: GuestExecCloseMessage.self).sessionId == session.sessionId)
+                #expect(try closed.decode(as: GuestExecCloseMessage.self).sessionID == session.sessionId)
                 #expect(try await browser.nextControlFrame().type == "error")
                 try await browser.waitForClose()
                 #expect(app.guestExecSessionManager.getSession(sessionId: session.sessionId) == nil)
@@ -555,7 +564,7 @@ struct GuestExecAttachIntegrationTests {
 
             // Exit tears the session down and closes the browser socket.
             agent.send(
-                text: try encodeEnvelope(
+                binary: try encodeEnvelope(
                     GuestExecExitMessage(sessionId: session.sessionId, exitCode: 0)))
             let exit = try await browser.nextControlFrame()
             #expect(exit.type == "exit")
@@ -567,6 +576,9 @@ struct GuestExecAttachIntegrationTests {
                 .filter(\.$eventType == "vm.exec.ended")
                 .all()
             switch resourceKind {
+            case .unspecified, .UNRECOGNIZED:
+                Issue.record("Unexpected workload kind in exec test fixture")
+                return
             case .sandbox:
                 #expect(endedEvents.isEmpty)
             case .virtualMachine:
@@ -758,12 +770,8 @@ private final class ExecWSClient: Sendable {
     ) async throws -> MessageEnvelope {
         while true {
             let frame = try await nextFrame(timeout: timeout)
-            let data: Data
-            switch frame {
-            case .binary(let d): data = d
-            case .text(let s): data = Data(s.utf8)
-            }
-            let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
+            guard case .binary(let data) = frame else { throw ExecUnexpectedFrameError(frame: frame) }
+            let envelope = try WireProtocol.decodeEnvelope(data)
             if skipping.contains(envelope.type) { continue }
             return envelope
         }
@@ -862,14 +870,12 @@ private func withExecTimeout<T: Sendable>(
     }
 }
 
-private func encodeEnvelope<T: WebSocketMessage>(_ message: T) throws -> String {
-    let envelope = try MessageEnvelope(message: message)
-    let data = try WireProtocol.makeEncoder().encode(envelope)
-    return String(decoding: data, as: UTF8.self)
+private func encodeEnvelope<T: WebSocketMessage>(_ message: T) throws -> Data {
+    try WireProtocol.encodeEnvelope(message)
 }
 
 /// A VM-vsock and sandbox-capable agent at the current wire protocol version.
-private func encodeGuestExecAgentRegister(agentName: String) throws -> String {
+private func encodeGuestExecAgentRegister(agentName: String) throws -> Data {
     try encodeEnvelope(
         AgentRegisterMessage(
             agentId: agentName,
@@ -891,7 +897,7 @@ private func encodeGuestExecAgentRegister(agentName: String) throws -> String {
                     supportsVsock: true,
                     supportsGuestExec: true)
             ],
-            protocolVersion: WireProtocol.currentVersion,
+            protocolOffer: .with { $0.major = UInt32(Int(AgentProtocolCompatibility.major)) },
             sandboxCapable: true
         ))
 }

@@ -1,0 +1,2954 @@
+syntax = "proto3";
+
+package strato.agent.v1;
+
+import "google/protobuf/timestamp.proto";
+import "strato/agent/v1/compatibility.proto";
+
+message AgentEnvelope {
+  repeated string required_capabilities = 1;
+  oneof body {
+    AgentRegisterMessage agent_register_message = 10;
+    AgentHeartbeatMessage agent_heartbeat_message = 11;
+    AgentUnregisterMessage agent_unregister_message = 12;
+    AgentRegisterResponseMessage agent_register_response_message = 13;
+    SuccessMessage success_message = 14;
+    ErrorMessage error_message = 15;
+    ConsoleConnectMessage console_connect_message = 16;
+    ConsoleDisconnectMessage console_disconnect_message = 17;
+    ConsoleDataMessage console_data_message = 18;
+    ConsoleConnectedMessage console_connected_message = 19;
+    ConsoleDisconnectedMessage console_disconnected_message = 20;
+    VMLogMessage vm_log_message = 21;
+    GuestExecStartMessage guest_exec_start_message = 22;
+    GuestExecRecordedStateMessage guest_exec_recorded_state_message = 23;
+    GuestExecRecordedAckMessage guest_exec_recorded_ack_message = 24;
+    GuestExecStartedMessage guest_exec_started_message = 25;
+    GuestExecInputMessage guest_exec_input_message = 26;
+    GuestExecOutputMessage guest_exec_output_message = 27;
+    GuestExecResizeMessage guest_exec_resize_message = 28;
+    GuestExecExitMessage guest_exec_exit_message = 29;
+    GuestExecCloseMessage guest_exec_close_message = 30;
+    GuestExecClosedMessage guest_exec_closed_message = 31;
+    SandboxLogMessage sandbox_log_message = 32;
+    DesiredStateMessage desired_state_message = 33;
+    ObservedStateReport observed_state_report = 34;
+  }
+}
+
+message AgentHeartbeatMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string agent_id = 3;
+  // Required: preserves the existing semantic contract.
+  AgentResources resources = 4;
+  // Required: preserves the existing semantic contract.
+  AgentHeartbeatMessageDependencyObservationsSection dependency_observations = 5;
+  // Optional: preserves the existing semantic contract.
+  HostResourceTelemetry host_resource_telemetry = 6;
+}
+
+message AgentRegisterMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string agent_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string hostname = 4;
+  // Required: preserves the existing semantic contract.
+  optional string version = 5;
+  // Required: preserves the existing semantic contract.
+  AgentResources resources = 6;
+  // Required: preserves the existing semantic contract.
+  optional CPUArchitecture architecture = 7;
+  // Required: preserves the existing semantic contract.
+  AgentRegisterMessageHypervisorsSection hypervisors = 8;
+  // Optional: preserves the existing semantic contract.
+  optional NetworkCapability network_capability = 9;
+  // Required: preserves the existing semantic contract.
+  ProtocolOffer protocol_offer = 10;
+  // Required: preserves the existing semantic contract.
+  optional bool sandbox_capable = 11;
+  // Required: preserves the existing semantic contract.
+  optional bool sandbox_networking_capable = 12;
+  // Required: preserves the existing semantic contract.
+  optional bool tpm_capable = 13;
+  // Required: preserves the existing semantic contract.
+  optional OperatingSystem operating_system = 14;
+  // Optional: preserves the existing semantic contract.
+  HostInfo host_info = 15;
+  // Required: preserves the existing semantic contract.
+  optional bool resolver_capable = 16;
+  // Required: preserves the existing semantic contract.
+  optional bool metadata_service_capable = 17;
+  // Optional: preserves the existing semantic contract.
+  AgentRegisterMessageResourceClassEnforcementSection resource_class_enforcement = 18;
+  // Required: preserves the existing semantic contract.
+  AgentRegisterMessageDependencyObservationsSection dependency_observations = 19;
+}
+
+message AgentRegisterResponseMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string agent_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string name = 4;
+  // Required: preserves the existing semantic contract.
+  ProtocolAgreement agreement = 5;
+}
+
+message AgentResources {
+  // Optional: preserves the existing semantic contract.
+  optional int64 available_cpu_micro_units = 1;
+  // Optional: preserves the existing semantic contract.
+  HostMemoryAccounting memory_accounting = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 total_cpu = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 available_cpu = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 total_memory = 5;
+  // Required: preserves the existing semantic contract.
+  optional int64 available_memory = 6;
+  // Required: preserves the existing semantic contract.
+  optional int64 total_disk = 7;
+  // Required: preserves the existing semantic contract.
+  optional int64 available_disk = 8;
+  // Required: preserves the existing semantic contract.
+  optional int64 physical_free_disk = 9;
+}
+
+message AgentUnregisterMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string agent_id = 3;
+}
+
+enum AgentUpdateArtifactKind {
+  AGENT_UPDATE_ARTIFACT_KIND_UNSPECIFIED = 0;
+  AGENT_UPDATE_ARTIFACT_KIND_TARBALL = 1;
+  AGENT_UPDATE_ARTIFACT_KIND_BINARY = 2;
+}
+
+message AppliedBlockDevicePolicy {
+  // Required: preserves the existing semantic contract.
+  optional bool active = 1;
+  // Required: preserves the existing semantic contract.
+  optional VolumeBlockMode requested_mode = 2;
+  // Optional: preserves the existing semantic contract.
+  optional BlockDeviceCacheMode cache_mode = 3;
+  // Optional: preserves the existing semantic contract.
+  optional BlockDeviceIOMode io_mode = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool discard = 5;
+  // Required: preserves the existing semantic contract.
+  optional bool non_rotational = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 queue_count = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string fallback_reason = 8;
+}
+
+message ArtifactInfo {
+  // Required: preserves the existing semantic contract.
+  optional ArtifactKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  optional string filename = 2;
+  // Required: preserves the existing semantic contract.
+  optional string checksum = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 size = 4;
+  // Required: preserves the existing semantic contract.
+  optional string download_url = 5;
+}
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_DISK_IMAGE = 1;
+  ARTIFACT_KIND_KERNEL = 2;
+  ARTIFACT_KIND_INITRAMFS = 3;
+  ARTIFACT_KIND_ROOTFS = 4;
+}
+
+enum BlockDeviceCacheMode {
+  BLOCK_DEVICE_CACHE_MODE_UNSPECIFIED = 0;
+  BLOCK_DEVICE_CACHE_MODE_NONE = 1;
+  BLOCK_DEVICE_CACHE_MODE_WRITEBACK = 2;
+}
+
+enum BlockDeviceIOMode {
+  BLOCK_DEVICE_IO_MODE_UNSPECIFIED = 0;
+  BLOCK_DEVICE_IO_MODE_IO_URING = 1;
+}
+
+message BootSourceDisk {
+  // Optional: preserves the existing semantic contract.
+  optional string firmware = 1;
+}
+
+message BootSourceDirectKernel {
+  // Required: preserves the existing semantic contract.
+  optional string kernel = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string initramfs = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string cmdline = 3;
+}
+
+message BootSource {
+  oneof value {
+    BootSourceDisk disk = 1;
+    BootSourceDirectKernel direct_kernel = 2;
+  }
+}
+
+enum CPUArchitecture {
+  CPU_ARCHITECTURE_UNSPECIFIED = 0;
+  CPU_ARCHITECTURE_X86_64 = 1;
+  CPU_ARCHITECTURE_ARM64 = 2;
+}
+
+enum CephMessengerMode {
+  CEPH_MESSENGER_MODE_UNSPECIFIED = 0;
+  CEPH_MESSENGER_MODE_SECURE = 1;
+}
+
+message CephVolumeStorage {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string cluster_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string fsid = 2;
+  // Required: preserves the existing semantic contract.
+  optional string pool = 3;
+  // Required: preserves the existing semantic contract.
+  optional string namespace = 4;
+  // Required: preserves the existing semantic contract.
+  optional string client_name = 5;
+  // Required: preserves the existing semantic contract.
+  CephVolumeStorageMonEndpointsSection mon_endpoints = 6;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string credential_id = 7;
+  // Required: preserves the existing semantic contract.
+  optional string keyring = 8;
+  // Required: preserves the existing semantic contract.
+  optional CephMessengerMode messenger_mode = 9;
+}
+
+message ConsoleConnectMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 4;
+  // Required: preserves the existing semantic contract.
+  optional ConsoleStream stream = 5;
+}
+
+message ConsoleConnectedMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 4;
+}
+
+message ConsoleDataMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 4;
+  // Required: preserves the existing semantic contract.
+  optional bytes data = 5;
+}
+
+message ConsoleDisconnectMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 4;
+}
+
+message ConsoleDisconnectedMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string reason = 5;
+}
+
+message ConsoleSpec {
+  // Optional: preserves the existing semantic contract.
+  optional GraphicsMode graphics = 1;
+}
+
+enum ConsoleStream {
+  CONSOLE_STREAM_UNSPECIFIED = 0;
+  CONSOLE_STREAM_SERIAL = 1;
+  CONSOLE_STREAM_VNC = 2;
+}
+
+enum SandboxGuestIdleCoverage {
+  SANDBOX_GUEST_IDLE_COVERAGE_UNSPECIFIED = 0;
+  SANDBOX_GUEST_IDLE_COVERAGE_COMPLETE = 1;
+  SANDBOX_GUEST_IDLE_COVERAGE_UNKNOWN = 2;
+}
+
+message DesiredAgentUpdate {
+  // Required: preserves the existing semantic contract.
+  optional string target_version = 1;
+  // Required: preserves the existing semantic contract.
+  optional string artifact_url = 2;
+  // Required: preserves the existing semantic contract.
+  optional string sha256 = 3;
+  // Required: preserves the existing semantic contract.
+  optional AgentUpdateArtifactKind artifact_kind = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string tarball_member = 5;
+}
+
+message DesiredCephCredentialRevocation {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string cluster_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string credential_id = 2;
+}
+
+message DesiredDNSRecord {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Required: preserves the existing semantic contract.
+  optional string type = 2;
+  // Required: preserves the existing semantic contract.
+  DesiredDNSRecordValuesSection values = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 ttl = 4;
+}
+
+message DesiredDNSZone {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string zone_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string zone_name = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  DesiredDNSZoneNetworkIdsSection network_ids = 3;
+  // Required: preserves the existing semantic contract.
+  DesiredDNSZoneRecordsSection records = 4;
+  // Required: preserves the existing semantic contract.
+  optional string records_hash = 5;
+}
+
+message DesiredFloatingIP {
+  // Required: preserves the existing semantic contract.
+  optional string external_ip = 1;
+  // Required: preserves the existing semantic contract.
+  optional string logical_ip = 2;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string vm_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 nic_index = 4;
+}
+
+message DesiredLoadBalancer {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string name = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vip = 3;
+  // Required: preserves the existing semantic contract.
+  optional string protocol_name = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 5;
+  // Required: preserves the existing semantic contract.
+  DesiredLoadBalancerHealthCheck health_check = 6;
+  // Required: preserves the existing semantic contract.
+  DesiredLoadBalancerListenersSection listeners = 7;
+  // Required: preserves the existing semantic contract.
+  DesiredLoadBalancerBackendsSection backends = 8;
+}
+
+message DesiredLoadBalancerBackend {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string ip_address = 2;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string vm_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 nic_index = 4;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string network_id = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string health_check_source_ip = 6;
+}
+
+message DesiredLoadBalancerHealthCheck {
+  // Required: preserves the existing semantic contract.
+  optional bool enabled = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 interval_seconds = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 timeout_seconds = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 success_threshold = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 failure_threshold = 5;
+}
+
+message DesiredLoadBalancerListener {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 port = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 backend_port = 3;
+}
+
+message DesiredNetworkACL {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 2;
+  // Required: preserves the existing semantic contract.
+  DesiredNetworkACLRulesSection rules = 3;
+}
+
+message DesiredNetworkACLRule {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 rule_number = 2;
+  // Required: preserves the existing semantic contract.
+  optional string direction = 3;
+  // Required: preserves the existing semantic contract.
+  optional string ethertype = 4;
+  // Required: preserves the existing semantic contract.
+  optional string action = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string protocol_name = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 port_range_min = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 port_range_max = 8;
+  // Required: preserves the existing semantic contract.
+  optional string remote_cidr = 9;
+}
+
+message DesiredNetworkState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string network_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string name = 2;
+  // Required: preserves the existing semantic contract.
+  optional string subnet = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string subnet6 = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway6 = 6;
+  // Required: preserves the existing semantic contract.
+  optional string router_key = 7;
+  // Required: preserves the existing semantic contract.
+  optional bool external_access = 8;
+  // Required: preserves the existing semantic contract.
+  optional bool dhcp_enabled = 9;
+  // Required: preserves the existing semantic contract.
+  DesiredNetworkStateDnsServersSection dns_servers = 10;
+  // Optional: preserves the existing semantic contract.
+  optional string domain_name = 11;
+  // Optional: preserves the existing semantic contract.
+  optional int64 lease_time = 12;
+  // Required: preserves the existing semantic contract.
+  optional bool metadata_enabled = 13;
+  // Optional: preserves the existing semantic contract.
+  optional bool resolver_enabled = 14;
+  // Optional: preserves the existing semantic contract.
+  DesiredNetworkStateResolverAddressesSection resolver_addresses = 15;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 16;
+  // Required: preserves the existing semantic contract.
+  DesiredNetworkStateFloatingIPsSection floating_i_ps = 17;
+  // Required: preserves the existing semantic contract.
+  DesiredNetworkStateLoadBalancersSection load_balancers = 18;
+  // Optional: preserves the existing semantic contract.
+  DesiredNetworkStateNetworkAcLsSection network_ac_ls = 19;
+}
+
+message DesiredRestore {
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string snapshot_id = 2;
+  // Optional: preserves the existing semantic contract.
+  DesiredRestoreArtifactsSection artifacts = 3;
+}
+
+message DesiredSandboxState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string sandbox_id = 1;
+  // Required: preserves the existing semantic contract.
+  SandboxSpec spec = 2;
+  // Required: preserves the existing semantic contract.
+  optional DesiredSandboxStatus desired_status = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 4;
+  // Optional: preserves the existing semantic contract.
+  RegistryCredential registry_credential = 5;
+  // Optional: preserves the existing semantic contract.
+  DesiredRestore restore = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 suspension_storage_budget_bytes = 7;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string suspension_after_snapshot_id = 8;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string suspension_checkpoint_id = 9;
+  // Optional: preserves the existing semantic contract.
+  SandboxAutomaticSuspensionFence automatic_suspension_fence = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 idle_control_plane_revision = 11;
+  // Optional: preserves the existing semantic contract.
+  optional int64 idle_pending_command_count = 12;
+}
+
+enum DesiredSandboxStatus {
+  DESIRED_SANDBOX_STATUS_UNSPECIFIED = 0;
+  DESIRED_SANDBOX_STATUS_RUNNING = 1;
+  DESIRED_SANDBOX_STATUS_STOPPED = 2;
+  DESIRED_SANDBOX_STATUS_SUSPENDED = 3;
+  DESIRED_SANDBOX_STATUS_ABSENT = 4;
+}
+
+message DesiredSecurityGroup {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 2;
+  // Required: preserves the existing semantic contract.
+  DesiredSecurityGroupRulesSection rules = 3;
+}
+
+message DesiredSecurityGroupRule {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string direction = 2;
+  // Required: preserves the existing semantic contract.
+  optional string ethertype = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string protocol_name = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 port_range_min = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 port_range_max = 6;
+  // Optional: preserves the existing semantic contract.
+  optional string remote_cidr = 7;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string remote_group_id = 8;
+  // Required: preserves the existing semantic contract.
+  optional bool log = 9;
+}
+
+message DesiredSnapshotCapture {
+  // Optional: preserves the existing semantic contract.
+  optional SandboxSnapshotMode sandbox_mode = 1;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string attached_vm_id = 2;
+}
+
+message DesiredSnapshotExport {
+  // Required: preserves the existing semantic contract.
+  DesiredSnapshotExportUploadsSection uploads = 1;
+}
+
+message DesiredSnapshotState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string snapshot_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional SnapshotArtifactKind kind = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string parent_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional DesiredSnapshotStatus desired_status = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 5;
+  // Optional: preserves the existing semantic contract.
+  DesiredSnapshotCapture capture = 6;
+  // Optional: preserves the existing semantic contract.
+  optional DesiredVolumeStorage volume_storage = 7;
+  // Optional: preserves the existing semantic contract.
+  DesiredSnapshotExport export = 8;
+}
+
+enum DesiredSnapshotStatus {
+  DESIRED_SNAPSHOT_STATUS_UNSPECIFIED = 0;
+  DESIRED_SNAPSHOT_STATUS_PRESENT = 1;
+  DESIRED_SNAPSHOT_STATUS_ABSENT = 2;
+}
+
+message DesiredStateMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string sync_id = 3;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageVmsSection vms = 4;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageSandboxesSection sandboxes = 5;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageNetworksSection networks = 6;
+  // Required: preserves the existing semantic contract.
+  optional bool networks_authoritative = 7;
+  // Optional: preserves the existing semantic contract.
+  DesiredAgentUpdate desired_agent_update = 8;
+  // Optional: preserves the existing semantic contract.
+  DesiredStateMessageSecurityGroupsSection security_groups = 9;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageTombstonesSection tombstones = 10;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageVolumesSection volumes = 11;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageSnapshotsSection snapshots = 12;
+  // Required: preserves the existing semantic contract.
+  DesiredStateMessageCephCredentialRevocationsSection ceph_credential_revocations = 13;
+  // Optional: preserves the existing semantic contract.
+  DesiredStateMessageDnsZonesSection dns_zones = 14;
+}
+
+message DesiredVMState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string vm_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional HypervisorType hypervisor_type = 2;
+  // Required: preserves the existing semantic contract.
+  VMSpec spec = 3;
+  // Required: preserves the existing semantic contract.
+  optional DesiredVMStatus desired_status = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 5;
+  // Optional: preserves the existing semantic contract.
+  ImageInfo image_info = 6;
+  // Optional: preserves the existing semantic contract.
+  InstanceMetadata metadata = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 reboot_generation = 8;
+  // Optional: preserves the existing semantic contract.
+  DesiredRestore restore = 9;
+  // Optional: preserves the existing semantic contract.
+  GuestConfig guest_config = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 guest_config_failed_generation = 11;
+}
+
+enum DesiredVMStatus {
+  DESIRED_VM_STATUS_UNSPECIFIED = 0;
+  DESIRED_VM_STATUS_RUNNING = 1;
+  DESIRED_VM_STATUS_SHUTDOWN = 2;
+  DESIRED_VM_STATUS_PAUSED = 3;
+  DESIRED_VM_STATUS_ABSENT = 4;
+}
+
+message DesiredVolumeAttachment {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string vm_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: device-name.
+  optional string device_name = 2;
+  // Required: preserves the existing semantic contract.
+  optional bool readonly = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 boot_order = 4;
+}
+
+message DesiredVolumeSource {
+  // Required: preserves the existing semantic contract.
+  optional string kind = 1;
+  // Optional: preserves the existing semantic contract.
+  ImageInfo image_info = 2;
+  // Optional: preserves the existing semantic contract.
+  optional ArtifactKind artifact_kind = 3;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string source_volume_id = 4;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string source_vm_id = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string source_format = 6;
+}
+
+message DesiredVolumeState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string volume_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional DesiredVolumeStatus desired_status = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 size_bytes = 4;
+  // Required: preserves the existing semantic contract.
+  optional string format = 5;
+  // Required: preserves the existing semantic contract.
+  optional DesiredVolumeStorage storage = 6;
+  // Optional: preserves the existing semantic contract.
+  DesiredVolumeSource source = 7;
+  // Optional: preserves the existing semantic contract.
+  DesiredVolumeAttachment attachment = 8;
+  // Optional: preserves the existing semantic contract.
+  VolumeIOLimits io_limits = 9;
+  // Required: preserves the existing semantic contract.
+  optional VolumeBlockMode block_mode = 10;
+}
+
+enum DesiredVolumeStatus {
+  DESIRED_VOLUME_STATUS_UNSPECIFIED = 0;
+  DESIRED_VOLUME_STATUS_PRESENT = 1;
+  DESIRED_VOLUME_STATUS_ABSENT = 2;
+}
+
+message DesiredVolumeStorageLocal {}
+
+message DesiredVolumeStorageCeph {
+  // Required: preserves the existing semantic contract.
+  CephVolumeStorage configuration = 1;
+}
+
+message DesiredVolumeStorage {
+  oneof value {
+    DesiredVolumeStorageLocal local = 1;
+    DesiredVolumeStorageCeph ceph = 2;
+  }
+}
+
+message DesiredWorkloadTombstone {
+  // Required: preserves the existing semantic contract.
+  optional WorkloadKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string workload_id = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 3;
+}
+
+message DiskAttachmentFile {
+  // Required: preserves the existing semantic contract.
+  optional string path = 1;
+  // Required: preserves the existing semantic contract.
+  optional DiskFormat format = 2;
+}
+
+message DiskAttachmentBlockDevice {
+  // Required: preserves the existing semantic contract.
+  optional string path = 1;
+}
+
+message DiskAttachmentRbd {
+  // Required: preserves the existing semantic contract.
+  optional string pool = 1;
+  // Required: preserves the existing semantic contract.
+  optional string image = 2;
+  // Required: preserves the existing semantic contract.
+  optional string namespace = 3;
+  // Required: preserves the existing semantic contract.
+  optional string user = 4;
+  // Required: preserves the existing semantic contract.
+  DiskAttachmentRbdMonEndpointsSection mon_endpoints = 5;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string cluster_id = 6;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string credential_id = 7;
+  // Required: preserves the existing semantic contract.
+  optional string config_path = 8;
+}
+
+message DiskAttachment {
+  oneof value {
+    DiskAttachmentFile file = 1;
+    DiskAttachmentBlockDevice block_device = 2;
+    DiskAttachmentRbd rbd = 3;
+  }
+}
+
+enum DiskFormat {
+  DISK_FORMAT_UNSPECIFIED = 0;
+  DISK_FORMAT_QCOW2 = 1;
+  DISK_FORMAT_RAW = 2;
+}
+
+message ErrorMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string error = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string details = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string code = 5;
+}
+
+message GuestConfigFileObservation {
+  // Required: preserves the existing semantic contract.
+  optional string path = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string sha256 = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string mode = 3;
+}
+
+enum GraphicsMode {
+  GRAPHICS_MODE_UNSPECIFIED = 0;
+  GRAPHICS_MODE_HEADLESS = 1;
+  GRAPHICS_MODE_VNC = 2;
+}
+
+message GuestAgentObservation {
+  // Required: preserves the existing semantic contract.
+  optional bool reachable = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp checked_at = 2;
+}
+
+message GuestConfig {
+  // Required: preserves the existing semantic contract.
+  GuestConfigPackagesSection packages = 1;
+  // Required: preserves the existing semantic contract.
+  GuestConfigFilesSection files = 2;
+  // Required: preserves the existing semantic contract.
+  GuestConfigServicesSection services = 3;
+  // Required: preserves the existing semantic contract.
+  GuestConfigSysctlsSection sysctls = 4;
+}
+
+message GuestConfigObservation {
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 1;
+  // Required: preserves the existing semantic contract.
+  optional GuestConfigObservationStatus status = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string error = 3;
+  // Optional: preserves the existing semantic contract.
+  GuestConfigItemFailure failed_item = 4;
+  // Required: preserves the existing semantic contract.
+  GuestConfigObservationPackagesSection packages = 5;
+  // Required: preserves the existing semantic contract.
+  GuestConfigObservationFilesSection files = 6;
+  // Required: preserves the existing semantic contract.
+  GuestConfigObservationServicesSection services = 7;
+  // Required: preserves the existing semantic contract.
+  GuestConfigObservationSysctlsSection sysctls = 8;
+}
+
+message GuestExecCloseMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string reason = 4;
+}
+
+message GuestExecClosedMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string reason = 4;
+}
+
+message GuestExecExitMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 exit_code = 4;
+}
+
+message GuestExecInputMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional bytes data = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool eof = 5;
+}
+
+message GuestExecOutputMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string stream = 4;
+  // Required: preserves the existing semantic contract.
+  optional bytes data = 5;
+}
+
+message GuestExecRecordedAckMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+}
+
+message GuestExecRecordedStateMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 revision = 4;
+  // Required: preserves the existing semantic contract.
+  optional GuestExecRecordedStatus status = 5;
+  // Required: preserves the existing semantic contract.
+  optional bytes stdout = 6;
+  // Required: preserves the existing semantic contract.
+  optional bytes stderr = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 exit_code = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string reason = 9;
+  // Required: preserves the existing semantic contract.
+  optional bool truncated = 10;
+}
+
+enum GuestExecRecordedStatus {
+  GUEST_EXEC_RECORDED_STATUS_UNSPECIFIED = 0;
+  GUEST_EXEC_RECORDED_STATUS_RUNNING = 1;
+  GUEST_EXEC_RECORDED_STATUS_EXITED = 2;
+  GUEST_EXEC_RECORDED_STATUS_CLOSED = 3;
+}
+
+message GuestExecResizeMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 rows = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 cols = 5;
+}
+
+enum GuestExecSessionKind {
+  GUEST_EXEC_SESSION_KIND_UNSPECIFIED = 0;
+  GUEST_EXEC_SESSION_KIND_INTERACTIVE = 1;
+  GUEST_EXEC_SESSION_KIND_RECORDED = 2;
+}
+
+message GuestExecStartMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional GuestResourceKind resource_kind = 3;
+  // Required: preserves the existing semantic contract.
+  optional string resource_id = 4;
+  // Required: preserves the existing semantic contract.
+  optional GuestExecSessionKind session_kind = 5;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 6;
+  // Required: preserves the existing semantic contract.
+  GuestExecStartMessageCommandSection command = 7;
+  // Optional: preserves the existing semantic contract.
+  GuestExecStartMessageEnvSection env = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string working_dir = 9;
+  // Required: preserves the existing semantic contract.
+  optional bool tty = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 rows = 11;
+  // Optional: preserves the existing semantic contract.
+  optional int64 cols = 12;
+}
+
+message GuestExecStartedMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string session_id = 3;
+}
+
+message GuestFile {
+  // Required: preserves the existing semantic contract.
+  optional string path = 1;
+  // Required: preserves the existing semantic contract.
+  optional string content = 2;
+  // Required: preserves the existing semantic contract.
+  optional string mode = 3;
+}
+
+message GuestIPAddress {
+  // Required: preserves the existing semantic contract.
+  optional IPFamily family = 1;
+  // Required: preserves the existing semantic contract.
+  optional string address = 2;
+  // Optional: preserves the existing semantic contract.
+  optional int64 prefix_length = 3;
+}
+
+message GuestInfo {
+  // Required: preserves the existing semantic contract.
+  optional bool qga_available = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string hostname = 2;
+  // Required: preserves the existing semantic contract.
+  GuestInfoInterfacesSection interfaces = 3;
+}
+
+message GuestNetworkInterface {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string hardware_address = 2;
+  // Required: preserves the existing semantic contract.
+  GuestNetworkInterfaceAddressesSection addresses = 3;
+}
+
+message GuestPackage {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Required: preserves the existing semantic contract.
+  optional GuestPackageState state = 2;
+}
+
+enum GuestPackageState {
+  GUEST_PACKAGE_STATE_UNSPECIFIED = 0;
+  GUEST_PACKAGE_STATE_PRESENT = 1;
+  GUEST_PACKAGE_STATE_ABSENT = 2;
+}
+
+enum GuestResourceKind {
+  GUEST_RESOURCE_KIND_UNSPECIFIED = 0;
+  GUEST_RESOURCE_KIND_VIRTUAL_MACHINE = 1;
+  GUEST_RESOURCE_KIND_SANDBOX = 2;
+}
+
+message GuestService {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Required: preserves the existing semantic contract.
+  optional bool enabled = 2;
+}
+
+message GuestSysctl {
+  // Required: preserves the existing semantic contract.
+  optional string key = 1;
+  // Required: preserves the existing semantic contract.
+  optional string value = 2;
+}
+
+message HostInfo {
+  // Optional: preserves the existing semantic contract.
+  optional string os_name = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string kernel_version = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string cpu_model = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string cpu_vendor = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 physical_core_count = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 logical_core_count = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 total_memory_bytes = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string machine_model = 8;
+  // Optional: preserves the existing semantic contract.
+  google.protobuf.Timestamp boot_time = 9;
+}
+
+message HostMemoryAccounting {
+  // Required: preserves the existing semantic contract.
+  optional int64 physical_bytes = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 host_reserved_bytes = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 workload_effective_bytes = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 remaining_allocatable_bytes = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 qemu_overhead_bytes = 5;
+}
+
+message HostMemoryProfileConfiguration {
+  // Required: preserves the existing semantic contract.
+  optional HostMemoryTier tier = 1;
+  // Required: preserves the existing semantic contract.
+  optional HostMemoryTenantClass tenant_class = 2;
+  // Required: preserves the existing semantic contract.
+  optional string nvme_swap = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 zram_bytes = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 zswap_pool_percent = 5;
+  // Optional: preserves the existing semantic contract.
+  optional bool ksm = 6;
+  // Optional: preserves the existing semantic contract.
+  optional bool require_mglru = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 ksm_pages_to_scan = 8;
+  // Optional: preserves the existing semantic contract.
+  optional int64 ksm_sleep_milliseconds = 9;
+}
+
+message HostMemoryProfileObservation {
+  // Optional: preserves the existing semantic contract.
+  HostMemoryProfileConfiguration configured = 1;
+  // Optional: preserves the existing semantic contract.
+  optional HostMemoryTier effective_tier = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string thp_policy = 3;
+  // Optional: preserves the existing semantic contract.
+  optional bool ksm_running = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string reason = 5;
+}
+
+message HostResourceTelemetry {
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp sampled_at = 1;
+  // Required: preserves the existing semantic contract.
+  optional ResourcePressureHealth health = 2;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry cpu_pressure = 3;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry memory_pressure = 4;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry io_pressure = 5;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue swap_total_bytes = 6;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue swap_used_bytes = 7;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue zswap_stored_bytes = 8;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue zswap_pool_bytes = 9;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue zram_used_bytes = 10;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue major_faults_total = 11;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue reclaim_scanned_pages_total = 12;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue reclaim_reclaimed_pages_total = 13;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue oom_kills_total = 14;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryFlag mglru_enabled = 15;
+  // Optional: preserves the existing semantic contract.
+  HostMemoryProfileObservation memory_profile = 16;
+  // Optional: preserves the existing semantic contract.
+  ResourceTelemetryValue swap_in_pages_total = 17;
+  // Optional: preserves the existing semantic contract.
+  ResourceTelemetryValue swap_out_pages_total = 18;
+  // Optional: preserves the existing semantic contract.
+  ResourceTelemetryValue zram_original_bytes = 19;
+  // Optional: preserves the existing semantic contract.
+  optional double swap_in_pages_per_second = 20;
+  // Optional: preserves the existing semantic contract.
+  optional double swap_out_pages_per_second = 21;
+  // Optional: preserves the existing semantic contract.
+  HostResourceTelemetryMemoryWarningsSection memory_warnings = 22;
+}
+
+message HypervisorSupport {
+  // Required: preserves the existing semantic contract.
+  optional HypervisorType type = 1;
+  // Required: preserves the existing semantic contract.
+  optional bool available = 2;
+  // Required: preserves the existing semantic contract.
+  optional bool accelerated = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string unavailability_reason = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool supports_snapshots = 5;
+  // Optional: preserves the existing semantic contract.
+  optional bool supports_vsock = 6;
+  // Optional: preserves the existing semantic contract.
+  optional bool supports_guest_exec = 7;
+  // Optional: preserves the existing semantic contract.
+  optional bool supports_volume_io_limits = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string version = 9;
+  // Optional: preserves the existing semantic contract.
+  optional int64 minimum_memory_bytes = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 maximum_memory_bytes = 11;
+}
+
+enum HypervisorType {
+  HYPERVISOR_TYPE_UNSPECIFIED = 0;
+  HYPERVISOR_TYPE_QEMU = 1;
+  HYPERVISOR_TYPE_FIRECRACKER = 2;
+  HYPERVISOR_TYPE_APPLE_VIRTUALIZATION = 3;
+}
+
+enum IPFamily {
+  IP_FAMILY_UNSPECIFIED = 0;
+  IP_FAMILY_IPV4 = 1;
+  IP_FAMILY_IPV6 = 2;
+}
+
+message IdentityPolicy {
+  // Required: preserves the existing semantic contract.
+  optional string spiffe_id = 1;
+  // Required: preserves the existing semantic contract.
+  IdentityPolicyAudiencesSection audiences = 2;
+  // Optional: preserves the existing semantic contract.
+  optional int64 ttl_seconds = 3;
+}
+
+message ImageInfo {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string image_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string project_id = 2;
+  // Required: preserves the existing semantic contract.
+  optional CPUArchitecture architecture = 3;
+  // Required: preserves the existing semantic contract.
+  ImageInfoArtifactsSection artifacts = 4;
+}
+
+message InstanceMetadata {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string instance_id = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string hostname = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string project_id = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string environment = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string region = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string availability_zone = 6;
+  // Required: preserves the existing semantic contract.
+  InstanceMetadataNicsSection nics = 7;
+  // Required: preserves the existing semantic contract.
+  InstanceMetadataSshAuthorizedKeysSection ssh_authorized_keys = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string user_data = 9;
+  // Optional: preserves the existing semantic contract.
+  optional string vendor_data = 10;
+  // Optional: preserves the existing semantic contract.
+  optional string guest_agent_release = 11;
+  // Required: preserves the existing semantic contract.
+  InstanceMetadataTagsSection tags = 12;
+  // Optional: preserves the existing semantic contract.
+  IdentityPolicy identity = 13;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string no_cloud_seed_token = 14;
+  // Required: preserves the existing semantic contract.
+  optional bool service_enabled = 15;
+}
+
+message GuestConfigItemFailure {
+  // Required: preserves the existing semantic contract.
+  optional GuestConfigObservationSection section = 1;
+  // Required: preserves the existing semantic contract.
+  optional string identity = 2;
+  // Required: preserves the existing semantic contract.
+  optional string reason = 3;
+}
+
+message MachineProfile {
+  // Required: preserves the existing semantic contract.
+  optional bool secure_boot = 1;
+  // Required: preserves the existing semantic contract.
+  optional bool tpm = 2;
+}
+
+message MetadataNIC {
+  // Required: preserves the existing semantic contract.
+  optional string device_name = 1;
+  // Required: preserves the existing semantic contract.
+  optional string mac_address = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string network_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string network_name = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string ip_address = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 prefix_length = 6;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string ipv6_address = 8;
+  // Optional: preserves the existing semantic contract.
+  optional int64 ipv6_prefix_length = 9;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway6 = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 mtu = 11;
+  // Required: preserves the existing semantic contract.
+  MetadataNICDnsServersSection dns_servers = 12;
+  // Optional: preserves the existing semantic contract.
+  optional string domain_name = 13;
+  // Required: preserves the existing semantic contract.
+  optional bool dhcp_enabled = 14;
+  // Required: preserves the existing semantic contract.
+  optional bool metadata_enabled = 15;
+  // Required: preserves the existing semantic contract.
+  MetadataNICResolverAddressesSection resolver_addresses = 16;
+}
+
+enum MetadataSource {
+  METADATA_SOURCE_UNSPECIFIED = 0;
+  METADATA_SOURCE_ISO = 1;
+  METADATA_SOURCE_IMDS = 2;
+}
+
+enum NetworkCapability {
+  NETWORK_CAPABILITY_UNSPECIFIED = 0;
+  NETWORK_CAPABILITY_OVERLAY = 1;
+  NETWORK_CAPABILITY_USER_MODE = 2;
+}
+
+message NetworkSpec {
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string interface_id = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string device_name = 2;
+  // Optional: preserves the existing semantic contract.
+  optional int64 order_index = 3;
+  // Required: preserves the existing semantic contract.
+  optional string network = 4;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string network_id = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string mac_address = 6;
+  // Optional: preserves the existing semantic contract.
+  optional string ip_address = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string netmask = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway = 9;
+  // Optional: preserves the existing semantic contract.
+  optional string ipv6_address = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 ipv6_prefix_length = 11;
+  // Optional: preserves the existing semantic contract.
+  optional string gateway6 = 12;
+  // Optional: preserves the existing semantic contract.
+  optional int64 mtu = 13;
+  // Required: preserves the existing semantic contract.
+  optional bool dhcp_enabled = 14;
+  // Required: preserves the existing semantic contract.
+  NetworkSpecDnsServersSection dns_servers = 15;
+  // Optional: preserves the existing semantic contract.
+  optional string domain_name = 16;
+  // Optional: preserves the existing semantic contract.
+  optional int64 lease_time = 17;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  NetworkSpecSecurityGroupIdsSection security_group_ids = 18;
+  // Required: preserves the existing semantic contract.
+  optional bool metadata_enabled = 19;
+  // Optional: preserves the existing semantic contract.
+  optional bool resolver_enabled = 20;
+  // Optional: preserves the existing semantic contract.
+  NetworkSpecResolverAddressesSection resolver_addresses = 21;
+}
+
+enum NodeCapability {
+  NODE_CAPABILITY_UNSPECIFIED = 0;
+  NODE_CAPABILITY_WORKLOAD_IDENTITY = 1;
+  NODE_CAPABILITY_QEMU_PLACEMENT = 2;
+  NODE_CAPABILITY_OVERLAY_NETWORKING = 3;
+  NODE_CAPABILITY_SANDBOX_NETWORKING = 4;
+  NODE_CAPABILITY_NETWORK_RESOLVER = 5;
+  NODE_CAPABILITY_DYNAMIC_ROUTING = 6;
+  NODE_CAPABILITY_CEPH_VOLUMES = 7;
+}
+
+enum NodeDependencyCompatibility {
+  NODE_DEPENDENCY_COMPATIBILITY_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_COMPATIBILITY_UNKNOWN = 1;
+  NODE_DEPENDENCY_COMPATIBILITY_COMPATIBLE = 2;
+  NODE_DEPENDENCY_COMPATIBILITY_INCOMPATIBLE = 3;
+}
+
+enum NodeDependencyDesiredState {
+  NODE_DEPENDENCY_DESIRED_STATE_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_DESIRED_STATE_DISABLED = 1;
+  NODE_DEPENDENCY_DESIRED_STATE_REQUIRED = 2;
+}
+
+enum NodeDependencyFailureCode {
+  NODE_DEPENDENCY_FAILURE_CODE_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_FAILURE_CODE_DEPENDENCY_FAILED = 1;
+  NODE_DEPENDENCY_FAILURE_CODE_MISSING_BINARY = 2;
+  NODE_DEPENDENCY_FAILURE_CODE_MISSING_UNIT = 3;
+  NODE_DEPENDENCY_FAILURE_CODE_INCOMPATIBLE_VERSION = 4;
+  NODE_DEPENDENCY_FAILURE_CODE_INACTIVE_UNIT = 5;
+  NODE_DEPENDENCY_FAILURE_CODE_FAILED_UNIT = 6;
+  NODE_DEPENDENCY_FAILURE_CODE_COMMAND_TIMED_OUT = 7;
+  NODE_DEPENDENCY_FAILURE_CODE_MALFORMED_OUTPUT = 8;
+  NODE_DEPENDENCY_FAILURE_CODE_FUNCTIONAL_PROBE_FAILED = 9;
+  NODE_DEPENDENCY_FAILURE_CODE_STALE_OBSERVATION = 10;
+  NODE_DEPENDENCY_FAILURE_CODE_REMEDIATION_UNAUTHORIZED = 11;
+  NODE_DEPENDENCY_FAILURE_CODE_REMEDIATION_BUDGET_EXHAUSTED = 12;
+  NODE_DEPENDENCY_FAILURE_CODE_REMEDIATION_FAILED = 13;
+}
+
+message NodeDependencyFailureReason {
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyFailureCode code = 1;
+  // Required: preserves the existing semantic contract.
+  optional string message = 2;
+}
+
+enum NodeDependencyFunctionalState {
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_UNKNOWN = 1;
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_STARTING = 2;
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_HEALTHY = 3;
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_DEGRADED = 4;
+  NODE_DEPENDENCY_FUNCTIONAL_STATE_UNHEALTHY = 5;
+}
+
+enum NodeDependencyID {
+  NODE_DEPENDENCY_ID_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_ID_SPIRE = 1;
+  NODE_DEPENDENCY_ID_LIBVIRT = 2;
+  NODE_DEPENDENCY_ID_OVN_OVS = 3;
+  NODE_DEPENDENCY_ID_FRR = 4;
+  NODE_DEPENDENCY_ID_CEPH_CLIENT = 5;
+  NODE_DEPENDENCY_ID_CEPH_CLUSTER = 6;
+  NODE_DEPENDENCY_ID_HOST_MEMORY_PROFILE = 7;
+}
+
+message NodeDependencyObservation {
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyID id = 1;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyRole role = 2;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyDesiredState desired_state = 3;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyOwnership ownership = 4;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencySupervisorState supervisor_state = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string installed_version = 6;
+  // Optional: preserves the existing semantic contract.
+  optional string daemon_version = 7;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyCompatibility compatibility = 8;
+  // Required: preserves the existing semantic contract.
+  optional NodeDependencyFunctionalState functional_state = 9;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp checked_at = 10;
+  // Optional: preserves the existing semantic contract.
+  google.protobuf.Timestamp last_healthy_at = 11;
+  // Optional: preserves the existing semantic contract.
+  NodeDependencyFailureReason reason = 12;
+  // Required: preserves the existing semantic contract.
+  optional int64 consecutive_failures = 13;
+  // Required: preserves the existing semantic contract.
+  optional int64 remediation_count = 14;
+  // Required: preserves the existing semantic contract.
+  optional int64 restart_count = 15;
+  // Required: preserves the existing semantic contract.
+  NodeDependencyObservationAffectedCapabilitiesSection affected_capabilities = 16;
+}
+
+enum NodeDependencyOwnership {
+  NODE_DEPENDENCY_OWNERSHIP_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_OWNERSHIP_OBSERVE_ONLY = 1;
+  NODE_DEPENDENCY_OWNERSHIP_ENSURE_RUNNING = 2;
+  NODE_DEPENDENCY_OWNERSHIP_RECONCILE = 3;
+}
+
+enum NodeDependencyRole {
+  NODE_DEPENDENCY_ROLE_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_ROLE_IDENTITY = 1;
+  NODE_DEPENDENCY_ROLE_COMPUTE = 2;
+  NODE_DEPENDENCY_ROLE_NETWORKING = 3;
+  NODE_DEPENDENCY_ROLE_ROUTING = 4;
+  NODE_DEPENDENCY_ROLE_STORAGE = 5;
+}
+
+enum NodeDependencySupervisorState {
+  NODE_DEPENDENCY_SUPERVISOR_STATE_UNSPECIFIED = 0;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_NOT_APPLICABLE = 1;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_MISSING = 2;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_INACTIVE = 3;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_ACTIVATING = 4;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_ACTIVE = 5;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_FAILED = 6;
+  NODE_DEPENDENCY_SUPERVISOR_STATE_UNKNOWN = 7;
+}
+
+message ObservedAgentUpdateStatus {
+  // Required: preserves the existing semantic contract.
+  optional string target_version = 1;
+  // Required: preserves the existing semantic contract.
+  optional string disposition = 2;
+  // Required: preserves the existing semantic contract.
+  optional string reason = 3;
+}
+
+enum ObservedFailureClassification {
+  OBSERVED_FAILURE_CLASSIFICATION_UNSPECIFIED = 0;
+  OBSERVED_FAILURE_CLASSIFICATION_TRANSIENT = 1;
+  OBSERVED_FAILURE_CLASSIFICATION_PERMANENT = 2;
+  OBSERVED_FAILURE_CLASSIFICATION_BLOCKED = 3;
+}
+
+message ObservedLoadBalancerBackend {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional ObservedLoadBalancerBackendHealth health_status = 2;
+  // Optional: preserves the existing semantic contract.
+  google.protobuf.Timestamp last_checked_at = 3;
+}
+
+enum ObservedLoadBalancerBackendHealth {
+  OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNSPECIFIED = 0;
+  OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNKNOWN = 1;
+  OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_ONLINE = 2;
+  OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_OFFLINE = 3;
+  OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_ERROR = 4;
+}
+
+message ObservedLoadBalancerState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 2;
+  // Required: preserves the existing semantic contract.
+  optional ObservedLoadBalancerStatus status = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 4;
+  // Required: preserves the existing semantic contract.
+  ObservedLoadBalancerStateBackendsSection backends = 5;
+}
+
+enum ObservedLoadBalancerStatus {
+  OBSERVED_LOAD_BALANCER_STATUS_UNSPECIFIED = 0;
+  OBSERVED_LOAD_BALANCER_STATUS_PENDING = 1;
+  OBSERVED_LOAD_BALANCER_STATUS_ACTIVE = 2;
+  OBSERVED_LOAD_BALANCER_STATUS_ERROR = 3;
+}
+
+message ObservedManifestStatus {
+  // Required: preserves the existing semantic contract.
+  optional bool inventory_complete = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 quarantined_entries = 2;
+  // Required: preserves the existing semantic contract.
+  optional string reason = 3;
+}
+
+enum ObservedNetworkFabricStatus {
+  OBSERVED_NETWORK_FABRIC_STATUS_UNSPECIFIED = 0;
+  OBSERVED_NETWORK_FABRIC_STATUS_ACTIVE = 1;
+  OBSERVED_NETWORK_FABRIC_STATUS_ERROR = 2;
+}
+
+message ObservedNetworkState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 2;
+  // Required: preserves the existing semantic contract.
+  optional ObservedNetworkFabricStatus status = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 5;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 6;
+}
+
+message ObservedPortMembershipState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string interface_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string port_name = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  ObservedPortMembershipStateSecurityGroupIdsSection security_group_ids = 3;
+  // Required: preserves the existing semantic contract.
+  optional ObservedNetworkFabricStatus status = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 5;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 6;
+}
+
+message ObservedSandboxState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string sandbox_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional SandboxStatus status = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string convergence_phase = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 6;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 exit_code = 8;
+  // Optional: preserves the existing semantic contract.
+  WorkloadResourceTelemetry resource_telemetry = 9;
+  // Optional: preserves the existing semantic contract.
+  SandboxIdleActivityReport idle_activity = 10;
+  // Optional: preserves the existing semantic contract.
+  SandboxSuspensionEvidence suspension = 11;
+  // Optional: preserves the existing semantic contract.
+  optional int64 suspension_storage_reserved_bytes = 12;
+  // Optional: preserves the existing semantic contract.
+  optional int64 suspension_storage_estimate_bytes = 13;
+}
+
+message ObservedSecurityGroupState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 2;
+  // Required: preserves the existing semantic contract.
+  optional ObservedNetworkFabricStatus status = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 5;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 6;
+}
+
+message ObservedSnapshotFacts {
+  // Optional: preserves the existing semantic contract.
+  optional int64 size_bytes = 1;
+  // Optional: preserves the existing semantic contract.
+  optional int64 current_size_bytes = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string storage_path = 3;
+  // Optional: preserves the existing semantic contract.
+  optional CPUArchitecture architecture = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string qemu_version = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string firecracker_version = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 guest_control_protocol_version = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 fork_layout_version = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string cpu_template = 9;
+}
+
+message ObservedSnapshotState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string snapshot_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional SnapshotArtifactKind kind = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string parent_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional bool present = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool exported = 5;
+  // Optional: preserves the existing semantic contract.
+  ObservedSnapshotFacts facts = 6;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string convergence_phase = 8;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 9;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 10;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 11;
+}
+
+message ObservedStateReport {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string agent_id = 3;
+  // Required: preserves the existing semantic contract.
+  ObservedStateReportVmsSection vms = 4;
+  // Required: preserves the existing semantic contract.
+  ObservedStateReportSandboxesSection sandboxes = 5;
+  // Required: preserves the existing semantic contract.
+  AgentResources resources = 6;
+  // Optional: preserves the existing semantic contract.
+  ResourceEnforcementSnapshot resource_enforcement = 7;
+  // Optional: preserves the existing semantic contract.
+  HostResourceTelemetry host_resource_telemetry = 8;
+  // Optional: preserves the existing semantic contract.
+  ObservedAgentUpdateStatus agent_update_status = 9;
+  // Required: preserves the existing semantic contract.
+  ObservedStateReportUnrecognizedSection unrecognized = 10;
+  // Optional: preserves the existing semantic contract.
+  ObservedTeardownRefusal teardown_refusal = 11;
+  // Optional: preserves the existing semantic contract.
+  ObservedManifestStatus manifest_status = 12;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportVolumesSection volumes = 13;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportSnapshotsSection snapshots = 14;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportLoadBalancersSection load_balancers = 15;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportNetworksSection networks = 16;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportSecurityGroupsSection security_groups = 17;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportPortMembershipsSection port_memberships = 18;
+  // Optional: preserves the existing semantic contract.
+  ObservedStateReportStorageDevicesSection storage_devices = 19;
+}
+
+message ObservedStorageDevice {
+  // Optional: preserves the existing semantic contract.
+  StorageDeviceIdentity identity = 1;
+  // Required: preserves the existing semantic contract.
+  optional string device_path = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 size_bytes = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string model = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string serial = 5;
+  // Optional: preserves the existing semantic contract.
+  optional string wwn = 6;
+  // Required: preserves the existing semantic contract.
+  optional bool rotational = 7;
+  // Required: preserves the existing semantic contract.
+  optional StorageDeviceState state = 8;
+  // Required: preserves the existing semantic contract.
+  ObservedStorageDeviceUsesSection uses = 9;
+}
+
+message ObservedTeardownRefusal {
+  // Required: preserves the existing semantic contract.
+  optional string sync_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 requested_teardowns = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 present_workloads = 3;
+  // Required: preserves the existing semantic contract.
+  optional string reason = 4;
+}
+
+message ObservedVMState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string vm_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional VMStatus status = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string convergence_phase = 4;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 6;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 7;
+  // Optional: preserves the existing semantic contract.
+  GuestInfo guest_info = 8;
+  // Optional: preserves the existing semantic contract.
+  GuestAgentObservation guest_agent_observation = 9;
+  // Optional: preserves the existing semantic contract.
+  GuestConfigObservation guest_config_observation = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 guest_config_failed_generation = 11;
+  // Optional: preserves the existing semantic contract.
+  VMMemoryStats memory_stats = 12;
+  // Optional: preserves the existing semantic contract.
+  WorkloadResourceTelemetry resource_telemetry = 13;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  ObservedVMStateAppliedNetworkInterfaceIdsSection applied_network_interface_ids = 14;
+}
+
+message ObservedVolumeState {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string volume_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional bool present = 2;
+  // Optional: preserves the existing semantic contract.
+  optional DiskAttachment attachment = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 size_bytes = 4;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string attached_vm_id = 5;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 6;
+  // Optional: preserves the existing semantic contract.
+  optional string convergence_phase = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string last_error = 8;
+  // Optional: preserves the existing semantic contract.
+  optional int64 failed_generation = 9;
+  // Optional: preserves the existing semantic contract.
+  optional ObservedFailureClassification failure_classification = 10;
+  // Optional: preserves the existing semantic contract.
+  VolumeIOLimits io_limits = 11;
+  // Optional: preserves the existing semantic contract.
+  AppliedBlockDevicePolicy block_policy = 12;
+  // Optional: preserves the existing semantic contract.
+  VolumeIOObservedRate io_observed_rate = 13;
+}
+
+enum OperatingSystem {
+  OPERATING_SYSTEM_UNSPECIFIED = 0;
+  OPERATING_SYSTEM_LINUX = 1;
+  OPERATING_SYSTEM_MACOS = 2;
+}
+
+message GuestConfigPackageObservation {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string version = 2;
+}
+
+message PressureStallSample {
+  // Required: preserves the existing semantic contract.
+  optional double average10 = 1;
+  // Required: preserves the existing semantic contract.
+  optional double average60 = 2;
+  // Required: preserves the existing semantic contract.
+  optional double average300 = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 total_microseconds = 4;
+}
+
+message PressureStallTelemetry {
+  // Required: preserves the existing semantic contract.
+  optional ResourceTelemetryAvailability availability = 1;
+  // Optional: preserves the existing semantic contract.
+  PressureStallSample some = 2;
+  // Optional: preserves the existing semantic contract.
+  PressureStallSample full = 3;
+}
+
+message RegistryCredential {
+  // Required: preserves the existing semantic contract.
+  optional string registry = 1;
+  // Required: preserves the existing semantic contract.
+  optional string username = 2;
+  // Required: preserves the existing semantic contract.
+  optional string password = 3;
+  // Optional: preserves the existing semantic contract.
+  google.protobuf.Timestamp expires_at = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool bearer = 5;
+}
+
+message ResourceEnforcementSnapshot {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string agent_boot_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 sequence = 2;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp sampled_at = 3;
+  // Required: preserves the existing semantic contract.
+  optional bool inventory_complete = 4;
+  // Required: preserves the existing semantic contract.
+  ResourceEnforcementSnapshotAcknowledgementsSection acknowledgements = 5;
+}
+
+enum ResourcePressureHealth {
+  RESOURCE_PRESSURE_HEALTH_UNSPECIFIED = 0;
+  RESOURCE_PRESSURE_HEALTH_UNKNOWN = 1;
+  RESOURCE_PRESSURE_HEALTH_HEALTHY = 2;
+  RESOURCE_PRESSURE_HEALTH_PRESSURED = 3;
+  RESOURCE_PRESSURE_HEALTH_CRITICAL = 4;
+}
+
+enum ResourceTelemetryAvailability {
+  RESOURCE_TELEMETRY_AVAILABILITY_UNSPECIFIED = 0;
+  RESOURCE_TELEMETRY_AVAILABILITY_AVAILABLE = 1;
+  RESOURCE_TELEMETRY_AVAILABILITY_UNAVAILABLE = 2;
+}
+
+message ResourceTelemetryFlag {
+  // Required: preserves the existing semantic contract.
+  optional ResourceTelemetryAvailability availability = 1;
+  // Optional: preserves the existing semantic contract.
+  optional bool value = 2;
+}
+
+message ResourceTelemetryValue {
+  // Required: preserves the existing semantic contract.
+  optional ResourceTelemetryAvailability availability = 1;
+  // Optional: preserves the existing semantic contract.
+  optional int64 value = 2;
+}
+
+message SandboxAutomaticSuspensionFence {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string operation_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 activity_revision = 3;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string admission_token = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 guest_protocol_version = 5;
+}
+
+message SandboxGuestIdleActivity {
+  // Required: preserves the existing semantic contract.
+  optional string sandbox_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional string nonce = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string probe_id = 3;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string monitor_incarnation = 4;
+  // Required: preserves the existing semantic contract.
+  optional uint64 sample_sequence = 5;
+  // Required: preserves the existing semantic contract.
+  optional uint64 activity_epoch = 6;
+  // Optional: preserves the existing semantic contract.
+  optional uint64 quiet_for_milliseconds = 7;
+  // Required: preserves the existing semantic contract.
+  optional SandboxGuestIdleCoverage coverage = 8;
+  // Required: preserves the existing semantic contract.
+  optional bool trusted = 9;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  SandboxGuestIdleActivityActiveExecSessionIdsSection active_exec_session_ids = 10;
+  // Optional: preserves the existing semantic contract.
+  optional uint32 anonymous_exec_count = 11;
+  // Optional: preserves the existing semantic contract.
+  optional uint32 pending_exec_count = 12;
+  // Optional: preserves the existing semantic contract.
+  optional uint64 workload_cpu_microseconds = 13;
+  // Optional: preserves the existing semantic contract.
+  optional uint64 workload_read_bytes = 14;
+  // Optional: preserves the existing semantic contract.
+  optional uint64 workload_write_bytes = 15;
+  // Optional: preserves the existing semantic contract.
+  optional uint32 external_socket_count = 16;
+  // Optional: preserves the existing semantic contract.
+  optional uint32 nic_count = 17;
+}
+
+message SandboxIdleActivityReport {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string agent_incarnation = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string connection_epoch = 2;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string residency_epoch = 3;
+  // Required: preserves the existing semantic contract.
+  optional uint64 sequence = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 5;
+  // Required: preserves the existing semantic contract.
+  optional uint64 activity_epoch = 6;
+  // Required: preserves the existing semantic contract.
+  optional uint64 evidence_age_milliseconds = 7;
+  // Required: preserves the existing semantic contract.
+  optional uint64 resident_for_milliseconds = 8;
+  // Optional: preserves the existing semantic contract.
+  SandboxGuestIdleActivity guest = 9;
+  // Optional: preserves the existing semantic contract.
+  // Format: uuid.
+  SandboxIdleActivityReportActiveExecSessionIdsSection active_exec_session_ids = 10;
+  // Optional: preserves the existing semantic contract.
+  optional int64 pending_command_count = 11;
+  // Optional: preserves the existing semantic contract.
+  optional int64 host_pending_command_count = 12;
+  // Optional: preserves the existing semantic contract.
+  optional int64 control_plane_activity_revision = 13;
+  // Optional: preserves the existing semantic contract.
+  optional bool snapshot_or_restore_in_progress = 14;
+  // Required: preserves the existing semantic contract.
+  optional bool idle_fence_supported = 15;
+  // Optional: preserves the existing semantic contract.
+  optional uint64 host_quiet_milliseconds = 16;
+  // Optional: preserves the existing semantic contract.
+  SandboxIdlePolicy policy = 17;
+}
+
+message SandboxIdlePolicy {
+  // Required: preserves the existing semantic contract.
+  optional bool enabled = 6;
+  // Required: preserves the existing semantic contract.
+  optional double idle_seconds = 1;
+  // Required: preserves the existing semantic contract.
+  optional double minimum_residency_seconds = 2;
+  // Required: preserves the existing semantic contract.
+  optional double maximum_evidence_age_seconds = 3;
+  // Required: preserves the existing semantic contract.
+  optional double restore_timeout_seconds = 4;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  SandboxIdlePolicyExcludedSandboxIDsSection excluded_sandbox_i_ds = 5;
+}
+
+message SandboxLogMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string sandbox_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional string stream = 4;
+  // Required: preserves the existing semantic contract.
+  optional string message = 5;
+}
+
+message SandboxSnapshotArtifactDescriptor {
+  // Required: preserves the existing semantic contract.
+  optional SandboxSnapshotArtifactKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  optional string download_url = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 size_bytes = 3;
+  // Required: preserves the existing semantic contract.
+  optional string sha256 = 4;
+}
+
+enum SandboxSnapshotArtifactKind {
+  SANDBOX_SNAPSHOT_ARTIFACT_KIND_UNSPECIFIED = 0;
+  SANDBOX_SNAPSHOT_ARTIFACT_KIND_MEMORY = 1;
+  SANDBOX_SNAPSHOT_ARTIFACT_KIND_VMSTATE = 2;
+  SANDBOX_SNAPSHOT_ARTIFACT_KIND_ROOTFS = 3;
+  SANDBOX_SNAPSHOT_ARTIFACT_KIND_CONFIG = 4;
+}
+
+message SandboxSnapshotArtifactUploadTarget {
+  // Required: preserves the existing semantic contract.
+  optional SandboxSnapshotArtifactKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  optional string upload_url = 2;
+}
+
+enum SandboxSnapshotMode {
+  SANDBOX_SNAPSHOT_MODE_UNSPECIFIED = 0;
+  SANDBOX_SNAPSHOT_MODE_RESUME = 1;
+  SANDBOX_SNAPSHOT_MODE_STOP = 2;
+}
+
+message SandboxSnapshotRef {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string snapshot_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string source_sandbox_id = 2;
+  // Optional: preserves the existing semantic contract.
+  SandboxSnapshotRefArtifactsSection artifacts = 3;
+}
+
+message SandboxSpec {
+  // Optional: preserves the existing semantic contract.
+  WorkloadAdmittedReservation admitted_reservation = 1;
+  // Optional: preserves the existing semantic contract.
+  WorkloadResourceClassSnapshot resource_class = 2;
+  // Required: preserves the existing semantic contract.
+  optional string image = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string image_digest = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 cpus = 5;
+  // Required: preserves the existing semantic contract.
+  optional int64 memory_bytes = 6;
+  // Optional: preserves the existing semantic contract.
+  SandboxSpecEntrypointSection entrypoint = 7;
+  // Optional: preserves the existing semantic contract.
+  SandboxSpecCmdSection cmd = 8;
+  // Required: preserves the existing semantic contract.
+  SandboxSpecEnvSection env = 9;
+  // Optional: preserves the existing semantic contract.
+  optional string working_dir = 10;
+  // Optional: preserves the existing semantic contract.
+  NetworkSpec network = 11;
+  // Optional: preserves the existing semantic contract.
+  SandboxSnapshotRef restore_from = 12;
+  // Optional: preserves the existing semantic contract.
+  optional string cpu_template = 13;
+}
+
+enum SandboxStatus {
+  SANDBOX_STATUS_UNSPECIFIED = 0;
+  SANDBOX_STATUS_STOPPED = 1;
+  SANDBOX_STATUS_SUSPENDED = 2;
+  SANDBOX_STATUS_RUNNING = 3;
+  SANDBOX_STATUS_EXITED = 4;
+  SANDBOX_STATUS_STARTING = 5;
+  SANDBOX_STATUS_STOPPING = 6;
+  SANDBOX_STATUS_ERROR = 7;
+  SANDBOX_STATUS_UNKNOWN = 8;
+}
+
+message SandboxSuspensionEvidence {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string checkpoint_id = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 generation = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 storage_bytes = 3;
+  // Required: preserves the existing semantic contract.
+  optional bool vmm_destroyed = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool verified = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 restore_duration_milliseconds = 6;
+}
+
+enum GuestConfigObservationSection {
+  GUEST_CONFIG_OBSERVATION_SECTION_UNSPECIFIED = 0;
+  GUEST_CONFIG_OBSERVATION_SECTION_PACKAGES = 1;
+  GUEST_CONFIG_OBSERVATION_SECTION_FILES = 2;
+  GUEST_CONFIG_OBSERVATION_SECTION_SERVICES = 3;
+  GUEST_CONFIG_OBSERVATION_SECTION_SYSCTLS = 4;
+}
+
+message GuestConfigServiceObservation {
+  // Required: preserves the existing semantic contract.
+  optional string name = 1;
+  // Optional: preserves the existing semantic contract.
+  optional bool enabled = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string active_state = 3;
+}
+
+enum SnapshotArtifactKind {
+  SNAPSHOT_ARTIFACT_KIND_UNSPECIFIED = 0;
+  SNAPSHOT_ARTIFACT_KIND_VOLUME_SNAPSHOT = 1;
+  SNAPSHOT_ARTIFACT_KIND_VM_CHECKPOINT = 2;
+  SNAPSHOT_ARTIFACT_KIND_SANDBOX_SNAPSHOT = 3;
+}
+
+enum GuestConfigObservationStatus {
+  GUEST_CONFIG_OBSERVATION_STATUS_UNSPECIFIED = 0;
+  GUEST_CONFIG_OBSERVATION_STATUS_CONVERGED = 1;
+  GUEST_CONFIG_OBSERVATION_STATUS_FAILED = 2;
+}
+
+message StorageDeviceIdentity {
+  // Required: preserves the existing semantic contract.
+  optional StorageDeviceIdentityKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  optional string value = 2;
+}
+
+enum StorageDeviceIdentityKind {
+  STORAGE_DEVICE_IDENTITY_KIND_UNSPECIFIED = 0;
+  STORAGE_DEVICE_IDENTITY_KIND_WWN = 1;
+  STORAGE_DEVICE_IDENTITY_KIND_SERIAL = 2;
+}
+
+enum StorageDeviceState {
+  STORAGE_DEVICE_STATE_UNSPECIFIED = 0;
+  STORAGE_DEVICE_STATE_AVAILABLE = 1;
+  STORAGE_DEVICE_STATE_IN_USE = 2;
+  STORAGE_DEVICE_STATE_DRAINING = 3;
+  STORAGE_DEVICE_STATE_FAULTED = 4;
+}
+
+enum StorageDeviceUse {
+  STORAGE_DEVICE_USE_UNSPECIFIED = 0;
+  STORAGE_DEVICE_USE_CHILD_DEVICE = 1;
+  STORAGE_DEVICE_USE_PARTITION_TABLE = 2;
+  STORAGE_DEVICE_USE_FILESYSTEM = 3;
+  STORAGE_DEVICE_USE_MOUNTED = 4;
+  STORAGE_DEVICE_USE_SWAP = 5;
+  STORAGE_DEVICE_USE_LVM_PHYSICAL_VOLUME = 6;
+  STORAGE_DEVICE_USE_READ_ONLY = 7;
+}
+
+message SuccessMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Optional: preserves the existing semantic contract.
+  optional string message = 3;
+}
+
+message GuestConfigSysctlObservation {
+  // Required: preserves the existing semantic contract.
+  optional string key = 1;
+  // Optional: preserves the existing semantic contract.
+  optional string value = 2;
+}
+
+enum HostMemoryTenantClass {
+  HOST_MEMORY_TENANT_CLASS_UNSPECIFIED = 0;
+  HOST_MEMORY_TENANT_CLASS_SINGLE = 1;
+  HOST_MEMORY_TENANT_CLASS_MULTI = 2;
+}
+
+enum HostMemoryTier {
+  HOST_MEMORY_TIER_UNSPECIFIED = 0;
+  HOST_MEMORY_TIER_ZSWAP = 1;
+  HOST_MEMORY_TIER_ZRAM = 2;
+}
+
+message UnrecognizedWorkload {
+  // Required: preserves the existing semantic contract.
+  optional WorkloadKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string workload_id = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 observed_generation = 3;
+  // Optional: preserves the existing semantic contract.
+  optional string status = 4;
+}
+
+enum VMEventType {
+  VM_EVENT_TYPE_UNSPECIFIED = 0;
+  VM_EVENT_TYPE_STATUS_CHANGE = 1;
+  VM_EVENT_TYPE_OPERATION = 2;
+  VM_EVENT_TYPE_ERROR = 3;
+  VM_EVENT_TYPE_INFO = 4;
+  VM_EVENT_TYPE_UNKNOWN = 5;
+}
+
+enum VMLogLevel {
+  VM_LOG_LEVEL_UNSPECIFIED = 0;
+  VM_LOG_LEVEL_DEBUG = 1;
+  VM_LOG_LEVEL_INFO = 2;
+  VM_LOG_LEVEL_WARNING = 3;
+  VM_LOG_LEVEL_ERROR = 4;
+  VM_LOG_LEVEL_UNKNOWN = 5;
+}
+
+message VMLogMessage {
+  // Required: preserves the existing semantic contract.
+  optional string request_id = 1;
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp timestamp = 2;
+  // Required: preserves the existing semantic contract.
+  optional string vm_id = 3;
+  // Required: preserves the existing semantic contract.
+  optional VMLogLevel level = 4;
+  // Required: preserves the existing semantic contract.
+  optional VMLogSource source = 5;
+  // Required: preserves the existing semantic contract.
+  optional VMEventType event_type = 6;
+  // Required: preserves the existing semantic contract.
+  optional string message = 7;
+  // Optional: preserves the existing semantic contract.
+  optional string operation = 8;
+}
+
+enum VMLogSource {
+  VM_LOG_SOURCE_UNSPECIFIED = 0;
+  VM_LOG_SOURCE_AGENT = 1;
+  VM_LOG_SOURCE_UNKNOWN = 2;
+}
+
+message VMMemoryStats {
+  // Required: preserves the existing semantic contract.
+  optional int64 total_bytes = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 available_bytes = 2;
+  // Optional: preserves the existing semantic contract.
+  optional int64 balloon_actual_bytes = 3;
+}
+
+message VMSpec {
+  // Optional: preserves the existing semantic contract.
+  WorkloadAdmittedReservation admitted_reservation = 1;
+  // Optional: preserves the existing semantic contract.
+  WorkloadResourceClassSnapshot resource_class = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 cpus = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 max_cpus = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 memory_bytes = 5;
+  // Required: preserves the existing semantic contract.
+  optional int64 max_memory_bytes = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 balloon_target_bytes = 7;
+  // Optional: preserves the existing semantic contract.
+  optional int64 disk_bytes = 8;
+  // Required: preserves the existing semantic contract.
+  optional bool shared_memory = 9;
+  // Required: preserves the existing semantic contract.
+  optional bool hugepages = 10;
+  // Required: preserves the existing semantic contract.
+  optional BootSource boot = 11;
+  // Optional: preserves the existing semantic contract.
+  MachineProfile machine = 12;
+  // Required: preserves the existing semantic contract.
+  optional bool guest_agent_enabled = 13;
+  // Required: preserves the existing semantic contract.
+  VMSpecVolumesSection volumes = 14;
+  // Required: preserves the existing semantic contract.
+  VMSpecNetworksSection networks = 15;
+  // Optional: preserves the existing semantic contract.
+  ConsoleSpec console = 16;
+  // Required: preserves the existing semantic contract.
+  VMSpecSshAuthorizedKeysSection ssh_authorized_keys = 17;
+  // Optional: preserves the existing semantic contract.
+  optional string user_data = 18;
+  // Required: preserves the existing semantic contract.
+  optional MetadataSource metadata_source = 19;
+}
+
+enum VMStatus {
+  VM_STATUS_UNSPECIFIED = 0;
+  VM_STATUS_CREATED = 1;
+  VM_STATUS_RUNNING = 2;
+  VM_STATUS_SHUTDOWN = 3;
+  VM_STATUS_PAUSED = 4;
+  VM_STATUS_STARTING = 5;
+  VM_STATUS_STOPPING = 6;
+  VM_STATUS_ERROR = 7;
+  VM_STATUS_UNKNOWN = 8;
+}
+
+enum VolumeBlockMode {
+  VOLUME_BLOCK_MODE_UNSPECIFIED = 0;
+  VOLUME_BLOCK_MODE_CONSERVATIVE = 1;
+  VOLUME_BLOCK_MODE_DIRECT = 2;
+  VOLUME_BLOCK_MODE_CACHED_SHARED = 3;
+}
+
+message VolumeIOLimits {
+  // Optional: preserves the existing semantic contract.
+  optional int64 iops_total = 1;
+  // Optional: preserves the existing semantic contract.
+  optional int64 bps_total = 2;
+}
+
+message VolumeIOObservedRate {
+  // Required: preserves the existing semantic contract.
+  optional double iops = 1;
+  // Required: preserves the existing semantic contract.
+  optional double bytes_per_second = 2;
+}
+
+message VolumeSpec {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string volume_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: device-name.
+  optional string device_name = 2;
+  // Optional: preserves the existing semantic contract.
+  optional DiskAttachment attachment = 3;
+  // Required: preserves the existing semantic contract.
+  optional bool readonly = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 boot_order = 5;
+  // Optional: preserves the existing semantic contract.
+  VolumeIOLimits io_limits = 6;
+  // Required: preserves the existing semantic contract.
+  optional VolumeBlockMode block_mode = 7;
+  // Optional: preserves the existing semantic contract.
+  AppliedBlockDevicePolicy applied_block_policy = 8;
+}
+
+message WorkloadAdmittedReservation {
+  // Required: preserves the existing semantic contract.
+  optional int64 granted_cp_us = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 guest_commitment_bytes = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 cpu_micro_units = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 discounted_guest_bytes = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 backend_overhead_bytes = 5;
+}
+
+message WorkloadEnforcementAcknowledgement {
+  // Required: preserves the existing semantic contract.
+  optional WorkloadKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string workload_id = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 applied_generation = 3;
+  // Required: preserves the existing semantic contract.
+  WorkloadResourceClassSnapshot resource_class = 4;
+  // Required: preserves the existing semantic contract.
+  optional WorkloadResourceClassBackend backend = 5;
+  // Required: preserves the existing semantic contract.
+  WorkloadAdmittedReservation accounted_reservation = 6;
+  // Required: preserves the existing semantic contract.
+  optional int64 runtime_guest_bytes = 7;
+  // Required: preserves the existing semantic contract.
+  optional int64 page_size_bytes = 8;
+  // Required: preserves the existing semantic contract.
+  WorkloadRuntimeLimits desired_limits = 9;
+  // Required: preserves the existing semantic contract.
+  WorkloadRuntimeLimits applied_limits = 10;
+  // Required: preserves the existing semantic contract.
+  optional bool cpu_quota_unlimited = 11;
+  // Required: preserves the existing semantic contract.
+  optional bool ownership_verified = 12;
+}
+
+enum WorkloadHardLimitPolicy {
+  WORKLOAD_HARD_LIMIT_POLICY_UNSPECIFIED = 0;
+  WORKLOAD_HARD_LIMIT_POLICY_GUEST_AND_BACKEND = 1;
+}
+
+enum WorkloadKind {
+  WORKLOAD_KIND_UNSPECIFIED = 0;
+  WORKLOAD_KIND_VM = 1;
+  WORKLOAD_KIND_SANDBOX = 2;
+  WORKLOAD_KIND_VOLUME = 3;
+  WORKLOAD_KIND_VOLUME_SNAPSHOT = 4;
+  WORKLOAD_KIND_VM_CHECKPOINT = 5;
+  WORKLOAD_KIND_SANDBOX_SNAPSHOT = 6;
+}
+
+message WorkloadMemoryEventsTelemetry {
+  // Required: preserves the existing semantic contract.
+  optional ResourceTelemetryAvailability availability = 1;
+  // Optional: preserves the existing semantic contract.
+  optional int64 low = 2;
+  // Optional: preserves the existing semantic contract.
+  optional int64 high = 3;
+  // Optional: preserves the existing semantic contract.
+  optional int64 max = 4;
+  // Optional: preserves the existing semantic contract.
+  optional int64 oom = 5;
+  // Optional: preserves the existing semantic contract.
+  optional int64 oom_kill = 6;
+  // Optional: preserves the existing semantic contract.
+  optional int64 oom_group_kill = 7;
+}
+
+enum WorkloadResourceClassBackend {
+  WORKLOAD_RESOURCE_CLASS_BACKEND_UNSPECIFIED = 0;
+  WORKLOAD_RESOURCE_CLASS_BACKEND_QEMU_VM = 1;
+  WORKLOAD_RESOURCE_CLASS_BACKEND_JAILED_FIRECRACKER_SANDBOX = 2;
+}
+
+message WorkloadResourceClassEnforcement {
+  // Required: preserves the existing semantic contract.
+  optional WorkloadResourceClassBackend backend = 1;
+  // Required: preserves the existing semantic contract.
+  optional bool controllers_delegated = 2;
+  // Required: preserves the existing semantic contract.
+  optional bool stable_ownership = 3;
+  // Required: preserves the existing semantic contract.
+  optional bool pre_execution_enforcement = 4;
+  // Required: preserves the existing semantic contract.
+  optional bool effective_readback = 5;
+}
+
+enum WorkloadResourceClassKind {
+  WORKLOAD_RESOURCE_CLASS_KIND_UNSPECIFIED = 0;
+  WORKLOAD_RESOURCE_CLASS_KIND_GUARANTEED = 1;
+  WORKLOAD_RESOURCE_CLASS_KIND_BURSTABLE = 2;
+}
+
+message WorkloadResourceClassPolicy {
+  // Required: preserves the existing semantic contract.
+  optional WorkloadResourceClassKind kind = 1;
+  // Required: preserves the existing semantic contract.
+  optional double cpu_allocation_ratio = 2;
+  // Required: preserves the existing semantic contract.
+  optional double memory_allocation_ratio = 3;
+  // Required: preserves the existing semantic contract.
+  optional int64 cpu_weight = 4;
+  // Required: preserves the existing semantic contract.
+  optional int64 memory_high_percent = 5;
+  // Required: preserves the existing semantic contract.
+  optional WorkloadHardLimitPolicy hard_limit_policy = 6;
+  // Required: preserves the existing semantic contract.
+  optional double max_cpu_pressure10 = 7;
+  // Required: preserves the existing semantic contract.
+  optional double max_memory_pressure10 = 8;
+  // Required: preserves the existing semantic contract.
+  optional int64 max_telemetry_age_seconds = 9;
+}
+
+message WorkloadResourceClassSnapshot {
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string class_id = 1;
+  // Required: preserves the existing semantic contract.
+  // Format: uuid.
+  optional string site_id = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 revision = 3;
+  // Required: preserves the existing semantic contract.
+  WorkloadResourceClassPolicy policy = 4;
+}
+
+message WorkloadResourceTelemetry {
+  // Required: preserves the existing semantic contract.
+  google.protobuf.Timestamp sampled_at = 1;
+  // Required: preserves the existing semantic contract.
+  optional ResourcePressureHealth health = 2;
+  // Required: preserves the existing semantic contract.
+  optional ResourceTelemetryAvailability cgroup_v2 = 3;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue memory_current_bytes = 4;
+  // Required: preserves the existing semantic contract.
+  WorkloadMemoryEventsTelemetry memory_events = 5;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry memory_pressure = 6;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry cpu_pressure = 7;
+  // Required: preserves the existing semantic contract.
+  PressureStallTelemetry io_pressure = 8;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue cpu_usage_microseconds = 9;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue cpu_throttled_microseconds = 10;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue cpu_throttled_periods_total = 11;
+  // Required: preserves the existing semantic contract.
+  ResourceTelemetryValue guest_steal_microseconds = 12;
+}
+
+message WorkloadRuntimeLimits {
+  // Required: preserves the existing semantic contract.
+  optional int64 memory_high_bytes = 1;
+  // Required: preserves the existing semantic contract.
+  optional int64 memory_max_bytes = 2;
+  // Required: preserves the existing semantic contract.
+  optional int64 cpu_weight = 3;
+}
+
+message AgentHeartbeatMessageDependencyObservationsSection {
+  repeated NodeDependencyObservation values = 1;
+}
+
+message AgentRegisterMessageHypervisorsSection {
+  repeated HypervisorSupport values = 1;
+}
+
+message AgentRegisterMessageResourceClassEnforcementSection {
+  repeated WorkloadResourceClassEnforcement values = 1;
+}
+
+message AgentRegisterMessageDependencyObservationsSection {
+  repeated NodeDependencyObservation values = 1;
+}
+
+message CephVolumeStorageMonEndpointsSection {
+  repeated string values = 1;
+}
+
+message DesiredDNSRecordValuesSection {
+  repeated string values = 1;
+}
+
+message DesiredDNSZoneNetworkIdsSection {
+  repeated string values = 1;
+}
+
+message DesiredDNSZoneRecordsSection {
+  repeated DesiredDNSRecord values = 1;
+}
+
+message DesiredLoadBalancerListenersSection {
+  repeated DesiredLoadBalancerListener values = 1;
+}
+
+message DesiredLoadBalancerBackendsSection {
+  repeated DesiredLoadBalancerBackend values = 1;
+}
+
+message DesiredNetworkACLRulesSection {
+  repeated DesiredNetworkACLRule values = 1;
+}
+
+message DesiredNetworkStateDnsServersSection {
+  repeated string values = 1;
+}
+
+message DesiredNetworkStateResolverAddressesSection {
+  repeated string values = 1;
+}
+
+message DesiredNetworkStateFloatingIPsSection {
+  repeated DesiredFloatingIP values = 1;
+}
+
+message DesiredNetworkStateLoadBalancersSection {
+  repeated DesiredLoadBalancer values = 1;
+}
+
+message DesiredNetworkStateNetworkAcLsSection {
+  repeated DesiredNetworkACL values = 1;
+}
+
+message DesiredRestoreArtifactsSection {
+  repeated SandboxSnapshotArtifactDescriptor values = 1;
+}
+
+message DesiredSecurityGroupRulesSection {
+  repeated DesiredSecurityGroupRule values = 1;
+}
+
+message DesiredSnapshotExportUploadsSection {
+  repeated SandboxSnapshotArtifactUploadTarget values = 1;
+}
+
+message DesiredStateMessageVmsSection {
+  repeated DesiredVMState values = 1;
+}
+
+message DesiredStateMessageSandboxesSection {
+  repeated DesiredSandboxState values = 1;
+}
+
+message DesiredStateMessageNetworksSection {
+  repeated DesiredNetworkState values = 1;
+}
+
+message DesiredStateMessageSecurityGroupsSection {
+  repeated DesiredSecurityGroup values = 1;
+}
+
+message DesiredStateMessageTombstonesSection {
+  repeated DesiredWorkloadTombstone values = 1;
+}
+
+message DesiredStateMessageVolumesSection {
+  repeated DesiredVolumeState values = 1;
+}
+
+message DesiredStateMessageSnapshotsSection {
+  repeated DesiredSnapshotState values = 1;
+}
+
+message DesiredStateMessageCephCredentialRevocationsSection {
+  repeated DesiredCephCredentialRevocation values = 1;
+}
+
+message DesiredStateMessageDnsZonesSection {
+  repeated DesiredDNSZone values = 1;
+}
+
+message DiskAttachmentRbdMonEndpointsSection {
+  repeated string values = 1;
+}
+
+message GuestConfigPackagesSection {
+  repeated GuestPackage values = 1;
+}
+
+message GuestConfigFilesSection {
+  repeated GuestFile values = 1;
+}
+
+message GuestConfigServicesSection {
+  repeated GuestService values = 1;
+}
+
+message GuestConfigSysctlsSection {
+  repeated GuestSysctl values = 1;
+}
+
+message GuestConfigObservationPackagesSection {
+  repeated GuestConfigPackageObservation values = 1;
+}
+
+message GuestConfigObservationFilesSection {
+  repeated GuestConfigFileObservation values = 1;
+}
+
+message GuestConfigObservationServicesSection {
+  repeated GuestConfigServiceObservation values = 1;
+}
+
+message GuestConfigObservationSysctlsSection {
+  repeated GuestConfigSysctlObservation values = 1;
+}
+
+message GuestExecStartMessageCommandSection {
+  repeated string values = 1;
+}
+
+message GuestExecStartMessageEnvSection {
+  map<string, string> values = 1;
+}
+
+message GuestInfoInterfacesSection {
+  repeated GuestNetworkInterface values = 1;
+}
+
+message GuestNetworkInterfaceAddressesSection {
+  repeated GuestIPAddress values = 1;
+}
+
+message HostResourceTelemetryMemoryWarningsSection {
+  repeated string values = 1;
+}
+
+message IdentityPolicyAudiencesSection {
+  repeated string values = 1;
+}
+
+message ImageInfoArtifactsSection {
+  repeated ArtifactInfo values = 1;
+}
+
+message InstanceMetadataNicsSection {
+  repeated MetadataNIC values = 1;
+}
+
+message InstanceMetadataSshAuthorizedKeysSection {
+  repeated string values = 1;
+}
+
+message InstanceMetadataTagsSection {
+  map<string, string> values = 1;
+}
+
+message MetadataNICDnsServersSection {
+  repeated string values = 1;
+}
+
+message MetadataNICResolverAddressesSection {
+  repeated string values = 1;
+}
+
+message NetworkSpecDnsServersSection {
+  repeated string values = 1;
+}
+
+message NetworkSpecSecurityGroupIdsSection {
+  repeated string values = 1;
+}
+
+message NetworkSpecResolverAddressesSection {
+  repeated string values = 1;
+}
+
+message NodeDependencyObservationAffectedCapabilitiesSection {
+  repeated NodeCapability values = 1;
+}
+
+message ObservedLoadBalancerStateBackendsSection {
+  repeated ObservedLoadBalancerBackend values = 1;
+}
+
+message ObservedPortMembershipStateSecurityGroupIdsSection {
+  repeated string values = 1;
+}
+
+message ObservedStateReportVmsSection {
+  repeated ObservedVMState values = 1;
+}
+
+message ObservedStateReportSandboxesSection {
+  repeated ObservedSandboxState values = 1;
+}
+
+message ObservedStateReportUnrecognizedSection {
+  repeated UnrecognizedWorkload values = 1;
+}
+
+message ObservedStateReportVolumesSection {
+  repeated ObservedVolumeState values = 1;
+}
+
+message ObservedStateReportSnapshotsSection {
+  repeated ObservedSnapshotState values = 1;
+}
+
+message ObservedStateReportLoadBalancersSection {
+  repeated ObservedLoadBalancerState values = 1;
+}
+
+message ObservedStateReportNetworksSection {
+  repeated ObservedNetworkState values = 1;
+}
+
+message ObservedStateReportSecurityGroupsSection {
+  repeated ObservedSecurityGroupState values = 1;
+}
+
+message ObservedStateReportPortMembershipsSection {
+  repeated ObservedPortMembershipState values = 1;
+}
+
+message ObservedStateReportStorageDevicesSection {
+  repeated ObservedStorageDevice values = 1;
+}
+
+message ObservedStorageDeviceUsesSection {
+  repeated StorageDeviceUse values = 1;
+}
+
+message ObservedVMStateAppliedNetworkInterfaceIdsSection {
+  repeated string values = 1;
+}
+
+message ResourceEnforcementSnapshotAcknowledgementsSection {
+  repeated WorkloadEnforcementAcknowledgement values = 1;
+}
+
+message SandboxGuestIdleActivityActiveExecSessionIdsSection {
+  repeated string values = 1;
+}
+
+message SandboxIdleActivityReportActiveExecSessionIdsSection {
+  repeated string values = 1;
+}
+
+message SandboxIdlePolicyExcludedSandboxIDsSection {
+  repeated string values = 1;
+}
+
+message SandboxSnapshotRefArtifactsSection {
+  repeated SandboxSnapshotArtifactDescriptor values = 1;
+}
+
+message SandboxSpecEntrypointSection {
+  repeated string values = 1;
+}
+
+message SandboxSpecCmdSection {
+  repeated string values = 1;
+}
+
+message SandboxSpecEnvSection {
+  map<string, string> values = 1;
+}
+
+message VMSpecVolumesSection {
+  repeated VolumeSpec values = 1;
+}
+
+message VMSpecNetworksSection {
+  repeated NetworkSpec values = 1;
+}
+
+message VMSpecSshAuthorizedKeysSection {
+  repeated string values = 1;
+}

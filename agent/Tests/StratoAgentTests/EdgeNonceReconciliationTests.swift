@@ -45,7 +45,7 @@ struct EdgeNonceReconciliationTests {
         applied: AppliedEdgeNonces?,
         lastApplied: Int64 = 0
     ) -> [ReconcileStep] {
-        let id = entry.vmId.uuidString
+        let id = entry.vmID
         let plan = Reconciler.plan(
             desired: [entry],
             present: [id: present],

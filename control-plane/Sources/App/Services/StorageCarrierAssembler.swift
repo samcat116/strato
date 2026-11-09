@@ -84,7 +84,7 @@ extension DesiredStateAssembler {
             var export: DesiredSnapshotExport?
             if snapshot.exportDesired {
                 export = DesiredSnapshotExport(
-                    uploads: SandboxSnapshotArtifactKind.allCases.map { kind in
+                    uploads: SandboxSnapshotArtifactKind.knownCases.map { kind in
                         SandboxSnapshotArtifactUploadTarget(
                             kind: kind,
                             uploadURL: SandboxSnapshot.artifactTransferPath(
@@ -373,7 +373,7 @@ extension DesiredStateAssembler {
                     workloadId: claim.resourceID,
                     generation: generation)
             }
-            .sorted { $0.workloadId.uuidString < $1.workloadId.uuidString }
+            .sorted { $0.workloadID < $1.workloadID }
     }
 
     /// The agent self-update this sync should carry (issue #434): whatever

@@ -77,8 +77,8 @@ struct NetworkReconcilerTests {
         // names are derived from network ids, not the user-chosen names.
         #expect(
             Set(router.ports.map(\.switchName)) == [
-                OVNNaming.switchName(networkId: web.networkId),
-                OVNNaming.switchName(networkId: db.networkId),
+                OVNNaming.switchName(networkId: validatedProtocolUUID(web.networkID)),
+                OVNNaming.switchName(networkId: validatedProtocolUUID(db.networkID)),
             ])
         // Both networks want external access → both subnets get SNAT.
         #expect(Set(router.snatSubnets) == ["192.168.1.0/24", "10.0.5.0/24"])
@@ -121,7 +121,7 @@ struct NetworkReconcilerTests {
         let plan = NetworkReconciler.plan(networks: [net])
         #expect(plan.switches.count == 1)
         #expect(plan.routers.isEmpty)
-        #expect(plan.switches[0].name == OVNNaming.switchName(networkId: net.networkId))
+        #expect(plan.switches[0].name == OVNNaming.switchName(networkId: validatedProtocolUUID(net.networkID)))
     }
 
     @Test("externalAccess=false gets an L3 gateway but no SNAT")
@@ -252,8 +252,10 @@ struct NetworkReconcilerTests {
         // Distinct switches, named by id rather than by the shared name.
         #expect(plan.switches.count == 2)
         #expect(Set(plan.switches.map(\.name)).count == 2)
-        #expect(plan.switches.contains { $0.name == OVNNaming.switchName(networkId: a.networkId) })
-        #expect(plan.switches.contains { $0.name == OVNNaming.switchName(networkId: b.networkId) })
+        #expect(
+            plan.switches.contains { $0.name == OVNNaming.switchName(networkId: validatedProtocolUUID(a.networkID)) })
+        #expect(
+            plan.switches.contains { $0.name == OVNNaming.switchName(networkId: validatedProtocolUUID(b.networkID)) })
 
         // One router each, so their identical subnets never meet — and each
         // SNATs that subnet on its own router.
@@ -287,13 +289,19 @@ struct NetworkReconcilerTests {
         let desired = NetworkReconciler.plan(networks: [web])
         let actions = NetworkReconciler.teardownActions(desired: desired, observed: observed)
 
-        #expect(actions.contains(.routerPort(name: OVNNaming.routerPortName(networkId: db.networkId))))
         #expect(
-            actions.contains(.switchRouterPort(name: OVNNaming.switchRouterPortName(networkId: db.networkId))))
+            actions.contains(
+                .routerPort(name: OVNNaming.routerPortName(networkId: validatedProtocolUUID(db.networkID)))))
+        #expect(
+            actions.contains(
+                .switchRouterPort(name: OVNNaming.switchRouterPortName(networkId: validatedProtocolUUID(db.networkID))))
+        )
         #expect(actions.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
         // The shared router and web's objects survive.
         #expect(!actions.contains(.router(name: "lr-p")))
-        #expect(!actions.contains(.routerPort(name: OVNNaming.routerPortName(networkId: web.networkId))))
+        #expect(
+            !actions.contains(
+                .routerPort(name: OVNNaming.routerPortName(networkId: validatedProtocolUUID(web.networkID)))))
     }
 
     @Test("A stale-skipped network is protected from teardown")
@@ -312,7 +320,9 @@ struct NetworkReconcilerTests {
         // With no stale protection (db truly absent from the sync), db is torn down.
         let unprotected = NetworkReconciler.teardownActions(
             desired: NetworkReconciler.plan(networks: [web]), observed: observed)
-        #expect(unprotected.contains(.routerPort(name: OVNNaming.routerPortName(networkId: db.networkId))))
+        #expect(
+            unprotected.contains(
+                .routerPort(name: OVNNaming.routerPortName(networkId: validatedProtocolUUID(db.networkID)))))
         #expect(unprotected.contains(.snat(router: "lr-p", logicalIP: "10.0.5.0/24")))
     }
 
@@ -362,10 +372,13 @@ struct NetworkReconcilerTests {
         let net = network(name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
         let protected = NetworkReconciler.protectedTopology(forStale: [net])
         #expect(protected.routerNames.contains("lr-p"))
-        #expect(protected.routerPortNames.contains(OVNNaming.routerPortName(networkId: net.networkId)))
+        #expect(
+            protected.routerPortNames.contains(
+                OVNNaming.routerPortName(networkId: validatedProtocolUUID(net.networkID))))
         #expect(protected.routerPortNames.contains("lrp-ext-p"))
         #expect(
-            protected.switchRouterPortNames.contains(OVNNaming.switchRouterPortName(networkId: net.networkId)))
+            protected.switchRouterPortNames.contains(
+                OVNNaming.switchRouterPortName(networkId: validatedProtocolUUID(net.networkID))))
         #expect(protected.externalSwitchNames.contains("ls-ext-p"))
         #expect(protected.snatRules.contains(SNATRuleKey(router: "lr-p", logicalIP: "192.168.1.0/24")))
     }
@@ -450,12 +463,17 @@ struct NetworkReconcilerTests {
             networks: [web], actuator: actuator, logger: Logger(label: "test"))
 
         let calls = await actuator.calls
-        #expect(calls.contains("ensureSwitch(\(OVNNaming.switchName(networkId: web.networkId)))"))
+        #expect(
+            calls.contains("ensureSwitch(\(OVNNaming.switchName(networkId: validatedProtocolUUID(web.networkID))))"))
         #expect(calls.contains("ensureRouter(lr-p)"))
-        #expect(calls.contains("ensureRouterPort(\(OVNNaming.routerPortName(networkId: web.networkId))@lr-p)"))
+        #expect(
+            calls.contains(
+                "ensureRouterPort(\(OVNNaming.routerPortName(networkId: validatedProtocolUUID(web.networkID)))@lr-p)"))
         #expect(calls.contains("ensureSNAT(lr-p,192.168.1.0/24)"))
         // db's objects are torn down.
-        #expect(calls.contains("removeRouterPort(\(OVNNaming.routerPortName(networkId: db.networkId)))"))
+        #expect(
+            calls.contains(
+                "removeRouterPort(\(OVNNaming.routerPortName(networkId: validatedProtocolUUID(db.networkID))))"))
         #expect(calls.contains("removeSNAT(lr-p,10.0.5.0/24)"))
     }
 
@@ -468,7 +486,9 @@ struct NetworkReconcilerTests {
             networks: [web], actuator: actuator, logger: Logger(label: "test"))
 
         let calls = await actuator.calls
-        #expect(calls.contains("ensureRouterPort(\(OVNNaming.routerPortName(networkId: web.networkId))@lr-p)"))
+        #expect(
+            calls.contains(
+                "ensureRouterPort(\(OVNNaming.routerPortName(networkId: validatedProtocolUUID(web.networkID)))@lr-p)"))
         #expect(!calls.contains(where: { $0.hasPrefix("ensureSNAT") }))
     }
 
@@ -488,8 +508,8 @@ struct NetworkReconcilerTests {
 
         let failure = try #require(
             failures.first { $0.message.contains("No detectable host uplink") })
-        #expect(failure.affectedNetworkIds == [egress.networkId])
-        #expect(failure.affectedNetworkIds?.contains(isolated.networkId) == false)
+        #expect(failure.affectedNetworkIds == [validatedProtocolUUID(egress.networkID)])
+        #expect(failure.affectedNetworkIds?.contains(validatedProtocolUUID(isolated.networkID)) == false)
     }
 
     @Test("A per-network reconcile failure identifies only its network")
@@ -498,7 +518,7 @@ struct NetworkReconcilerTests {
             name: "failed", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p")
         let healthy = network(
             name: "healthy", subnet: "10.0.5.0/24", gateway: "10.0.5.1", routerKey: "p")
-        let failedSwitch = OVNNaming.switchName(networkId: failed.networkId)
+        let failedSwitch = OVNNaming.switchName(networkId: validatedProtocolUUID(failed.networkID))
         let actuator = RecordingNetworkActuator(
             observed: ObservedNetworkTopology(), failingSwitchNames: [failedSwitch])
 
@@ -506,8 +526,8 @@ struct NetworkReconcilerTests {
             networks: [failed, healthy], actuator: actuator, logger: Logger(label: "test"))
 
         let failure = try #require(failures.first { $0.message.contains(failedSwitch) })
-        #expect(failure.affectedNetworkIds == [failed.networkId])
-        #expect(failure.affectedNetworkIds?.contains(healthy.networkId) == false)
+        #expect(failure.affectedNetworkIds == [validatedProtocolUUID(failed.networkID)])
+        #expect(failure.affectedNetworkIds?.contains(validatedProtocolUUID(healthy.networkID)) == false)
     }
 
     // MARK: - Metadata localport (STR-49)
@@ -572,7 +592,7 @@ struct NetworkReconcilerTests {
         let stale = network(
             name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
             metadataEnabled: true)
-        let portName = OVNNaming.serviceLocalPortName(networkId: stale.networkId)
+        let portName = OVNNaming.serviceLocalPortName(networkId: validatedProtocolUUID(stale.networkID))
         let protected = NetworkReconciler.protectedTopology(forStale: [stale])
 
         #expect(protected.serviceLocalPortNames.contains(portName))
@@ -597,8 +617,8 @@ struct NetworkReconcilerTests {
             name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
             metadataEnabled: true, resolverEnabled: true,
             resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
-        let metadataPort = OVNNaming.serviceLocalPortName(networkId: stale.networkId)
-        let resolverPort = OVNNaming.resolverPortName(networkId: stale.networkId)
+        let metadataPort = OVNNaming.serviceLocalPortName(networkId: validatedProtocolUUID(stale.networkID))
+        let resolverPort = OVNNaming.resolverPortName(networkId: validatedProtocolUUID(stale.networkID))
         let protected = NetworkReconciler.protectedTopology(forStale: [stale])
 
         #expect(protected.serviceLocalPortNames.contains(resolverPort))
@@ -620,7 +640,9 @@ struct NetworkReconcilerTests {
             metadataEnabled: false, resolverEnabled: false)
         let protected = NetworkReconciler.protectedTopology(forStale: [stale])
 
-        #expect(protected.serviceLocalPortNames.contains(OVNNaming.resolverPortName(networkId: stale.networkId)))
+        #expect(
+            protected.serviceLocalPortNames.contains(
+                OVNNaming.resolverPortName(networkId: validatedProtocolUUID(stale.networkID))))
     }
 
     @Test("Networks sharing a subnet get distinct metadata port names and MACs")
@@ -851,7 +873,7 @@ struct NetworkReconcilerTests {
             $0.message.contains("203.0.113.31") || $0.message.contains("10.0.5.0/24")
         }
         #expect(natFailures.count == 2)
-        #expect(natFailures.allSatisfy { $0.affectedNetworkIds == [network.networkId] })
+        #expect(natFailures.allSatisfy { $0.affectedNetworkIds == [validatedProtocolUUID(network.networkID)] })
     }
 
     @Test("reconcile skips DNAT (like SNAT) when no uplink is available")

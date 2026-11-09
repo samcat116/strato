@@ -47,10 +47,10 @@ final class VolumeConvergenceTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
+        app: Application, named name: String, protocolMajor: Int = Int(AgentProtocolCompatibility.major)
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, hostname: "\(name).test", protocolVersion: protocolVersion)
+            on: app, named: name, hostname: "\(name).test", protocolMajor: protocolMajor)
     }
 
     @discardableResult
@@ -116,15 +116,15 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId, size: 20 << 30)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes.first)
-            #expect(entry.volumeId == volume.id)
+            let entry = try #require(message.volumes.values.first)
+            #expect(entry.volumeID == volume.id?.uuidString)
             #expect(entry.sizeBytes == 20 << 30)
             #expect(entry.format == "qcow2")
             #expect(entry.desiredStatus == .present)
-            #expect(entry.attachment == nil)
+            #expect(!entry.hasAttachment)
             // Neither the pool nor the path travels: placement is expressed by
             // whose sync the entry is on, and the agent owns path layout.
-            #expect(entry.source == nil)
+            #expect(!entry.hasSource)
         }
     }
 
@@ -137,7 +137,7 @@ final class VolumeConvergenceTests {
                 blockMode: .direct)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes.first { $0.volumeId == volume.id })
+            let entry = try #require(message.volumes.values.first { $0.volumeID == volume.id?.uuidString })
             #expect(entry.blockMode == .direct)
         }
     }
@@ -172,9 +172,9 @@ final class VolumeConvergenceTests {
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let attachment = try #require(
-                message.volumes.first { $0.volumeId == volume.id }?.attachment)
-            #expect(attachment.vmId == vm.id)
-            #expect(attachment.deviceName.rawValue == "disk1")
+                message.volumes.values.first { $0.volumeID == volume.id?.uuidString }?.attachment)
+            #expect(attachment.vmID == vm.id?.uuidString)
+            #expect(attachment.deviceName == "disk1")
             #expect(attachment.readonly)
             #expect(attachment.bootOrder == 2)
         }
@@ -206,14 +206,14 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
 
             let vmHostMessage = try await app.desiredStateAssembler.assemble(agentId: vmAgentID)
-            let vmHostEntry = try #require(vmHostMessage.volumes.first { $0.volumeId == volume.id })
-            #expect(vmHostEntry.attachment?.vmId == vm.id)
+            let vmHostEntry = try #require(vmHostMessage.volumes.values.first { $0.volumeID == volume.id?.uuidString })
+            #expect(vmHostEntry.attachment.vmID == vm.id?.uuidString)
 
             let storageOnlyMessage = try await app.desiredStateAssembler.assemble(
                 agentId: storageOnlyAgentID)
             let storageOnlyEntry = try #require(
-                storageOnlyMessage.volumes.first { $0.volumeId == volume.id })
-            #expect(storageOnlyEntry.attachment == nil)
+                storageOnlyMessage.volumes.values.first { $0.volumeID == volume.id?.uuidString })
+            #expect(!storageOnlyEntry.hasAttachment)
         }
     }
 
@@ -235,10 +235,10 @@ final class VolumeConvergenceTests {
             try await clone.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes.first { $0.volumeId == clone.id })
-            #expect(entry.source?.kind == DesiredVolumeSource.clone)
-            #expect(entry.source?.sourceVolumeId == source.id)
-            #expect(entry.source?.sourceVMId == sourceVM.id)
+            let entry = try #require(message.volumes.values.first { $0.volumeID == clone.id?.uuidString })
+            #expect(entry.source.kind == DesiredVolumeSource.clone)
+            #expect(entry.source.sourceVolumeID == source.id?.uuidString)
+            #expect(entry.source.sourceVmID == sourceVM.id?.uuidString)
         }
     }
 
@@ -456,8 +456,8 @@ final class VolumeConvergenceTests {
             #expect(replica.diskAttachment == attachment)
 
             let desired = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let vmEntry = try #require(desired.vms.first { $0.vmId == vm.id })
-            #expect(vmEntry.spec.volumes.first?.attachment == attachment)
+            let vmEntry = try #require(desired.vms.values.first { $0.vmID == vm.id?.uuidString })
+            #expect(vmEntry.spec.volumes.values.first?.attachment == attachment)
         }
     }
 
@@ -830,8 +830,8 @@ final class VolumeConvergenceTests {
             let secondDesiredState = try await app.desiredStateAssembler.assemble(
                 agentId: secondAgentID)
             #expect(
-                secondDesiredState.volumes.contains {
-                    $0.volumeId == volumeID && $0.desiredStatus == .absent
+                secondDesiredState.volumes.values.contains {
+                    $0.volumeID == volumeID.uuidString && $0.desiredStatus == .absent
                 })
             #expect(
                 Set(try await volume.placementAgentIDs(on: app.db))

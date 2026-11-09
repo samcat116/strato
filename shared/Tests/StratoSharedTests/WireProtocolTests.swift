@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Wire protocol versioning and date strategy")
 struct WireProtocolTests {
@@ -9,15 +9,14 @@ struct WireProtocolTests {
     @Test("envelope carries routing and payload without a duplicate version")
     func envelopeHasNoVersion() throws {
         let envelope = try MessageEnvelope(message: Fixtures.consoleConnect(vmId: "vm-1"))
-        let data = try WireProtocol.makeEncoder().encode(envelope)
-        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(object["version"] == nil)
-        #expect(Set(object.keys) == ["type", "payload"])
+        let decoded = try WireProtocol.decodeEnvelope(WireProtocol.encodeEnvelope(envelope))
+        #expect(decoded.body == envelope.body)
+        #expect(decoded.requiredCapabilities.isEmpty)
     }
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        #expect(WireProtocol.currentVersion == 72)
+        #expect(Int(AgentProtocolCompatibility.major) == 1)
 
     }
     @Test("the sandbox guest control contract is exact")
@@ -35,7 +34,7 @@ struct WireProtocolTests {
             version: "1.2.3",
             resources: Fixtures.resources
         )
-        #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
+        #expect(try throughEnvelope(register).protocolOffer.major == AgentProtocolCompatibility.major)
 
         let missing =
             #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"architecture":"x86_64","hypervisors":[],"sandboxCapable":false,"sandboxNetworkingCapable":false,"tpmCapable":false,"operatingSystem":"linux","resolverCapable":false,"metadataServiceCapable":false,"dependencyObservations":[]}"#
@@ -59,7 +58,7 @@ struct WireProtocolTests {
         // A bare JSONDecoder (what an un-upgraded peer uses) must still read it.
         let decodedByLegacyPeer = try JSONDecoder().decode(
             ConsoleConnectMessage.self, from: encodeJSON(message))
-        #expect(decodedByLegacyPeer.timestamp == Fixtures.timestamp)
+        #expect(decodedByLegacyPeer.timestamp.date == Fixtures.timestamp)
     }
 
     @Test("decoder accepts the legacy numeric (deferredToDate) form")
@@ -75,8 +74,8 @@ struct WireProtocolTests {
         #expect(object?["timestamp"] is NSNumber)
 
         let decoded = try decodeJSON(ConsoleConnectMessage.self, from: legacyData)
-        #expect(decoded.timestamp == Fixtures.timestamp)
-        #expect(decoded.vmId == "vm-1")
+        #expect(decoded.timestamp.date == Fixtures.timestamp)
+        #expect(decoded._jsonVmId == "vm-1")
     }
 
     @Test("decoder also accepts ISO-8601 strings, so a future encoder flip is safe")
@@ -87,8 +86,8 @@ struct WireProtocolTests {
         let json =
             #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","vmId":"vm-1","sessionId":"s","stream":"Serial"}"#
         let decoded = try decodeJSON(ConsoleConnectMessage.self, from: json)
-        #expect(decoded.timestamp == Fixtures.timestamp)
-        #expect(decoded.vmId == "vm-1")
+        #expect(decoded.timestamp.date == Fixtures.timestamp)
+        #expect(decoded._jsonVmId == "vm-1")
     }
 
     @Test("a malformed date string is a decode error, not a silent zero date")

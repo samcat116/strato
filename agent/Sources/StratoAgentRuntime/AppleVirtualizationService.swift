@@ -50,8 +50,8 @@ actor AppleVirtualizationService: HypervisorService {
         try ManagedStatePermissions.prepareVMDirectory(at: directory)
         let iso = VMDirectoryLayout.cloudInitISO(vmDirectory: directory)
         _ = try await provisioner.makeNoCloudISO(
-            at: iso, vmId: vmId, hostname: metadata?.hostname,
-            sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.hasHostname ? $0.hostname : nil },
+            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.hasUserData ? spec.userData : nil,
             networkAttachments: networkAttachments)
         try await host.create(id: vmId, plan: plan, directory: directory, seed: iso)
         specs[vmId] = spec
@@ -73,8 +73,8 @@ actor AppleVirtualizationService: HypervisorService {
             throw HypervisorServiceError.notSupported("reconfiguring a running Apple VM")
         }
         _ = try await provisioner.makeNoCloudISO(
-            at: iso, vmId: vmId, hostname: metadata?.hostname,
-            sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.hasHostname ? $0.hostname : nil },
+            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.hasUserData ? spec.userData : nil,
             networkAttachments: networkAttachments)
         try await host.replace(id: vmId, plan: plan, directory: directory, seed: iso)
         specs[vmId] = spec
@@ -246,9 +246,9 @@ final class AppleVirtualizationHost {
     func create(id: String, plan: AppleVirtualizationPlan, directory: String, seed: String) throws {
         guard machines[id] == nil else { return }
         let config = VZVirtualMachineConfiguration()
-        config.cpuCount = plan.spec.cpus
+        config.cpuCount = Int(plan.spec.cpus)
         config.memorySize = UInt64(plan.spec.memoryBytes)
-        switch plan.spec.boot {
+        switch plan.spec.boot.value {
         case .disk:
             let loader = VZEFIBootLoader()
             let path = (directory as NSString).appendingPathComponent("efi-vars.fd")
@@ -260,11 +260,12 @@ final class AppleVirtualizationHost {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
             }
             config.bootLoader = loader
-        case .directKernel(let kernel, let initramfs, let cmdline):
-            let loader = VZLinuxBootLoader(kernelURL: URL(fileURLWithPath: kernel))
-            loader.initialRamdiskURL = initramfs.map { URL(fileURLWithPath: $0) }
-            loader.commandLine = cmdline ?? "console=hvc0"
+        case .directKernel(let direct):
+            let loader = VZLinuxBootLoader(kernelURL: URL(fileURLWithPath: direct.kernel))
+            loader.initialRamdiskURL = direct.hasInitramfs ? URL(fileURLWithPath: direct.initramfs) : nil
+            loader.commandLine = direct.hasCmdline ? direct.cmdline : "console=hvc0"
             config.bootLoader = loader
+        case .none: throw HypervisorServiceError.invalidConfiguration("Missing boot source")
         }
         config.storageDevices = try plan.disks.map { disk in
             let attachment = try VZDiskImageStorageDeviceAttachment(

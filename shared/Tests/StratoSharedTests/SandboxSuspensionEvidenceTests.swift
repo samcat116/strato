@@ -42,7 +42,7 @@ struct SandboxSuspensionEvidenceTests {
         let decoded = try WireProtocol.makeDecoder().decode(
             ObservedSandboxState.self,
             from: WireProtocol.makeEncoder().encode(report))
-        #expect(decoded.suspension == evidence)
-        #expect(decoded.suspensionStorageEstimateBytes == 120)
+        #expect(decoded._jsonSuspension == evidence)
+        #expect(decoded._jsonSuspensionStorageEstimateBytes == 120)
     }
 }

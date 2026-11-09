@@ -116,10 +116,10 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
                 workingDir: guestConfig.workingDir ?? "",
                 user: guestConfig.user ?? ""),
             overrides: ProcessOverrides(
-                entrypoint: spec.entrypoint,
-                cmd: spec.cmd,
-                env: spec.env,
-                workdir: spec.workingDir,
+                entrypoint: spec.hasEntrypoint ? spec.entrypoint.values : nil,
+                cmd: spec.hasCmd ? spec.cmd.values : nil,
+                env: spec.env.values,
+                workdir: spec.hasWorkingDir ? spec.workingDir : nil,
                 user: nil),
             hostname: SandboxConfigDrive.guestHostname(sandboxId: sandboxId),
             network: network)
