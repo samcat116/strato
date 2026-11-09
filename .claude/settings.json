@@ -6,103 +6,112 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Agent",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh post-task"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh post-task",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Agent"
       },
       {
-        "matcher": "TaskCreate|TaskUpdate",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh post-todo"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh post-todo",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "TaskCreate|TaskUpdate"
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Agent",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh pre-task"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh pre-task",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Agent"
+      },
+      {
+        "hooks": [
+          {
+            "command": "sh -c 'if command -v entire-brain \u003e/dev/null 2\u003e\u00261; then exec entire-brain hook pre-edit --claude-hook; fi; if command -v entire \u003e/dev/null 2\u003e\u00261; then exec entire brain hook pre-edit --claude-hook; fi; exit 0'",
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit"
       }
     ],
     "SessionEnd": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh session-end"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh session-end",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ],
     "SessionStart": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/startup.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/startup.sh",
+            "type": "command"
           },
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh session-start"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh session-start",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ],
     "Stop": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh stop"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh stop",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ],
     "StopFailure": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh stop-failure"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh stop-failure",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ],
     "SubagentStop": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh subagent-stop"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh subagent-stop",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ],
     "UserPromptSubmit": [
       {
-        "matcher": "",
         "hooks": [
           {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh user-prompt-submit"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/entire.sh user-prompt-submit",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": ""
       }
     ]
   },
