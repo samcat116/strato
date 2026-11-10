@@ -48,6 +48,12 @@ preserving the case-insensitive identity semantics of the former UUID models
 without dropping unknown Protobuf fields. Stored-manifest quarantine and salvage
 remain separate from wire compatibility.
 
+Generated `optional<Property>` accessors expose native Protobuf values as Swift
+optionals: `message.optionalDnsZones?.values` distinguishes an absent section from
+an explicitly empty list. Assigning `nil` clears presence; assigning `false`, zero,
+or an empty value preserves it. These accessors retain Protobuf types and unknown
+fields rather than projecting through the legacy JSON representation.
+
 ### Schema development
 
 Install task-local tools and run the same checks as CI:
@@ -65,6 +71,16 @@ formatting, STANDARD lint, FILE breaking rules, the frozen initial v1 descriptor
 generated-output consistency, and independent baseline/next peer fixtures. On PRs,
 CI additionally compares against the target branch. The initial cutover explicitly
 bootstraps this check when the target has no Protobuf schema.
+
+Field semantics live beside their declarations in `workload.proto`. Its concise
+`Required:`, `Optional:`, and `Format:` annotations also drive validation and
+compatibility generation. `generate-agent-protocol-accessors.py` generates native
+optional accessors and the private field projections used by existing JSON codecs.
+`shared/proto/legacy-json-mapping.json` lists the messages with legacy JSON support
+and only the field names or representations that differ from schema-derived
+defaults. Change that mapping when preserving an existing JSON shape requires an
+exception; do not hand-edit generated accessors. Explicit JSON codecs still own
+their keys, historical defaults, union shapes, and validation.
 
 Never reuse field numbers or removed names; reserve them. Regenerate after rebasing
 rather than resolving generated code manually. A passing schema diff cannot prove
@@ -147,10 +163,10 @@ contract.
 
 ## The reconciliation contract
 
-`shared/Sources/StratoShared/ReconciliationProtocol.swift` defines the
-desired/observed state sync — the core of the control loop described in
-[overview](./overview.md). Its doc comments are the authoritative prose on the
-design; the short version:
+`shared/proto/strato/agent/v1/workload.proto` defines the desired/observed state
+sync and its field semantics — the core of the control loop described in
+[overview](./overview.md). `ReconciliationProtocol.swift` holds its Swift domain
+behavior and JSON compatibility codecs; the short version:
 
 ### Desired state
 

@@ -410,8 +410,8 @@ public struct CloudInitProvisioner: Sendable {
     public static func userDataDocument(for metadata: InstanceMetadata) -> String {
         userDataDocument(
             sshAuthorizedKeys: metadata.sshAuthorizedKeys.values,
-            userData: metadata.hasUserData ? metadata.userData : nil,
-            guestAgentRelease: metadata.hasGuestAgentRelease ? metadata.guestAgentRelease : nil)
+            userData: metadata.optionalUserData,
+            guestAgentRelease: metadata.optionalGuestAgentRelease)
     }
 
     /// A part of a multipart `user-data` document.
@@ -883,16 +883,16 @@ public struct CloudInitProvisioner: Sendable {
                     // host TAP name, and the renderer needs only the case.
                     attachment: .tap(interface: nic.deviceName),
                     macAddress: nic.macAddress,
-                    ipAddress: nic.hasIpAddress ? nic.ipAddress : nil,
-                    netmask: dottedIPv4Netmask(prefixLength: nic.hasPrefixLength ? Int(nic.prefixLength) : nil),
-                    gateway: nic.hasGateway ? nic.gateway : nil,
-                    ip6Address: nic.hasIpv6Address ? nic.ipv6Address : nil,
-                    prefixLength6: nic.hasIpv6PrefixLength ? Int(nic.ipv6PrefixLength) : nil,
-                    gateway6: nic.hasGateway6 ? nic.gateway6 : nil,
-                    mtu: nic.hasMtu ? Int(nic.mtu) : nil,
+                    ipAddress: nic.optionalIpAddress,
+                    netmask: dottedIPv4Netmask(prefixLength: nic.optionalPrefixLength.map(Int.init)),
+                    gateway: nic.optionalGateway,
+                    ip6Address: nic.optionalIpv6Address,
+                    prefixLength6: nic.optionalIpv6PrefixLength.map(Int.init),
+                    gateway6: nic.optionalGateway6,
+                    mtu: nic.optionalMtu.map(Int.init),
                     dhcpEnabled: nic.dhcpEnabled,
                     dnsServers: nic.dnsServers.values,
-                    domainName: nic.hasDomainName ? nic.domainName : nil,
+                    domainName: nic.optionalDomainName,
                     metadataEnabled: nic.metadataEnabled,
                     resolverAddresses: nic.resolverAddresses.values)
             },

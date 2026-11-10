@@ -166,7 +166,7 @@ public actor NodeDependencyManager {
         let previous = state.observation
         var functionalState = inspection.functionalState
         var consecutiveFailures = previous.map { Int($0.consecutiveFailures) } ?? 0
-        var lastHealthyAt = previous.flatMap { $0.hasLastHealthyAt ? $0.lastHealthyAt.date : nil }
+        var lastHealthyAt = previous.flatMap { $0.optionalLastHealthyAt?.date }
 
         if module.desiredState == .disabled {
             functionalState = .healthy
@@ -234,8 +234,8 @@ public actor NodeDependencyManager {
             previous?.functionalState != current.functionalState
                 || previous?.supervisorState != current.supervisorState
                 || previous?.compatibility != current.compatibility
-                || previous.flatMap({ $0.hasReason ? $0.reason.code : nil })
-                    != (current.hasReason ? current.reason.code : nil)
+                || previous.flatMap({ $0.optionalReason?.code })
+                    != current.optionalReason?.code
         else { return }
 
         let metadata: Logger.Metadata = [

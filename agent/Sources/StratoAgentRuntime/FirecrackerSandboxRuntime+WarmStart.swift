@@ -27,7 +27,7 @@ extension FirecrackerSandboxRuntime {
             memoryMiB: spec.memoryBytes / (1024 * 1024),
             configCapacityBytes: SandboxConfigDrive.standardBlockImageBytes,
             jailed: jailNewSandboxes,
-            cpuTemplate: spec.hasCpuTemplate ? spec.cpuTemplate : nil,
+            cpuTemplate: spec.optionalCpuTemplate,
             nicCount: nicCount)
     }
 

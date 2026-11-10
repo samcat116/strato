@@ -98,7 +98,7 @@ type StratoCi {
   pub agentProtocol(ws: Workspace!): Void @check {
     swiftBase
       .withExec(["sh", "-ec", "apt-get update && apt-get install -y --no-install-recommends python3 curl git ca-certificates"])
-      .withDirectory(".", ws.directory("/", include: [".swift-format", "buf.yaml", "buf.gen.yaml", "scripts/*agent-protocol*.sh", "scripts/generate-agent-protocol-validation.py", "tests/agent-protocol-peers/**", "shared/**", "agent/Package.resolved", "control-plane/Package.resolved"], exclude: ["**/.build", "**/.swiftpm"]))
+      .withDirectory(".", ws.directory("/", include: [".swift-format", "buf.yaml", "buf.gen.yaml", "scripts/*agent-protocol*.sh", "scripts/generate-agent-protocol-*.py", "scripts/agent_protocol_model.py", "scripts/tests/test_agent_protocol_accessors.py", "tests/agent-protocol-peers/**", "shared/**", "agent/Package.resolved", "control-plane/Package.resolved"], exclude: ["**/.build", "**/.swiftpm"]))
       .withMountedCache(".build/agent-protocol-tools", cacheVolume("agent-protocol-tools-1.73.0-1.38.1"), sharing: CacheSharingMode.LOCKED)
       .withMountedCache("shared/.build", cacheVolume("agent-protocol-shared-tests"), sharing: CacheSharingMode.LOCKED)
       .withExec(["bash", "scripts/install-agent-protocol-tools.sh"])

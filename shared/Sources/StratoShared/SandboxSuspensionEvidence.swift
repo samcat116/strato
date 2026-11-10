@@ -57,30 +57,4 @@ extension Strato_Agent_V1_SandboxSuspensionEvidence: Codable {
         try container.encodeIfPresent(_jsonRestoreDurationMilliseconds, forKey: .restoreDurationMilliseconds)
     }
 
-    var _jsonCheckpointId: UUID {
-        get { UUID(uuidString: checkpointID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; checkpointID = value.uuidString }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonStorageBytes: Int64 {
-        get { storageBytes }
-        set { let value = newValue; storageBytes = value }
-    }
-    var _jsonVmmDestroyed: Bool {
-        get { vmmDestroyed }
-        set { let value = newValue; vmmDestroyed = value }
-    }
-    var _jsonVerified: Bool {
-        get { verified }
-        set { let value = newValue; verified = value }
-    }
-    var _jsonRestoreDurationMilliseconds: Int64? {
-        get { hasRestoreDurationMilliseconds ? (restoreDurationMilliseconds) : nil }
-        set {
-            if let value = newValue { restoreDurationMilliseconds = value } else { clearRestoreDurationMilliseconds() }
-        }
-    }
 }

@@ -186,7 +186,7 @@ extension FirecrackerSandboxRuntime {
             firecrackerVersion: info.vmlinuxVersion,
             guestControlProtocolVersion: guestControlProtocolVersion,
             forkLayoutVersion: managed.jail == nil ? nil : SandboxSnapshotForkLayout.currentVersion,
-            cpuTemplate: managed.spec.hasCpuTemplate ? managed.spec.cpuTemplate : nil)
+            cpuTemplate: managed.spec.optionalCpuTemplate)
         logger.info(
             "Sandbox checkpoint complete",
             metadata: [
@@ -231,7 +231,7 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil,
+            resourceClass: managed.spec.optionalResourceClass,
             enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
@@ -353,7 +353,7 @@ extension FirecrackerSandboxRuntime {
                 vmId: sandboxId,
                 jail: makeJailerOptions(
                     plan: plan, guestMemoryBytes: managed.spec.memoryBytes,
-                    resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil),
+                    resourceClass: managed.spec.optionalResourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,

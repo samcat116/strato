@@ -13,31 +13,6 @@ import SwiftProtobuf
 /// tolerate missing pieces rather than assume a complete record.
 public typealias HostInfo = Strato_Agent_V1_HostInfo
 extension Strato_Agent_V1_HostInfo: Codable {
-    /// Human-readable OS product/distribution name including its version, e.g.
-    /// "Ubuntu 24.04.1 LTS" (from `/etc/os-release` `PRETTY_NAME`) or
-    /// "macOS 15.1".
-
-    /// Kernel release string (`uname -r`), e.g. "6.8.0-45-generic" on Linux or
-    /// the Darwin release "24.1.0" on macOS.
-
-    /// CPU brand/model string, e.g. "Apple M2 Pro" or
-    /// "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz".
-
-    /// CPU vendor identifier, e.g. "GenuineIntel", "AuthenticAMD", or "Apple".
-
-    /// Number of physical CPU cores (distinct from `logicalCoreCount`, which
-    /// counts hardware threads / hyperthreads).
-
-    /// Number of logical CPU cores (hardware threads) available to the host.
-
-    /// Total physical memory on the host, in bytes.
-
-    /// Machine/hardware model identifier, e.g. "MacBookPro18,3" (macOS
-    /// `hw.model`) or the DMI product name on Linux ("PowerEdge R650").
-
-    /// The instant the host last booted. A fixed point in time (unlike an
-    /// uptime duration, which goes stale the moment it's stored), so the UI can
-    /// render a live "up for N days" from it.
 
     public init(
         osName: String? = nil,
@@ -95,40 +70,4 @@ extension Strato_Agent_V1_HostInfo: Codable {
         try container.encodeIfPresent(_jsonBootTime, forKey: .bootTime)
     }
 
-    var _jsonOsName: String? {
-        get { hasOsName ? (osName) : nil }
-        set { if let value = newValue { osName = value } else { clearOsName() } }
-    }
-    var _jsonKernelVersion: String? {
-        get { hasKernelVersion ? (kernelVersion) : nil }
-        set { if let value = newValue { kernelVersion = value } else { clearKernelVersion() } }
-    }
-    var _jsonCpuModel: String? {
-        get { hasCpuModel ? (cpuModel) : nil }
-        set { if let value = newValue { cpuModel = value } else { clearCpuModel() } }
-    }
-    var _jsonCpuVendor: String? {
-        get { hasCpuVendor ? (cpuVendor) : nil }
-        set { if let value = newValue { cpuVendor = value } else { clearCpuVendor() } }
-    }
-    var _jsonPhysicalCoreCount: Int? {
-        get { hasPhysicalCoreCount ? (Int(physicalCoreCount)) : nil }
-        set { if let value = newValue { physicalCoreCount = Int64(value) } else { clearPhysicalCoreCount() } }
-    }
-    var _jsonLogicalCoreCount: Int? {
-        get { hasLogicalCoreCount ? (Int(logicalCoreCount)) : nil }
-        set { if let value = newValue { logicalCoreCount = Int64(value) } else { clearLogicalCoreCount() } }
-    }
-    var _jsonTotalMemoryBytes: Int64? {
-        get { hasTotalMemoryBytes ? (totalMemoryBytes) : nil }
-        set { if let value = newValue { totalMemoryBytes = value } else { clearTotalMemoryBytes() } }
-    }
-    var _jsonMachineModel: String? {
-        get { hasMachineModel ? (machineModel) : nil }
-        set { if let value = newValue { machineModel = value } else { clearMachineModel() } }
-    }
-    var _jsonBootTime: Date? {
-        get { hasBootTime ? (bootTime.date) : nil }
-        set { if let value = newValue { bootTime = Google_Protobuf_Timestamp(date: value) } else { clearBootTime() } }
-    }
 }

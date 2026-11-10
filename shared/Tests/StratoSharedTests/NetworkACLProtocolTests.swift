@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import StratoShared
+import StratoShared
 
 @Suite("Network ACL Protocol Tests")
 struct NetworkACLProtocolTests {
@@ -35,32 +35,23 @@ struct NetworkACLProtocolTests {
                     ])
             ])
 
-        let data = try WireProtocol.makeEncoder().encode(network)
-        let decoded = try WireProtocol.makeDecoder().decode(DesiredNetworkState.self, from: data)
-        let acl = try #require(decoded._jsonNetworkACLs?.first)
-        let rule = try #require(acl._jsonRules.first)
+        let decoded = try throughEnvelope(DesiredStateMessage(syncId: "acl", vms: [], networks: [network]))
+        let decodedNetwork = try #require(decoded.networks.values.first)
+        #expect(decodedNetwork.hasNetworkAcLs)
+        let acl = try #require(decodedNetwork.networkAcLs.values.first)
+        let rule = try #require(acl.rules.values.first)
 
-        #expect(acl._jsonId == aclID)
-        #expect(acl._jsonGeneration == 4)
-        #expect(rule._jsonId == ruleID)
-        #expect(rule._jsonRuleNumber == 100)
-        #expect(rule._jsonAction == "allow")
-        #expect(rule._jsonRemoteCIDR == "198.51.100.0/24")
-        #expect(rule._jsonPortRangeMin == 443)
+        #expect(acl.id == aclID.uuidString)
+        #expect(acl.generation == 4)
+        #expect(rule.id == ruleID.uuidString)
+        #expect(rule.ruleNumber == 100)
+        #expect(rule.action == "allow")
+        #expect(rule.remoteCidr == "198.51.100.0/24")
+        #expect(rule.portRangeMin == 443)
     }
 
     @Test("Network ACL absence and authoritative emptiness remain distinct")
     func semanticAbsence() throws {
-        let legacy = """
-            {"networkId":"\(UUID().uuidString)","name":"private","subnet":"10.0.0.0/24",
-             "gateway":"10.0.0.1","routerKey":"project-test","externalAccess":false,
-             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false,
-             "floatingIPs":[],"loadBalancers":[],"generation":1}
-            """
-        let absent = try WireProtocol.makeDecoder().decode(
-            DesiredNetworkState.self, from: Data(legacy.utf8))
-        #expect(absent._jsonNetworkACLs == nil)
-
         let authoritative = DesiredNetworkState(
             networkId: UUID(),
             name: "private",
@@ -70,8 +61,13 @@ struct NetworkACLProtocolTests {
             externalAccess: false,
             generation: 1,
             networkACLs: [])
-        let data = try WireProtocol.makeEncoder().encode(authoritative)
-        let decoded = try WireProtocol.makeDecoder().decode(DesiredNetworkState.self, from: data)
-        #expect(decoded._jsonNetworkACLs == [])
+        var absent = authoritative
+        absent.clearNetworkAcLs()
+        let decoded = try throughEnvelope(
+            DesiredStateMessage(syncId: "presence", vms: [], networks: [absent, authoritative]))
+        try #require(decoded.networks.values.count == 2)
+        #expect(!decoded.networks.values[0].hasNetworkAcLs)
+        #expect(decoded.networks.values[1].hasNetworkAcLs)
+        #expect(decoded.networks.values[1].networkAcLs.values.isEmpty)
     }
 }

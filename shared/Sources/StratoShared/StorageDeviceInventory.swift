@@ -92,14 +92,6 @@ extension Strato_Agent_V1_StorageDeviceIdentity: Codable {
         try container.encode(_jsonValue, forKey: .value)
     }
 
-    var _jsonKind: StorageDeviceIdentityKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonValue: String {
-        get { value }
-        set { let value = newValue; self.value = value }
-    }
 }
 
 public typealias StorageDeviceUse = Strato_Agent_V1_StorageDeviceUse
@@ -255,40 +247,4 @@ extension Strato_Agent_V1_ObservedStorageDevice: Codable {
         try container.encode(_jsonUses, forKey: .uses)
     }
 
-    var _jsonIdentity: StorageDeviceIdentity? {
-        get { hasIdentity ? (identity) : nil }
-        set { if let value = newValue { identity = value } else { clearIdentity() } }
-    }
-    var _jsonDevicePath: String {
-        get { devicePath }
-        set { let value = newValue; devicePath = value }
-    }
-    var _jsonSizeBytes: Int64 {
-        get { sizeBytes }
-        set { let value = newValue; sizeBytes = value }
-    }
-    var _jsonModel: String? {
-        get { hasModel ? (model) : nil }
-        set { if let value = newValue { model = value } else { clearModel() } }
-    }
-    var _jsonSerial: String? {
-        get { hasSerial ? (serial) : nil }
-        set { if let value = newValue { serial = value } else { clearSerial() } }
-    }
-    var _jsonWwn: String? {
-        get { hasWwn ? (wwn) : nil }
-        set { if let value = newValue { wwn = value } else { clearWwn() } }
-    }
-    var _jsonRotational: Bool {
-        get { rotational }
-        set { let value = newValue; rotational = value }
-    }
-    var _jsonState: StorageDeviceState {
-        get { state }
-        set { let value = newValue; state = value }
-    }
-    var _jsonUses: [StorageDeviceUse] {
-        get { uses.values }
-        set { let value = newValue; uses = Strato_Agent_V1_ObservedStorageDeviceUsesSection.with { $0.values = value } }
-    }
 }

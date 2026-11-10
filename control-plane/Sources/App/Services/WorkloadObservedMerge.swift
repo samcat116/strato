@@ -60,13 +60,13 @@ extension ObservedStateApplier {
         let vmID = try vm.requireID()
         if try await rejectInvalidWorkloadGeneration(
             vm, observedGeneration: observed.observedGeneration,
-            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
+            failedGeneration: observed.optionalFailedGeneration,
             at: instant, on: db)
         {
             return
         }
         try logSupersededFailureReport(
-            vm, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
+            vm, reportedGeneration: observed.optionalFailedGeneration)
 
         // Where the VM stood before this report. Every convergence outcome
         // below is a *transition* out of this state, which is what makes the
@@ -93,7 +93,7 @@ extension ObservedStateApplier {
                 vm.guestConfigFailedGeneration == vm.generation
                 || (vm.guestConfigEvidence?.observation.generation == vm.generation
                     && vm.guestConfigEvidence?.observation.status == .failed)
-            if let report = (observed.hasGuestConfigObservation ? observed.guestConfigObservation : nil),
+            if let report = observed.optionalGuestConfigObservation,
                 report.status == .failed || observed.status == .running,
                 (try? VMGuestConfigPresentation.validate(report, config: config, generation: vm.generation)) != nil,
                 report.status == .failed
@@ -117,11 +117,11 @@ extension ObservedStateApplier {
         // Host failures before that step provide no guest verdict or item facts.
         if vm.guestConfig?.isEmpty == false,
             failedGuestReport
-                || ((observed.hasGuestConfigFailedGeneration ? observed.guestConfigFailedGeneration : nil)
+                || (observed.optionalGuestConfigFailedGeneration
                     == vm.generation
                     && observed.hasLastError
-                    && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == vm.generation
-                    && (observed.hasFailureClassification ? observed.failureClassification : nil) == .permanent),
+                    && observed.optionalFailedGeneration == vm.generation
+                    && observed.optionalFailureClassification == .permanent),
             vm.guestConfigFailedGeneration != vm.generation
         {
             vm.guestConfigFailedGeneration = vm.generation
@@ -134,18 +134,18 @@ extension ObservedStateApplier {
         let effectiveError =
             guestFailed
             ? VMGuestConfigPresentation.safeFailure(
-                vm.guestConfigEvidence.flatMap { $0.observation.hasError ? $0.observation.error : nil })
-            : (((observed.hasGuestConfigObservation ? observed.guestConfigObservation : nil)?.status == .failed
-                || (observed.hasGuestConfigFailedGeneration ? observed.guestConfigFailedGeneration : nil).map {
-                    $0 == (observed.hasFailedGeneration ? observed.failedGeneration : nil)
+                vm.guestConfigEvidence.flatMap { $0.observation.optionalError })
+            : ((observed.optionalGuestConfigObservation?.status == .failed
+                || observed.optionalGuestConfigFailedGeneration.map {
+                    $0 == observed.optionalFailedGeneration
                 } == true
-                || (observed.hasFailedGeneration ? observed.failedGeneration : nil).map {
+                || observed.optionalFailedGeneration.map {
                     $0 == vm.guestConfigFailedGeneration
                 } == true)
                 && observed.hasLastError
-                ? VMGuestConfigPresentation.failure : (observed.hasLastError ? observed.lastError : nil))
+                ? VMGuestConfigPresentation.failure : observed.optionalLastError)
         let effectiveFailedGeneration =
-            guestFailed ? vm.generation : (observed.hasFailedGeneration ? observed.failedGeneration : nil)
+            guestFailed ? vm.generation : observed.optionalFailedGeneration
 
         // The guest-agent view (issue #563) is orthogonal to convergence and
         // operation completion, so record it up front — before the converging
@@ -156,7 +156,7 @@ extension ObservedStateApplier {
         // forever). A nil on a running/paused/transitional/unknown VM is left
         // alone — that's a transient probe miss, and nil-preserves-last-known.
         if vm.guestAgentEnabled, observed.status == .running,
-            let observation = (observed.hasGuestAgentObservation ? observed.guestAgentObservation : nil),
+            let observation = observed.optionalGuestAgentObservation,
             observation.checkedAt.date > (vm.guestAgentObservation?.checkedAt.date ?? .distantPast)
         {
             vm.guestAgentObservation = observation
@@ -166,7 +166,7 @@ extension ObservedStateApplier {
             try await vm.update(on: db)
         }
 
-        if let guestInfo = (observed.hasGuestInfo ? observed.guestInfo : nil) {
+        if let guestInfo = observed.optionalGuestInfo {
             try await persistGuestInfo(vm: vm, guestInfo: guestInfo, interfaces: interfaces, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
             try await clearGuestInfo(vm: vm, interfaces: interfaces, on: db)
@@ -175,14 +175,14 @@ extension ObservedStateApplier {
         // Balloon memory stats (issue #567) follow the same contract as
         // guestInfo, independently: a guest can report balloon stats without
         // qga (and vice versa), so their presence is tracked separately.
-        if let memoryStats = (observed.hasMemoryStats ? observed.memoryStats : nil) {
+        if let memoryStats = observed.optionalMemoryStats {
             try await persistMemoryStats(vm: vm, stats: memoryStats, at: instant, on: db)
         } else if Self.guestInfoClearedByStatus.contains(observed.status) {
             try await clearMemoryStats(vm: vm, on: db)
         }
 
         var resourceTelemetryChanged = false
-        if let telemetry = (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
+        if let telemetry = observed.optionalResourceTelemetry,
             vm.resourceTelemetry != telemetry
         {
             vm.resourceTelemetry = telemetry
@@ -194,8 +194,8 @@ extension ObservedStateApplier {
                 agentID: agentID,
                 workloadID: vmID.uuidString,
                 kind: .vm,
-                telemetry: (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
-                balloon: (observed.hasMemoryStats ? observed.memoryStats : nil))
+                telemetry: observed.optionalResourceTelemetry,
+                balloon: observed.optionalMemoryStats)
         }
 
         // Mirror the report's convergence progress onto the row (STR-142) so
@@ -216,7 +216,7 @@ extension ObservedStateApplier {
                 && !VMGuestConfigPresentation.converged(vm)
             ? "waiting for current guest configuration read-back" : nil
         let effectivePhase =
-            (observed.hasConvergencePhase ? observed.convergencePhase : nil) ?? bootVolumePhase ?? guestPhase
+            observed.optionalConvergencePhase ?? bootVolumePhase ?? guestPhase
         var changed = vm.recordTimestampedConvergence(
             phase: effectivePhase,
             lastError: effectiveError,
@@ -306,7 +306,7 @@ extension ObservedStateApplier {
         // steady-state repair failure and follows the same retain-and-retry
         // path regardless of classification.
         if failedCurrentGeneration,
-            (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked
+            observed.optionalFailureClassification == .blocked
                 || vm.convergenceDeadline == nil
         {
             if changed {
@@ -452,8 +452,8 @@ extension ObservedStateApplier {
             vm.qgaAvailable = guestInfo.qgaAvailable
             vmChanged = true
         }
-        if vm.observedHostname != (guestInfo.hasHostname ? guestInfo.hostname : nil) {
-            vm.observedHostname = (guestInfo.hasHostname ? guestInfo.hostname : nil)
+        if vm.observedHostname != guestInfo.optionalHostname {
+            vm.observedHostname = guestInfo.optionalHostname
             vmChanged = true
         }
         if vmChanged {
@@ -497,7 +497,7 @@ extension ObservedStateApplier {
                         interfaceID: nicID,
                         family: address.family,
                         address: address.address,
-                        prefixLength: address.hasPrefixLength ? Int(address.prefixLength) : nil
+                        prefixLength: address.optionalPrefixLength.map(Int.init)
                     ).save(on: db)
                 }
             }
@@ -513,13 +513,13 @@ extension ObservedStateApplier {
         vm: VM, stats: VMMemoryStats, at instant: ClusterInstant, on db: Database
     ) async throws {
         guard
-            vm.guestMemoryTotalBytes != (stats.hasTotalBytes ? stats.totalBytes : nil)
-                || vm.guestMemoryAvailableBytes != (stats.hasAvailableBytes ? stats.availableBytes : nil)
-                || vm.guestMemoryBalloonActualBytes != (stats.hasBalloonActualBytes ? stats.balloonActualBytes : nil)
+            vm.guestMemoryTotalBytes != stats.optionalTotalBytes
+                || vm.guestMemoryAvailableBytes != stats.optionalAvailableBytes
+                || vm.guestMemoryBalloonActualBytes != stats.optionalBalloonActualBytes
         else { return }
-        vm.guestMemoryTotalBytes = (stats.hasTotalBytes ? stats.totalBytes : nil)
-        vm.guestMemoryAvailableBytes = (stats.hasAvailableBytes ? stats.availableBytes : nil)
-        vm.guestMemoryBalloonActualBytes = (stats.hasBalloonActualBytes ? stats.balloonActualBytes : nil)
+        vm.guestMemoryTotalBytes = stats.optionalTotalBytes
+        vm.guestMemoryAvailableBytes = stats.optionalAvailableBytes
+        vm.guestMemoryBalloonActualBytes = stats.optionalBalloonActualBytes
         vm.guestMemoryStatsAt = instant.date
         try await vm.save(on: db)
     }
@@ -638,21 +638,21 @@ extension ObservedStateApplier {
         let sandboxID = try sandbox.requireID()
         if try await rejectInvalidWorkloadGeneration(
             sandbox, observedGeneration: observed.observedGeneration,
-            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
+            failedGeneration: observed.optionalFailedGeneration,
             at: instant, on: db)
         {
             return
         }
         try await SandboxIdleFenceService.observe(
-            (observed.hasIdleActivity ? observed.idleActivity : nil), sandbox: sandbox, at: instant, on: db)
+            observed.optionalIdleActivity, sandbox: sandbox, at: instant, on: db)
         try logSupersededFailureReport(
-            sandbox, reportedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil))
+            sandbox, reportedGeneration: observed.optionalFailedGeneration)
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
         let suspensionChanged = try await SandboxSuspensionService.apply(observed, to: sandbox, on: db)
 
         var resourceTelemetryChanged = false
-        if let telemetry = (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil),
+        if let telemetry = observed.optionalResourceTelemetry,
             sandbox.resourceTelemetry != telemetry
         {
             sandbox.resourceTelemetry = telemetry
@@ -664,15 +664,15 @@ extension ObservedStateApplier {
                 agentID: agentID,
                 workloadID: sandboxID.uuidString,
                 kind: .sandbox,
-                telemetry: (observed.hasResourceTelemetry ? observed.resourceTelemetry : nil))
+                telemetry: observed.optionalResourceTelemetry)
         }
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
         var changed = sandbox.recordTimestampedConvergence(
-            phase: (observed.hasConvergencePhase ? observed.convergencePhase : nil),
-            lastError: (observed.hasLastError ? observed.lastError : nil),
-            failedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
+            phase: observed.optionalConvergencePhase,
+            lastError: observed.optionalLastError,
+            failedGeneration: observed.optionalFailedGeneration,
             at: instant
         )
         changed = suspensionChanged || resourceTelemetryChanged || changed
@@ -686,7 +686,7 @@ extension ObservedStateApplier {
                 "Sandbox converging on agent",
                 metadata: [
                     "strato.sandbox.id": .string(sandboxID.uuidString),
-                    "phase": .string((observed.hasConvergencePhase ? observed.convergencePhase : nil) ?? ""),
+                    "phase": .string(observed.optionalConvergencePhase ?? ""),
                     "targetGeneration": .stringConvertible(sandbox.generation),
                 ])
             return
@@ -719,8 +719,8 @@ extension ObservedStateApplier {
                     ])
             }
         }
-        if sandbox.exitCode != (observed.hasExitCode ? Int(observed.exitCode) : nil) {
-            sandbox.exitCode = (observed.hasExitCode ? Int(observed.exitCode) : nil)
+        if sandbox.exitCode != (observed.optionalExitCode.map(Int.init)) {
+            sandbox.exitCode = (observed.optionalExitCode.map(Int.init))
             changed = true
         }
         if sandbox.desiredSatisfied, sandbox.divergenceDetectedAt != nil {
@@ -730,12 +730,12 @@ extension ObservedStateApplier {
 
         let failedCurrentGeneration =
             observed.hasLastError
-            && (observed.hasFailedGeneration ? observed.failedGeneration : nil) == sandbox.generation
+            && observed.optionalFailedGeneration == sandbox.generation
         // Blocked failures remain active mutations because the agent will
         // re-drive them at this generation. A failure with no deadline is a
         // steady-state repair and retains intent for the same reason.
         if failedCurrentGeneration,
-            (observed.hasFailureClassification ? observed.failureClassification : nil) == .blocked
+            observed.optionalFailureClassification == .blocked
                 || sandbox.convergenceDeadline == nil
         {
             if changed {
@@ -747,8 +747,8 @@ extension ObservedStateApplier {
             sandbox,
             wasConverged: wasConverged,
             changed: changed,
-            reportedError: (observed.hasLastError ? observed.lastError : nil),
-            reportedFailedGeneration: (observed.hasFailedGeneration ? observed.failedGeneration : nil),
+            reportedError: observed.optionalLastError,
+            reportedFailedGeneration: observed.optionalFailedGeneration,
             previousFailureGeneration: failedBefore,
             defaultMutation: .boot,
             at: instant,

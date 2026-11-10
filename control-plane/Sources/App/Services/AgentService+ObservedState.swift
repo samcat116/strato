@@ -176,7 +176,7 @@ extension AgentService {
         let effectiveManifestStatus =
             inventoryRefusal.map {
                 ObservedManifestStatus(inventoryComplete: false, quarantinedEntries: 0, reason: $0)
-            } ?? (report.hasManifestStatus ? report.manifestStatus : nil)
+            } ?? report.optionalManifestStatus
         let admissionOutcome: ResourceAdmissionService.ReportOutcome
         do {
             admissionOutcome = try await ResourceAdmissionService.accept(
@@ -204,7 +204,7 @@ extension AgentService {
         if applyPeriodicAgentState(
             report.resources,
             dependencyObservations: nil,
-            hostResourceTelemetry: report.hasHostResourceTelemetry ? report.hostResourceTelemetry : nil,
+            hostResourceTelemetry: report.optionalHostResourceTelemetry,
             to: agent,
             at: instant)
         {
@@ -212,7 +212,7 @@ extension AgentService {
         }
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
-        applyReportedUpdateStatus(report.hasAgentUpdateStatus ? report.agentUpdateStatus : nil, to: agent)
+        applyReportedUpdateStatus(report.optionalAgentUpdateStatus, to: agent)
         if agent.updateBlockedReason != previousBlockedReason
             || agent.updateFailureReason != previousFailureReason
         {
@@ -220,7 +220,7 @@ extension AgentService {
             agent.lastHeartbeat = instant.date
         }
         if applyReportedTeardownRefusal(
-            report.hasTeardownRefusal ? report.teardownRefusal : nil, to: agent, at: instant)
+            report.optionalTeardownRefusal, to: agent, at: instant)
         {
             agentChanged = true
         }
@@ -302,8 +302,8 @@ extension AgentService {
                 let observed = volume.id.flatMap { observedByID[$0] }
                 return Telemetry.VolumeIOSample(
                     configured: volume.ioLimits,
-                    applied: observed.flatMap { $0.hasIoLimits ? $0.ioLimits : nil },
-                    observedRate: observed.flatMap { $0.hasIoObservedRate ? $0.ioObservedRate : nil })
+                    applied: observed.flatMap { $0.optionalIoLimits },
+                    observedRate: observed.flatMap { $0.optionalIoObservedRate })
             }
             Telemetry.recordVolumeIO(agentName: agentName, samples: samples)
         } catch {

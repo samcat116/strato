@@ -33,7 +33,7 @@ enum SandboxSuspensionService {
         try normalized.normalizeProtocolIdentifiers()
         let observed = normalized
         var changed = false
-        if let estimate = observed.hasSuspensionStorageEstimateBytes ? observed.suspensionStorageEstimateBytes : nil,
+        if let estimate = observed.optionalSuspensionStorageEstimateBytes,
             estimate > 0,
             estimate != sandbox.suspensionStorageEstimateBytes
         {
@@ -42,7 +42,7 @@ enum SandboxSuspensionService {
         }
         if !observed.hasConvergencePhase, observed.hasFailedGeneration, observed.failedGeneration == sandbox.generation,
             observed.status == .running,
-            let retained = observed.hasSuspensionStorageReservedBytes ? observed.suspensionStorageReservedBytes : nil,
+            let retained = observed.optionalSuspensionStorageReservedBytes,
             retained >= 0, retained < sandbox.suspensionStorageBytes
         {
             sandbox.suspensionStorageBytes = retained
@@ -53,7 +53,7 @@ enum SandboxSuspensionService {
         guard observed.observedGeneration == sandbox.generation,
             !observed.hasConvergencePhase,
             (!observed.hasFailedGeneration || observed.failedGeneration != sandbox.generation),
-            let evidence = observed.hasSuspension ? observed.suspension : nil, evidence.verified,
+            let evidence = observed.optionalSuspension, evidence.verified,
             evidence.storageBytes > 0
         else { return changed }
         let release = evidence.permitsComputeRelease(

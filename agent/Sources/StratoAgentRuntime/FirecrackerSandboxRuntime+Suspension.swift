@@ -236,7 +236,7 @@ extension FirecrackerSandboxRuntime {
                 "durable suspension requires an adopted, jailed sandbox")
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil,
+            resourceClass: managed.spec.optionalResourceClass,
             enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId), suspending.insert(sandboxId).inserted else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
@@ -429,7 +429,7 @@ extension FirecrackerSandboxRuntime {
             }
             let options = try makeJailerOptions(
                 plan: plan, guestMemoryBytes: managed.spec.memoryBytes,
-                resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil)
+                resourceClass: managed.spec.optionalResourceClass)
             let manager = try await client.restoreVM(
                 vmId: proofId, jail: options,
                 snapshot: SnapshotLoadConfig(
@@ -574,7 +574,7 @@ extension FirecrackerSandboxRuntime {
         let plan = try jailPlan(for: sandboxId, recordedUID: record.jailUID)
         let options = try makeJailerOptions(
             plan: plan, guestMemoryBytes: record.spec.memoryBytes,
-            resourceClass: record.spec.hasResourceClass ? record.spec.resourceClass : nil)
+            resourceClass: record.spec.optionalResourceClass)
         let manager = await client.disconnectedManager(vmId: sandboxId, jail: options)
         sandboxes[sandboxId] = Managed(
             spec: record.spec, rootfsPath: plan.hostPath(forInJail: SandboxJailPlan.rootfsPathInJail),

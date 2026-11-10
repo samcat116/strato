@@ -28,8 +28,8 @@ public enum FirecrackerBootArtifactResolver {
         var cmdline: String?
         if case .directKernel(let boot) = spec.boot.value {
             kernelPath = boot.kernel.isEmpty ? nil : boot.kernel
-            initramfsPath = boot.hasInitramfs ? boot.initramfs : nil
-            cmdline = boot.hasCmdline ? boot.cmdline : nil
+            initramfsPath = boot.optionalInitramfs
+            cmdline = boot.optionalCmdline
         }
 
         if let imageInfo {

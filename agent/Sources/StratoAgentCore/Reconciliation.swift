@@ -621,7 +621,7 @@ public actor Reconciler {
                     validatedProtocolUUID(entry.vmID), generation: entry.generation, because: .desiredAbsent)
             } else {
                 outcome = await metadataStore.apply(
-                    entry.hasMetadata ? entry.metadata : nil, generation: entry.generation,
+                    entry.optionalMetadata, generation: entry.generation,
                     for: validatedProtocolUUID(entry.vmID))
             }
             guard case .stale(let recorded) = outcome else { continue }

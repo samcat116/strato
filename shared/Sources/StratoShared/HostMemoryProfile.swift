@@ -62,42 +62,6 @@ extension Strato_Agent_V1_HostMemoryProfileConfiguration: Codable {
         try container.encodeIfPresent(_jsonKsmSleepMilliseconds, forKey: .ksmSleepMilliseconds)
     }
 
-    var _jsonTier: Tier {
-        get { tier }
-        set { let value = newValue; tier = value }
-    }
-    var _jsonTenantClass: TenantClass {
-        get { tenantClass }
-        set { let value = newValue; tenantClass = value }
-    }
-    var _jsonNvmeSwap: String {
-        get { nvmeSwap }
-        set { let value = newValue; nvmeSwap = value }
-    }
-    var _jsonZramBytes: Int64? {
-        get { hasZramBytes ? (zramBytes) : nil }
-        set { if let value = newValue { zramBytes = value } else { clearZramBytes() } }
-    }
-    var _jsonZswapPoolPercent: Int? {
-        get { hasZswapPoolPercent ? (Int(zswapPoolPercent)) : nil }
-        set { if let value = newValue { zswapPoolPercent = Int64(value) } else { clearZswapPoolPercent() } }
-    }
-    var _jsonKsm: Bool? {
-        get { hasKsm ? (ksm) : nil }
-        set { if let value = newValue { ksm = value } else { clearKsm() } }
-    }
-    var _jsonRequireMGLRU: Bool? {
-        get { hasRequireMglru ? (requireMglru) : nil }
-        set { if let value = newValue { requireMglru = value } else { clearRequireMglru() } }
-    }
-    var _jsonKsmPagesToScan: Int? {
-        get { hasKsmPagesToScan ? (Int(ksmPagesToScan)) : nil }
-        set { if let value = newValue { ksmPagesToScan = Int64(value) } else { clearKsmPagesToScan() } }
-    }
-    var _jsonKsmSleepMilliseconds: Int? {
-        get { hasKsmSleepMilliseconds ? (Int(ksmSleepMilliseconds)) : nil }
-        set { if let value = newValue { ksmSleepMilliseconds = Int64(value) } else { clearKsmSleepMilliseconds() } }
-    }
 }
 
 /// Live read-only evidence. Absence and configured/effective mismatch are failures,
@@ -143,24 +107,4 @@ extension Strato_Agent_V1_HostMemoryProfileObservation: Codable {
         try container.encodeIfPresent(_jsonReason, forKey: .reason)
     }
 
-    var _jsonConfigured: HostMemoryProfileConfiguration? {
-        get { hasConfigured ? (configured) : nil }
-        set { if let value = newValue { configured = value } else { clearConfigured() } }
-    }
-    var _jsonEffectiveTier: HostMemoryProfileConfiguration.Tier? {
-        get { hasEffectiveTier ? (effectiveTier) : nil }
-        set { if let value = newValue { effectiveTier = value } else { clearEffectiveTier() } }
-    }
-    var _jsonThpPolicy: String? {
-        get { hasThpPolicy ? (thpPolicy) : nil }
-        set { if let value = newValue { thpPolicy = value } else { clearThpPolicy() } }
-    }
-    var _jsonKsmRunning: Bool? {
-        get { hasKsmRunning ? (ksmRunning) : nil }
-        set { if let value = newValue { ksmRunning = value } else { clearKsmRunning() } }
-    }
-    var _jsonReason: String? {
-        get { hasReason ? (reason) : nil }
-        set { if let value = newValue { reason = value } else { clearReason() } }
-    }
 }

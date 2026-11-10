@@ -7,11 +7,6 @@ import SwiftProtobuf
 /// macOS driver; acceleration is reported separately from driver identity.
 public typealias HypervisorType = Strato_Agent_V1_HypervisorType
 extension Strato_Agent_V1_HypervisorType: Codable {
-    /// QEMU through libvirt (Linux)
-
-    /// Amazon Firecracker microVM (Linux only)
-
-    /// Apple Virtualization.framework (macOS only)
 
     /// Human-readable display name
     public var displayName: String {
@@ -68,11 +63,6 @@ extension Strato_Agent_V1_HypervisorType: Codable {
 /// Networking capability of an agent host, as reported at registration.
 public typealias NetworkCapability = Strato_Agent_V1_NetworkCapability
 extension Strato_Agent_V1_NetworkCapability: Codable {
-    /// Software-defined overlay networking (OVN/OVS): inter-VM traffic,
-    /// tenant isolation, and inbound connections are supported.
-
-    /// Outbound NAT (QEMU SLIRP or Apple NAT), without managed VM-to-VM guarantees,
-    /// inbound routing, or logical-network isolation.
 
     public var protocolValue: String {
         switch self {
@@ -115,38 +105,6 @@ extension Strato_Agent_V1_NetworkCapability: Codable {
 /// and what it supports.
 public typealias HypervisorSupport = Strato_Agent_V1_HypervisorSupport
 extension Strato_Agent_V1_HypervisorSupport: Codable {
-    /// The hypervisor type
-
-    /// Whether the hypervisor is usable on this host (binary present, etc.)
-
-    /// Whether hardware acceleration (KVM/HVF) backs this hypervisor
-
-    /// Why the hypervisor is unavailable, when `available` is false
-
-    /// Whether this backend can create and restore snapshots.
-
-    /// Whether this host can attach a virtio-vsock device for this
-    /// hypervisor. Optional/additive so persisted registrations from before
-    /// vsock probing still decode; absence must be treated as not capable.
-
-    /// Whether this agent can bridge guest-exec sessions to VMs running on
-    /// this hypervisor. Optional/additive because virtio-vsock availability
-    /// alone does not imply that the node-agent bridge exists; absence must
-    /// be treated as not capable.
-
-    /// Whether this backend can enforce and read back per-volume total IOPS
-    /// and bytes-per-second ceilings. Optional/additive so registrations
-    /// persisted before STR-270 decode as not capable rather than inheriting
-    /// support from the backend name alone.
-
-    /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
-    /// from `firecracker --version`). Optional/additive: nil from agents that
-    /// predate version probing, or when the probe failed. Snapshot mobility
-    /// (issue #428) keys cross-agent restore placement on Firecracker version
-    /// equality, and treats nil as incompatible rather than guessing.
-
-    /// Host-specific guest memory bounds. Apple placement requires both;
-    /// older registrations without them must refresh before accepting VMs.
 
     public func supportsMemorySize(_ bytes: Int64) -> Bool {
         guard HypervisorType.knownCases.contains(_jsonType) else { return false }
@@ -222,50 +180,6 @@ extension Strato_Agent_V1_HypervisorSupport: Codable {
         try container.encodeIfPresent(_jsonMaximumMemoryBytes, forKey: .maximumMemoryBytes)
     }
 
-    var _jsonType: HypervisorType {
-        get { type }
-        set { let value = newValue; type = value }
-    }
-    var _jsonAvailable: Bool {
-        get { available }
-        set { let value = newValue; available = value }
-    }
-    var _jsonAccelerated: Bool {
-        get { accelerated }
-        set { let value = newValue; accelerated = value }
-    }
-    var _jsonUnavailabilityReason: String? {
-        get { hasUnavailabilityReason ? (unavailabilityReason) : nil }
-        set { if let value = newValue { unavailabilityReason = value } else { clearUnavailabilityReason() } }
-    }
-    var _jsonSupportsSnapshots: Bool {
-        get { supportsSnapshots }
-        set { let value = newValue; supportsSnapshots = value }
-    }
-    var _jsonSupportsVsock: Bool? {
-        get { hasSupportsVsock ? (supportsVsock) : nil }
-        set { if let value = newValue { supportsVsock = value } else { clearSupportsVsock() } }
-    }
-    var _jsonSupportsGuestExec: Bool? {
-        get { hasSupportsGuestExec ? (supportsGuestExec) : nil }
-        set { if let value = newValue { supportsGuestExec = value } else { clearSupportsGuestExec() } }
-    }
-    var _jsonSupportsVolumeIOLimits: Bool? {
-        get { hasSupportsVolumeIoLimits ? (supportsVolumeIoLimits) : nil }
-        set { if let value = newValue { supportsVolumeIoLimits = value } else { clearSupportsVolumeIoLimits() } }
-    }
-    var _jsonVersion: String? {
-        get { hasVersion ? (version) : nil }
-        set { if let value = newValue { version = value } else { clearVersion() } }
-    }
-    var _jsonMinimumMemoryBytes: Int64? {
-        get { hasMinimumMemoryBytes ? (minimumMemoryBytes) : nil }
-        set { if let value = newValue { minimumMemoryBytes = value } else { clearMinimumMemoryBytes() } }
-    }
-    var _jsonMaximumMemoryBytes: Int64? {
-        get { hasMaximumMemoryBytes ? (maximumMemoryBytes) : nil }
-        set { if let value = newValue { maximumMemoryBytes = value } else { clearMaximumMemoryBytes() } }
-    }
 }
 
 extension HypervisorType {

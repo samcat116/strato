@@ -369,7 +369,7 @@ public enum DomainXMLBuilder {
         var kernelBoot: (kernel: String, initramfs: String?, cmdline: String?)?
         switch input.spec.boot.value {
         case .directKernel(let boot):
-            kernelBoot = (boot.kernel, boot.hasInitramfs ? boot.initramfs : nil, boot.hasCmdline ? boot.cmdline : nil)
+            kernelBoot = (boot.kernel, boot.optionalInitramfs, boot.optionalCmdline)
         case .disk, .none:
             kernelBoot = nil
         }
@@ -894,8 +894,8 @@ public enum DomainXMLBuilder {
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
         var driverAttributes: [(String, String?)] = [("name", "qemu"), ("type", driverFormat)]
         if let blockPolicy, blockPolicy.active {
-            driverAttributes.append(("cache", blockPolicy.hasCacheMode ? blockPolicy.cacheMode.protocolValue : nil))
-            driverAttributes.append(("io", blockPolicy.hasIoMode ? blockPolicy.ioMode.protocolValue : nil))
+            driverAttributes.append(("cache", blockPolicy.optionalCacheMode?.protocolValue))
+            driverAttributes.append(("io", blockPolicy.optionalIoMode?.protocolValue))
             if blockPolicy.discard {
                 driverAttributes.append(("discard", "unmap"))
                 driverAttributes.append(("detect_zeroes", "unmap"))

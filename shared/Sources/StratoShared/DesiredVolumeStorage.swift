@@ -72,18 +72,6 @@ extension Strato_Agent_V1_CephVolumeStorage: Codable {
         "\(clientDirectory(root: root, clusterId: clusterId, credentialId: credentialId))/ceph.conf"
     }
 
-    /// Strato's stable identity for the external or managed Ceph cluster.
-    /// Ceph's own cluster identity, written into the generated `ceph.conf`.
-    /// RBD pool containing the image.
-    /// Project-scoped RBD namespace. This is never shared across projects.
-    /// Scoped cephx identity, including its `client.` prefix.
-    /// Monitor endpoints in the form accepted by Ceph clients.
-    /// Opaque version identity for this credential and its libvirt secret.
-    /// Rotation mints a new id and permanently revokes the old one; callers
-    /// must not assume this equals a project-access identity.
-    /// Complete cephx keyring contents. This is secret material and must not be logged.
-    /// Messenger policy agents must write into their generated configuration.
-
     public init(
         clusterId: UUID,
         fsid: String,
@@ -140,45 +128,6 @@ extension Strato_Agent_V1_CephVolumeStorage: Codable {
         try container.encode(_jsonMessengerMode, forKey: .messengerMode)
     }
 
-    var _jsonClusterId: UUID {
-        get { UUID(uuidString: clusterID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; clusterID = value.uuidString }
-    }
-    var _jsonFsid: String {
-        get { fsid }
-        set { let value = newValue; fsid = value }
-    }
-    var _jsonPool: String {
-        get { pool }
-        set { let value = newValue; pool = value }
-    }
-    var _jsonNamespace: String {
-        get { namespace }
-        set { let value = newValue; namespace = value }
-    }
-    var _jsonClientName: String {
-        get { clientName }
-        set { let value = newValue; clientName = value }
-    }
-    var _jsonMonEndpoints: [String] {
-        get { monEndpoints.values }
-        set {
-            let value = newValue;
-            monEndpoints = Strato_Agent_V1_CephVolumeStorageMonEndpointsSection.with { $0.values = value }
-        }
-    }
-    var _jsonCredentialId: UUID {
-        get { UUID(uuidString: credentialID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; credentialID = value.uuidString }
-    }
-    var _jsonKeyring: String {
-        get { keyring }
-        set { let value = newValue; keyring = value }
-    }
-    var _jsonMessengerMode: CephMessengerMode {
-        get { messengerMode }
-        set { let value = newValue; messengerMode = value }
-    }
 }
 
 /// Backend-specific configuration for realizing a desired volume.

@@ -129,34 +129,4 @@ extension Strato_Agent_V1_SandboxIdlePolicy: Codable {
         try container.encode(_jsonExcludedSandboxIDs, forKey: .excludedSandboxIDs)
     }
 
-    var _jsonIdleSeconds: TimeInterval {
-        get { idleSeconds }
-        set { let value = newValue; idleSeconds = value }
-    }
-    var _jsonMinimumResidencySeconds: TimeInterval {
-        get { minimumResidencySeconds }
-        set { let value = newValue; minimumResidencySeconds = value }
-    }
-    var _jsonMaximumEvidenceAgeSeconds: TimeInterval {
-        get { maximumEvidenceAgeSeconds }
-        set { let value = newValue; maximumEvidenceAgeSeconds = value }
-    }
-    var _jsonRestoreTimeoutSeconds: TimeInterval {
-        get { restoreTimeoutSeconds }
-        set { let value = newValue; restoreTimeoutSeconds = value }
-    }
-    var _jsonExcludedSandboxIDs: Set<UUID> {
-        get {
-            Set(
-                excludedSandboxIDs.values.map {
-                    UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-                })
-        }
-        set {
-            let value = newValue;
-            excludedSandboxIDs = Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection.with {
-                $0.values = Array(value).map { $0.uuidString }
-            }
-        }
-    }
 }

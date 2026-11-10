@@ -57,7 +57,7 @@ extension Agent: ReconcileActuator {
         managedVMs.mapValues {
             VMSizing(
                 cpus: Int($0.spec.cpus), memoryBytes: $0.spec.memoryBytes,
-                balloonTargetBytes: $0.spec.hasBalloonTargetBytes ? $0.spec.balloonTargetBytes : nil)
+                balloonTargetBytes: $0.spec.optionalBalloonTargetBytes)
         }
     }
 
@@ -834,7 +834,7 @@ extension Agent: ReconcileActuator {
                     : desired.spec
                 try await service.convergeGuestBootstrap(
                     vmId: item.id, spec: bootSpec,
-                    networkAttachments: attachments, metadata: desired.hasMetadata ? desired.metadata : nil)
+                    networkAttachments: attachments, metadata: desired.optionalMetadata)
                 if desired.hypervisorType == .appleVirtualization { appleBootSpec = bootSpec }
             }
             try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)

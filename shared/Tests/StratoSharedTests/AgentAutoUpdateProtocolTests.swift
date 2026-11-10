@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import StratoShared
+import StratoShared
 
 @Suite("Agent auto-update protocol")
 struct AgentAutoUpdateProtocolTests {
@@ -19,25 +19,20 @@ struct AgentAutoUpdateProtocolTests {
         let message = DesiredStateMessage(syncId: "sync-1", vms: [], desiredAgentUpdate: Self.update)
         let decoded = try throughEnvelope(message)
 
-        let update = try #require(decoded._jsonDesiredAgentUpdate)
-        #expect(update._jsonTargetVersion == "1.4.0")
-        #expect(update._jsonArtifactURL == Self.update._jsonArtifactURL)
-        #expect(update._jsonSha256 == Self.update._jsonSha256)
-        #expect(update._jsonArtifactKind == .tarball)
-        #expect(update._jsonTarballMember == "strato-agent")
+        try #require(decoded.hasDesiredAgentUpdate)
+        let update = decoded.desiredAgentUpdate
+        #expect(update.targetVersion == "1.4.0")
+        #expect(update.artifactURL == Self.update.artifactURL)
+        #expect(update.sha256 == Self.update.sha256)
+        #expect(update.artifactKind == .tarball)
+        #expect(update.tarballMember == "strato-agent")
     }
 
     @Test("DesiredStateMessage without an update opinion decodes the update to nil")
     func desiredAgentUpdateSemanticAbsence() throws {
-        // Nil means "no opinion" — never an instruction to downgrade.
-        let noOpinion = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[],
-             "cephCredentialRevocations":[]}
-            """
-        let decoded = try decodeJSON(DesiredStateMessage.self, from: noOpinion)
-        #expect(decoded._jsonDesiredAgentUpdate == nil)
-        #expect(decoded._jsonSyncId == "s")
+        let decoded = try throughEnvelope(DesiredStateMessage(syncId: "s", vms: []))
+        #expect(!decoded.hasDesiredAgentUpdate)
+        #expect(decoded.syncID == "s")
     }
 
     @Test("Redacted artifact URL strips the query string")
@@ -60,36 +55,17 @@ struct AgentAutoUpdateProtocolTests {
         )
         let decoded = try throughEnvelope(report)
 
-        let status = try #require(decoded._jsonAgentUpdateStatus)
-        #expect(status._jsonTargetVersion == "1.4.0")
-        #expect(status._jsonDisposition == ObservedAgentUpdateStatus.dispositionBlocked)
-        #expect(status._jsonReason.contains("in flight"))
+        try #require(decoded.hasAgentUpdateStatus)
+        let status = decoded.agentUpdateStatus
+        #expect(status.targetVersion == "1.4.0")
+        #expect(status.disposition == ObservedAgentUpdateStatus.dispositionBlocked)
+        #expect(status.reason.contains("in flight"))
     }
 
     @Test("ObservedStateReport without an update blocker decodes the status to nil")
     func observedUpdateStatusSemanticAbsence() throws {
-        let noBlocker = """
-            {"requestId":"r","timestamp":0,"agentId":"agent-1","vms":[],"sandboxes":[],
-             "resources":{"totalCPU":8,"availableCPU":4,"totalMemory":16,"availableMemory":8,
-                          "totalDisk":100,"availableDisk":50,"physicalFreeDisk":50},"unrecognized":[]}
-            """
-        let decoded = try decodeJSON(ObservedStateReport.self, from: noBlocker)
-        #expect(decoded._jsonAgentUpdateStatus == nil)
+        let decoded = try throughEnvelope(
+            ObservedStateReport(agentId: "agent-1", vms: [], resources: Fixtures.resources))
+        #expect(!decoded.hasAgentUpdateStatus)
     }
-
-    @Test("Nil update fields stay off the wire; present ones reach it")
-    func encodedKeysReflectPresence() throws {
-        let bare = DesiredStateMessage(syncId: "s", vms: [])
-        let bareKeys = try encodedKeys(bare)
-        #expect(!bareKeys.contains("desiredAgentUpdate"))
-
-        let carrying = DesiredStateMessage(syncId: "s", vms: [], desiredAgentUpdate: Self.update)
-        let carryingKeys = try encodedKeys(carrying)
-        #expect(carryingKeys.contains("desiredAgentUpdate"))
-
-        let bareReport = ObservedStateReport(agentId: "a", vms: [], resources: Fixtures.resources)
-        let bareReportKeys = try encodedKeys(bareReport)
-        #expect(!bareReportKeys.contains("agentUpdateStatus"))
-    }
-
 }

@@ -57,6 +57,7 @@ generate() {
     "$buf_bin" generate "$input" --template "$scratch/template.json" --output "$output"
     if [[ "$3" == workload ]]; then
         python3 scripts/generate-agent-protocol-validation.py "$output"
+        python3 scripts/generate-agent-protocol-accessors.py "$output"
     fi
     if [[ "$mode" == generate ]]; then
         mkdir -p "$destination"

@@ -22,7 +22,7 @@ public struct DesiredStateDerivations: Sendable {
 
         let specs =
             message.vms.values.flatMap { $0.spec.networks.values }
-            + message.sandboxes.values.compactMap { $0.spec.hasNetwork ? $0.spec.network : nil }
+            + message.sandboxes.values.compactMap { $0.spec.optionalNetwork }
         metadataNetworkIDs = Set(try specs.filter(\.metadataEnabled).map { try UUID(protocolString: $0.networkID) })
             .sorted { $0.uuidString < $1.uuidString }
 
@@ -38,7 +38,7 @@ public struct DesiredStateDerivations: Sendable {
                     networkId: networkID,
                     addresses: spec.resolverAddresses.values,
                     upstreams: spec.dnsServers.values,
-                    searchDomain: spec.hasDomainName ? spec.domainName : nil)
+                    searchDomain: spec.optionalDomainName)
             }
             resolverNetworks = byNetwork.values.sorted {
                 $0.networkId.uuidString < $1.networkId.uuidString

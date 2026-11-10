@@ -27,12 +27,4 @@ extension Strato_Agent_V1_GuestAgentObservation: Codable {
         try container.encode(_jsonCheckedAt, forKey: .checkedAt)
     }
 
-    var _jsonReachable: Bool {
-        get { reachable }
-        set { let value = newValue; reachable = value }
-    }
-    var _jsonCheckedAt: Date {
-        get { checkedAt.date }
-        set { let value = newValue; checkedAt = Google_Protobuf_Timestamp(date: value) }
-    }
 }

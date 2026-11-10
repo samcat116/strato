@@ -133,8 +133,8 @@ public struct VMManifestEntry: Codable, Sendable {
         self.hypervisorType = .firecracker
         self.spec = VMSpec(
             cpus: Int(sandboxSpec.cpus), memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil),
-            resourceClass: sandboxSpec.hasResourceClass ? sandboxSpec.resourceClass : nil,
-            admittedReservation: sandboxSpec.hasAdmittedReservation ? sandboxSpec.admittedReservation : nil)
+            resourceClass: sandboxSpec.optionalResourceClass,
+            admittedReservation: sandboxSpec.optionalAdmittedReservation)
         self.realizedMemoryReservationBytes = nil
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
@@ -357,7 +357,7 @@ public struct QuarantinedManifestEntry: Sendable {
             }
             let identityMatches = desired.volumes.values.filter {
                 let sameOrder =
-                    ($0.hasBootOrder ? Int($0.bootOrder) : nil) == legacyOrder
+                    ($0.optionalBootOrder.map(Int.init)) == legacyOrder
                     || (legacyOrder == nil && $0.hasBootOrder && $0.bootOrder == 0)
                 return $0.deviceName == legacyDevice && sameOrder
             }

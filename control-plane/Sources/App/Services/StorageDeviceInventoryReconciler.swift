@@ -57,7 +57,7 @@ struct StorageDeviceInventoryReconciler: Sendable {
             var seen = Set<UUID>()
             for item in validated {
                 let device: StorageDevice
-                if let identity = (item.observation.hasIdentity ? item.observation.identity : nil),
+                if let identity = item.observation.optionalIdentity,
                     let stored = stableByIdentity[identity]
                 {
                     device = stored
@@ -68,13 +68,13 @@ struct StorageDeviceInventoryReconciler: Sendable {
                 } else {
                     device = StorageDevice(
                         agentID: agentID,
-                        identityKind: (item.observation.hasIdentity ? item.observation.identity : nil)?.kind,
-                        identityValue: (item.observation.hasIdentity ? item.observation.identity : nil)?.value,
+                        identityKind: item.observation.optionalIdentity?.kind,
+                        identityValue: item.observation.optionalIdentity?.value,
                         devicePath: item.observation.devicePath,
                         sizeBytes: item.observation.sizeBytes,
-                        model: (item.observation.hasModel ? item.observation.model : nil),
-                        serial: (item.observation.hasSerial ? item.observation.serial : nil),
-                        wwn: (item.observation.hasWwn ? item.observation.wwn : nil),
+                        model: item.observation.optionalModel,
+                        serial: item.observation.optionalSerial,
+                        wwn: item.observation.optionalWwn,
                         rotational: item.observation.rotational,
                         uses: item.uses,
                         state: item.observation.state,
@@ -84,9 +84,9 @@ struct StorageDeviceInventoryReconciler: Sendable {
 
                 device.devicePath = item.observation.devicePath
                 device.sizeBytes = item.observation.sizeBytes
-                device.model = (item.observation.hasModel ? item.observation.model : nil)
-                device.serial = (item.observation.hasSerial ? item.observation.serial : nil)
-                device.wwn = (item.observation.hasWwn ? item.observation.wwn : nil)
+                device.model = item.observation.optionalModel
+                device.serial = item.observation.optionalSerial
+                device.wwn = item.observation.optionalWwn
                 device.rotational = item.observation.rotational
                 device.uses = item.uses
                 device.state = item.observation.state
@@ -135,12 +135,12 @@ struct StorageDeviceInventoryReconciler: Sendable {
             }
 
             let preferredIdentity = StorageDeviceIdentity.preferred(
-                wwn: (observation.hasWwn ? observation.wwn : nil),
-                serial: (observation.hasSerial ? observation.serial : nil))
-            guard (observation.hasIdentity ? observation.identity : nil) == preferredIdentity else {
+                wwn: observation.optionalWwn,
+                serial: observation.optionalSerial)
+            guard observation.optionalIdentity == preferredIdentity else {
                 throw StorageDeviceInventoryError.invalidObservation("identity does not match raw facts")
             }
-            if let identity = (observation.hasIdentity ? observation.identity : nil),
+            if let identity = observation.optionalIdentity,
                 !identities.insert(identity).inserted
             {
                 throw StorageDeviceInventoryError.invalidObservation("duplicate stable identity")

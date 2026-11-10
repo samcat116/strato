@@ -134,11 +134,11 @@ extension Agent {
                     // DNS zones (STR-39): nil means this agent is not the
                     // topology authority — leave every managed `DNS` row
                     // alone. Only an explicit list is an instruction.
-                    let dnsZones = message.hasDnsZones ? message.dnsZones.values : nil
+                    let dnsZones = message.optionalDnsZones?.values
                     observedNetworkFabric =
                         await networkService?.reconcileNetworks(
                             message.networks.values, authoritative: message.networksAuthoritative,
-                            securityGroups: message.hasSecurityGroups ? message.securityGroups.values : nil,
+                            securityGroups: message.optionalSecurityGroups?.values,
                             portMemberships: derivations.portMemberships,
                             metadataNetworks: derivations.metadataNetworkIDs,
                             resolverNetworks: derivations.resolverNetworks,
@@ -172,7 +172,7 @@ extension Agent {
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
                 // arrives with the lanes already drained.
-                await handleDesiredAgentUpdate(message.hasDesiredAgentUpdate ? message.desiredAgentUpdate : nil)
+                await handleDesiredAgentUpdate(message.optionalDesiredAgentUpdate)
             case .consoleConnect:
                 let message = try decodeInboundMessage(
                     envelope,
@@ -261,9 +261,9 @@ extension Agent {
 
         let activeStorages =
             message.volumes.values.map(\.storage)
-            + message.snapshots.values.compactMap { $0.hasVolumeStorage ? $0.volumeStorage : nil }
+            + message.snapshots.values.compactMap { $0.optionalVolumeStorage }
         let activeAttachments = message.vms.values.flatMap { vm in
-            vm.spec.volumes.values.compactMap { $0.hasAttachment ? $0.attachment : nil }
+            vm.spec.volumes.values.compactMap { $0.optionalAttachment }
         }
 
         for revocation in message.cephCredentialRevocations.values {
@@ -767,7 +767,7 @@ extension Agent {
                 artifactURL: update.artifactURL,
                 sha256: update.sha256,
                 artifactKind: update.artifactKind,
-                tarballMember: update.hasTarballMember ? update.tarballMember : nil
+                tarballMember: update.optionalTarballMember
             )
         } catch {
             let reason = (error as? AgentUpdateError)?.description ?? "\(error)"
@@ -822,7 +822,6 @@ extension Agent {
         message: String,
         operation: String? = nil
     ) async {
-        guard protocolAgreement != nil else { return }
         let logMessage = VMLogMessage(
             vmId: vmId,
             level: level,
@@ -856,7 +855,6 @@ extension Agent {
     /// Tell the control plane a console session is over, and why, so it can
     /// close the browser's socket instead of leaving it attached to nothing.
     func sendConsoleDisconnected(vmId: String, sessionId: String, reason: String) async {
-        guard protocolAgreement != nil else { return }
         do {
             try await websocketClient?.sendMessage(
                 ConsoleDisconnectedMessage(vmId: vmId, sessionId: sessionId, reason: reason))
@@ -1089,7 +1087,6 @@ extension Agent {
 
     /// Called by ConsoleSocketManager when data arrives from VM console
     func sendConsoleData(vmId: String, sessionId: String, data: Data) async {
-        guard protocolAgreement != nil else { return }
         let message = ConsoleDataMessage(
             vmId: vmId,
             sessionId: sessionId,
@@ -1254,10 +1251,10 @@ extension Agent {
             ])
 
         let request = SandboxExecRequest(
-            command: message.command.values, env: message.hasEnv ? message.env.values : nil,
-            workingDir: message.hasWorkingDir ? message.workingDir : nil,
-            tty: message.tty, rows: message.hasRows ? Int(message.rows) : nil,
-            cols: message.hasCols ? Int(message.cols) : nil)
+            command: message.command.values, env: message.optionalEnv?.values,
+            workingDir: message.optionalWorkingDir,
+            tty: message.tty, rows: message.optionalRows.map(Int.init),
+            cols: message.optionalCols.map(Int.init))
 
         if let existing = guestExecSessions[message.sessionID] {
             if existing.sessionKind == .recorded, message.sessionKind == .recorded,
@@ -1365,10 +1362,10 @@ extension Agent {
             case .sandbox:
                 guard let runtime = sandboxRuntime else { throw SandboxRuntimeError.runtimeUnavailable }
                 try await runtime.sendExecInput(
-                    sessionId: message.sessionID, data: message.hasData ? message.data : nil, eof: message.eof)
+                    sessionId: message.sessionID, data: message.optionalData, eof: message.eof)
             case .virtualMachine:
                 try await vmExecSessionManager.sendExecInput(
-                    sessionId: message.sessionID, data: message.hasData ? message.data : nil, eof: message.eof)
+                    sessionId: message.sessionID, data: message.optionalData, eof: message.eof)
             case nil, .unspecified, .UNRECOGNIZED:
                 throw VMExecBridgeError.sessionNotFound(message.sessionID)
             }
@@ -1420,12 +1417,12 @@ extension Agent {
             "Guest exec close request received",
             metadata: [
                 "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(message.sessionID),
-                "reason": .string(message.hasReason ? message.reason : ""),
+                "reason": .string(message.optionalReason ?? ""),
             ])
         // The control plane already tore its side down; closing is terminal
         // and needs no reply. Guest-side, this kills the exec process group if
         // exec_exit has not arrived.
-        await closeGuestExec(sessionId: message.sessionID, reason: message.hasReason ? message.reason : nil)
+        await closeGuestExec(sessionId: message.sessionID, reason: message.optionalReason)
     }
 
     func closeGuestExec(sessionId: String, reason: String? = nil) async {
@@ -1453,7 +1450,6 @@ extension Agent {
     func sendGuestExecEvent(
         sessionId: String, resourceKind: GuestResourceKind, event: SandboxExecEvent
     ) async {
-        guard protocolAgreement != nil else { return }
         guard let route = guestExecSessions[sessionId], route.resourceKind == resourceKind else {
             return
         }
@@ -1523,7 +1519,6 @@ extension Agent {
     }
 
     func sendRecordedExecState(_ snapshot: RecordedVMExecSessionSnapshot) async {
-        guard protocolAgreement != nil else { return }
         guard let websocketClient else { return }
         do {
             try await websocketClient.sendMessage(
@@ -1596,7 +1591,6 @@ extension Agent {
     }
 
     func sendGuestExecClosed(sessionId: String, reason: String?) async {
-        guard protocolAgreement != nil else { return }
         guard let websocketClient else {
             // Terminal for the session but undeliverable; see
             // `sendGuestExecEvent` for why a warning is enough.
@@ -1628,7 +1622,7 @@ extension Agent {
             sandboxLogLines.recordDrop(reason: .shutdown)
             return
         }
-        guard protocolAgreement != nil, let websocketClient else {
+        guard let websocketClient else {
             sandboxLogLines.recordDrop(reason: .deliveryFailure)
             return
         }

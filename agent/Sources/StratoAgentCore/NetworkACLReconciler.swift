@@ -196,9 +196,9 @@ public enum NetworkACLBuilder {
         policyID: UUID,
         generation: Int64
     ) -> ACLSpec? {
-        let protocolName: String? = rule.hasProtocolName ? rule.protocolName : nil
-        let portRangeMin: Int64? = rule.hasPortRangeMin ? rule.portRangeMin : nil
-        let portRangeMax: Int64? = rule.hasPortRangeMax ? rule.portRangeMax : nil
+        let protocolName: String? = rule.optionalProtocolName
+        let portRangeMin: Int64? = rule.optionalPortRangeMin
+        let portRangeMax: Int64? = rule.optionalPortRangeMax
         guard let priority = priority(forRuleNumber: Int(rule.ruleNumber)) else { return nil }
 
         let family: String

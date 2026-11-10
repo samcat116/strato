@@ -58,54 +58,6 @@ extension Strato_Agent_V1_MetadataSource: Codable {
 /// (QEMU arguments, Firecracker API calls, ...).
 public typealias VMSpec = Strato_Agent_V1_VMSpec
 extension Strato_Agent_V1_VMSpec: Codable {
-    /// Nil is the historical immutable guaranteed policy.
-
-    /// Number of vCPUs the VM boots with.
-    /// Maximum number of vCPUs (for hotplug on backends that support it).
-    /// Guest memory size in bytes.
-    /// Maximum guest memory in bytes (for hot-add on backends that support
-    /// it), mirroring how `maxCpus` bounds vCPU hot-add. Equal to
-    /// `memoryBytes` when the VM was created without headroom, in which case
-    /// no hot-pluggable memory device is realized at all.
-    /// Memory the guest may keep, in bytes, when an operator has asked for
-    /// some of its grant back (issue #567 phase 2). Realized by inflating the
-    /// VM's virtio-balloon device to `memoryBytes - balloonTargetBytes`, which
-    /// lets the host reclaim the difference while the grant — and so the
-    /// quota and scheduler reservation — stays exactly as committed.
-    ///
-    /// Nil means no target: the balloon stays deflated and the guest keeps
-    /// everything. Always at most `memoryBytes`; ballooning cannot hand a guest
-    /// more memory than it was granted (that is `maxMemoryBytes` and
-    /// virtio-mem).
-    /// Disk requirement in bytes — the figure the scheduler gated placement on
-    /// (`vm.disk`), carried so agents can account committed disk without
-    /// deriving it from volumes (which don't carry sizes). Nil means the caller
-    /// has no disk reservation to report.
-    /// Whether guest memory should be file-backed/shared (required by e.g. vhost-user backends).
-    /// Whether guest memory should be backed by huge pages.
-    /// How the VM boots.
-    /// Guest machine features that are not resource sizing: Secure Boot and a
-    /// vTPM (issue #565). Nil selects `MachineProfile.default` (both off).
-    /// Whether Strato's in-guest agent is enabled for this VM. The flag is
-    /// default-off and fixes whether the domain gets a virtio-vsock device at
-    /// creation; it is distinct from QEMU's conventional qga channel.
-    /// Managed volumes to attach, in boot order. Every VM has exactly one boot
-    /// volume; image materialization belongs to that volume's desired state.
-    /// Network interfaces, each referencing a logical network by name.
-    /// Console preference. Drivers may realize this however their backend allows.
-    /// SSH public keys to authorize for the guest's default user. Injected via
-    /// the backend's guest-provisioning mechanism (cloud-init `ssh_authorized_keys`
-    /// for QEMU disk boot). Empty when the caller provided none.
-    /// Caller-supplied cloud-init user data, verbatim (any format cloud-init
-    /// dispatches on: `#cloud-config`, `#!` scripts, `#include`, MIME
-    /// multipart, ...). The agent combines it with Strato's own provisioning
-    /// config when it builds the guest-bootstrap media. Nil when the caller
-    /// provided none.
-    /// Where cloud-init reads the VM's guest-bootstrap documents. The
-    /// initializer retains the historical full seed ISO default for low-level
-    /// compatibility; the control plane explicitly supplies each persisted
-    /// VM's choice. `.imds` leaves only `network-config` and a `seedfrom`
-    /// meta-data stub on that ISO.
 
     public init(
         cpus: Int,
@@ -242,85 +194,6 @@ extension Strato_Agent_V1_VMSpec: Codable {
         try container.encode(_jsonMetadataSource, forKey: .metadataSource)
     }
 
-    var _jsonAdmittedReservation: WorkloadAdmittedReservation? {
-        get { hasAdmittedReservation ? (admittedReservation) : nil }
-        set { if let value = newValue { admittedReservation = value } else { clearAdmittedReservation() } }
-    }
-    var _jsonResourceClass: WorkloadResourceClassSnapshot? {
-        get { hasResourceClass ? (resourceClass) : nil }
-        set { if let value = newValue { resourceClass = value } else { clearResourceClass() } }
-    }
-    var _jsonCpus: Int {
-        get { Int(cpus) }
-        set { let value = newValue; cpus = Int64(value) }
-    }
-    var _jsonMaxCpus: Int {
-        get { Int(maxCpus) }
-        set { let value = newValue; maxCpus = Int64(value) }
-    }
-    var _jsonMemoryBytes: Int64 {
-        get { memoryBytes }
-        set { let value = newValue; memoryBytes = value }
-    }
-    var _jsonMaxMemoryBytes: Int64 {
-        get { maxMemoryBytes }
-        set { let value = newValue; maxMemoryBytes = value }
-    }
-    var _jsonBalloonTargetBytes: Int64? {
-        get { hasBalloonTargetBytes ? (balloonTargetBytes) : nil }
-        set { if let value = newValue { balloonTargetBytes = value } else { clearBalloonTargetBytes() } }
-    }
-    var _jsonDiskBytes: Int64? {
-        get { hasDiskBytes ? (diskBytes) : nil }
-        set { if let value = newValue { diskBytes = value } else { clearDiskBytes() } }
-    }
-    var _jsonSharedMemory: Bool {
-        get { sharedMemory }
-        set { let value = newValue; sharedMemory = value }
-    }
-    var _jsonHugepages: Bool {
-        get { hugepages }
-        set { let value = newValue; hugepages = value }
-    }
-    var _jsonBoot: BootSource {
-        get { boot }
-        set { let value = newValue; boot = value }
-    }
-    var _jsonMachine: MachineProfile? {
-        get { hasMachine ? (machine) : nil }
-        set { if let value = newValue { machine = value } else { clearMachine() } }
-    }
-    var _jsonGuestAgentEnabled: Bool {
-        get { guestAgentEnabled }
-        set { let value = newValue; guestAgentEnabled = value }
-    }
-    var _jsonVolumes: [VolumeSpec] {
-        get { volumes.values }
-        set { let value = newValue; volumes = Strato_Agent_V1_VMSpecVolumesSection.with { $0.values = value } }
-    }
-    var _jsonNetworks: [NetworkSpec] {
-        get { networks.values }
-        set { let value = newValue; networks = Strato_Agent_V1_VMSpecNetworksSection.with { $0.values = value } }
-    }
-    var _jsonConsole: ConsoleSpec? {
-        get { hasConsole ? (console) : nil }
-        set { if let value = newValue { console = value } else { clearConsole() } }
-    }
-    var _jsonSshAuthorizedKeys: [String] {
-        get { sshAuthorizedKeys.values }
-        set {
-            let value = newValue;
-            sshAuthorizedKeys = Strato_Agent_V1_VMSpecSshAuthorizedKeysSection.with { $0.values = value }
-        }
-    }
-    var _jsonUserData: String? {
-        get { hasUserData ? (userData) : nil }
-        set { if let value = newValue { userData = value } else { clearUserData() } }
-    }
-    var _jsonMetadataSource: MetadataSource {
-        get { metadataSource }
-        set { let value = newValue; metadataSource = value }
-    }
 }
 
 // MARK: - Machine Profile
@@ -337,13 +210,6 @@ extension Strato_Agent_V1_VMSpec: Codable {
 /// before this existed.
 public typealias MachineProfile = Strato_Agent_V1_MachineProfile
 extension Strato_Agent_V1_MachineProfile: Codable {
-    /// Whether the guest boots with UEFI Secure Boot enabled. Requires a
-    /// firmware set whose variable store ships Microsoft's KEK/db enrolled;
-    /// agents that cannot resolve one fail the create rather than booting the
-    /// guest insecurely under a name that promises otherwise.
-    /// Whether the guest gets an emulated TPM 2.0. Requires `swtpm` on the
-    /// host, which agents advertise as a capability so the scheduler never
-    /// places a TPM VM where it cannot be realized.
 
     /// Today's behavior: no Secure Boot, no vTPM.
     public static let `default` = MachineProfile(secureBoot: false, tpm: false)
@@ -370,14 +236,6 @@ extension Strato_Agent_V1_MachineProfile: Codable {
         try container.encode(_jsonTpm, forKey: .tpm)
     }
 
-    var _jsonSecureBoot: Bool {
-        get { secureBoot }
-        set { let value = newValue; secureBoot = value }
-    }
-    var _jsonTpm: Bool {
-        get { tpm }
-        set { let value = newValue; tpm = value }
-    }
 }
 
 // MARK: - Boot Source
@@ -390,26 +248,6 @@ public typealias BootSource = Strato_Agent_V1_BootSource
 /// A volume to attach, referenced by identity rather than device realization.
 public typealias VolumeSpec = Strato_Agent_V1_VolumeSpec
 extension Strato_Agent_V1_VolumeSpec: Codable {
-    /// Stable identity of the managed volume this attachment realizes.
-    /// Stable device identifier within the VM (e.g. "disk0", "vdb"). Validated
-    /// by its type, so a spec cannot carry a name a hypervisor would refuse
-    /// (STR-129); unique per VM, enforced by the control plane's
-    /// `(vm_id, device_name)` index.
-    /// Storage descriptor previously reported by the owning agent. Nil while
-    /// the volume has not been realized; the receiving agent remains the
-    /// authority and resolves the identity against its current inventory.
-    /// Explicit boot order; volumes are sent pre-sorted, this is informational.
-    /// Absolute I/O ceilings for this disk (STR-19), so a VM realized from its
-    /// own spec boots with the same caps the volume lane would apply.
-    ///
-    /// This list and `DesiredVolumeState` are two projections of one fact, and
-    /// reading a property off only one of them is how they start to disagree —
-    /// the same reason the attachment itself appears in both.
-    /// Requested host-cache behavior. Existing callers and manifests decode to
-    /// the conservative mode, so neither optimized mode becomes a default as a
-    /// side effect of introducing the policy.
-    /// Agent-selected policy persisted in the VM manifest. Control-plane specs
-    /// leave this nil; a QEMU agent fills it after probing the concrete disk.
 
     public init(
         volumeId: UUID,
@@ -480,38 +318,6 @@ extension Strato_Agent_V1_VolumeSpec: Codable {
         try container.encodeIfPresent(_jsonAppliedBlockPolicy, forKey: .appliedBlockPolicy)
     }
 
-    var _jsonVolumeId: UUID {
-        get { UUID(uuidString: volumeID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; volumeID = value.uuidString }
-    }
-    var _jsonDeviceName: VolumeDeviceName {
-        get { VolumeDeviceName(deviceName) ?? .disk(0) }
-        set { let value = newValue; deviceName = value.rawValue }
-    }
-    var _jsonAttachment: DiskAttachment? {
-        get { hasAttachment ? (attachment) : nil }
-        set { if let value = newValue { attachment = value } else { clearAttachment() } }
-    }
-    var _jsonReadonly: Bool {
-        get { readonly }
-        set { let value = newValue; readonly = value }
-    }
-    var _jsonBootOrder: Int? {
-        get { hasBootOrder ? (Int(bootOrder)) : nil }
-        set { if let value = newValue { bootOrder = Int64(value) } else { clearBootOrder() } }
-    }
-    var _jsonIoLimits: VolumeIOLimits? {
-        get { hasIoLimits ? (ioLimits) : nil }
-        set { if let value = newValue { ioLimits = value } else { clearIoLimits() } }
-    }
-    var _jsonBlockMode: VolumeBlockMode {
-        get { blockMode }
-        set { let value = newValue; blockMode = value }
-    }
-    var _jsonAppliedBlockPolicy: AppliedBlockDevicePolicy? {
-        get { hasAppliedBlockPolicy ? (appliedBlockPolicy) : nil }
-        set { if let value = newValue { appliedBlockPolicy = value } else { clearAppliedBlockPolicy() } }
-    }
 }
 
 // MARK: - Network Specification
@@ -520,83 +326,6 @@ extension Strato_Agent_V1_VolumeSpec: Codable {
 /// the attachment (tap interface, user-mode SLIRP, ...) according to its platform.
 public typealias NetworkSpec = Strato_Agent_V1_NetworkSpec
 extension Strato_Agent_V1_NetworkSpec: Codable {
-    /// Stable control-plane identity of this interface (wire v40). Current wire
-    /// producers supply it; it remains optional while the agent can hydrate
-    /// persisted pre-v40 manifests.
-    /// Stable guest-facing device label assigned by the control plane.
-    /// Stable host-resource slot. New agents use this instead of the NIC's
-    /// compact array position, so removing a middle interface cannot rename the
-    /// TAP and OVN port belonging to every interface after it.
-    /// Logical network name — a *human label only*, used for the OVN
-    /// `network-name` external-id and logging. Never an identifier: names are
-    /// unique per project, so two networks on one chassis may share one
-    /// (issue #765). Nothing may be matched or keyed on it.
-    /// The network's stable id: the only thing that identifies it. Agents derive
-    /// every OVN object name from it (`OVNNaming.switchName`, the DHCP row's
-    /// `network-id` external-id), matching what the network reconciler creates.
-    /// Static IP assignment, when the control plane has allocated one.
-    /// Gateway of the logical network, when the control plane knows it.
-    /// Static IPv6 assignment on a dual-stack network, canonical RFC 5952
-    /// form. Nil for an IPv4-only or not-yet-addressed interface.
-    /// Prefix length for `ipv6Address` (64 for tenant networks). IPv6 has no
-    /// dotted-netmask form, so the prefix travels as an integer.
-    /// IPv6 gateway of the logical network, when dual-stack.
-
-    /// When true, the agent programs OVN's native DHCP responder to hand the
-    /// control-plane-allocated `ipAddress` (plus `dnsServers`/`gateway`/`mtu`) to
-    /// the guest, and cloud-init omits static L3 config. When false (or on
-    /// platforms without OVN), the guest is configured statically via cloud-init.
-    /// The network's DNS resolvers. What they are depends on
-    /// `resolverEnabled`: with it off these are advertised to the guest over
-    /// DHCP (`dns_server` option), which is all they ever were; with it on the
-    /// guest is told `NetworkResolverEndpoint.address` and these become the
-    /// upstream forwarders the network's CoreDNS sends misses to (wire v37).
-    /// DNS search domain advertised over DHCP (`domain_name` option), if set.
-    /// DHCP lease time in seconds (`lease_time` option), if set.
-    /// Security groups this NIC belongs to. The agent adds the NIC's logical
-    /// switch port to each group's OVN port group (and to the global drop
-    /// group) — port-group *membership* is per-workload and owned by the
-    /// hosting agent, while the groups' ACLs are authored by the topology
-    /// authority from `DesiredStateMessage.securityGroups`. Nil means the NIC
-    /// is unmanaged: the port joins no groups, including the drop group. When
-    /// present the list is never empty — the control plane enforces the
-    /// ≥1-group invariant.
-    ///
-    /// VM and sandbox NICs carry membership on identical terms (STR-102);
-    /// nothing here distinguishes them. A sandbox's NIC reaches the wire only
-    /// on an agent that advertised `sandboxNetworkingCapable` (STR-103), so a
-    /// sandbox's membership is always *authored* but only sometimes *sent*.
-    /// Whether this NIC's network publishes the instance metadata service.
-    ///
-    /// The same setting travels on `DesiredNetworkState.metadataEnabled`, which
-    /// is what authors the OVN `localport`; this per-NIC copy is what reaches
-    /// the *chassis* side. A sited agent that is not its site's network
-    /// controller receives an empty `networks` list (it may not author
-    /// topology), yet it still has to materialize the metadata address in a
-    /// local namespace for its own guests — so the only input it has is its own
-    /// workloads' specs. Same shape as `securityGroupIds`, which is per-NIC for
-    /// the same "this host owns it even without topology authority" reason.
-    ///
-    /// Whether this NIC's network publishes the per-network DNS resolver
-    /// (STR-40, wire v37).
-    ///
-    /// Here for exactly `metadataEnabled`'s reason:
-    /// `DesiredNetworkState.resolverEnabled` authors the OVN `localport` and the
-    /// DHCP row, and this per-NIC copy is what reaches a sited non-authority
-    /// agent, whose `networks` list is empty because it may not author topology
-    /// but which still has to materialize the resolver address — in its *host*
-    /// namespace, on that port's own OVS interface — and serve it from the
-    /// host's CoreDNS, for its own guests.
-    ///
-    /// The forwarders and search domain that CoreDNS needs are already on this
-    /// spec as `dnsServers` and `domainName`, so this flag is the only addition.
-    ///
-    /// Nil means the sender has no service opinion; the agent converges nothing
-    /// rather than reading silence as "tear down".
-    /// This network's own resolver addresses, v4 first — distinct per network,
-    /// which is what lets the host serve every one of them from a single
-    /// namespace and forward through its own egress (STR-40). Non-nil exactly
-    /// when `resolverEnabled` is true.
 
     public init(
         interfaceId: UUID? = nil,
@@ -704,114 +433,6 @@ extension Strato_Agent_V1_NetworkSpec: Codable {
         try container.encodeIfPresent(_jsonResolverAddresses, forKey: .resolverAddresses)
     }
 
-    var _jsonInterfaceId: UUID? {
-        get {
-            hasInterfaceID
-                ? (UUID(uuidString: interfaceID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set { if let value = newValue { interfaceID = value.uuidString } else { clearInterfaceID() } }
-    }
-    var _jsonDeviceName: String? {
-        get { hasDeviceName ? (deviceName) : nil }
-        set { if let value = newValue { deviceName = value } else { clearDeviceName() } }
-    }
-    var _jsonOrderIndex: Int? {
-        get { hasOrderIndex ? (Int(orderIndex)) : nil }
-        set { if let value = newValue { orderIndex = Int64(value) } else { clearOrderIndex() } }
-    }
-    var _jsonNetwork: String {
-        get { network }
-        set { let value = newValue; network = value }
-    }
-    var _jsonNetworkId: UUID {
-        get { UUID(uuidString: networkID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; networkID = value.uuidString }
-    }
-    var _jsonMacAddress: String? {
-        get { hasMacAddress ? (macAddress) : nil }
-        set { if let value = newValue { macAddress = value } else { clearMacAddress() } }
-    }
-    var _jsonIpAddress: String? {
-        get { hasIpAddress ? (ipAddress) : nil }
-        set { if let value = newValue { ipAddress = value } else { clearIpAddress() } }
-    }
-    var _jsonNetmask: String? {
-        get { hasNetmask ? (netmask) : nil }
-        set { if let value = newValue { netmask = value } else { clearNetmask() } }
-    }
-    var _jsonGateway: String? {
-        get { hasGateway ? (gateway) : nil }
-        set { if let value = newValue { gateway = value } else { clearGateway() } }
-    }
-    var _jsonIpv6Address: String? {
-        get { hasIpv6Address ? (ipv6Address) : nil }
-        set { if let value = newValue { ipv6Address = value } else { clearIpv6Address() } }
-    }
-    var _jsonIpv6PrefixLength: Int? {
-        get { hasIpv6PrefixLength ? (Int(ipv6PrefixLength)) : nil }
-        set { if let value = newValue { ipv6PrefixLength = Int64(value) } else { clearIpv6PrefixLength() } }
-    }
-    var _jsonGateway6: String? {
-        get { hasGateway6 ? (gateway6) : nil }
-        set { if let value = newValue { gateway6 = value } else { clearGateway6() } }
-    }
-    var _jsonMtu: Int? {
-        get { hasMtu ? (Int(mtu)) : nil }
-        set { if let value = newValue { mtu = Int64(value) } else { clearMtu() } }
-    }
-    var _jsonDhcpEnabled: Bool {
-        get { dhcpEnabled }
-        set { let value = newValue; dhcpEnabled = value }
-    }
-    var _jsonDnsServers: [String] {
-        get { dnsServers.values }
-        set {
-            let value = newValue; dnsServers = Strato_Agent_V1_NetworkSpecDnsServersSection.with { $0.values = value }
-        }
-    }
-    var _jsonDomainName: String? {
-        get { hasDomainName ? (domainName) : nil }
-        set { if let value = newValue { domainName = value } else { clearDomainName() } }
-    }
-    var _jsonLeaseTime: Int? {
-        get { hasLeaseTime ? (Int(leaseTime)) : nil }
-        set { if let value = newValue { leaseTime = Int64(value) } else { clearLeaseTime() } }
-    }
-    var _jsonSecurityGroupIds: [UUID]? {
-        get {
-            hasSecurityGroupIds
-                ? (securityGroupIds.values.map {
-                    UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-                }) : nil
-        }
-        set {
-            if let value = newValue {
-                securityGroupIds = Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection.with {
-                    $0.values = value.map { $0.uuidString }
-                }
-            } else {
-                clearSecurityGroupIds()
-            }
-        }
-    }
-    var _jsonMetadataEnabled: Bool {
-        get { metadataEnabled }
-        set { let value = newValue; metadataEnabled = value }
-    }
-    var _jsonResolverEnabled: Bool? {
-        get { hasResolverEnabled ? (resolverEnabled) : nil }
-        set { if let value = newValue { resolverEnabled = value } else { clearResolverEnabled() } }
-    }
-    var _jsonResolverAddresses: [String]? {
-        get { hasResolverAddresses ? (resolverAddresses.values) : nil }
-        set {
-            if let value = newValue {
-                resolverAddresses = Strato_Agent_V1_NetworkSpecResolverAddressesSection.with { $0.values = value }
-            } else {
-                clearResolverAddresses()
-            }
-        }
-    }
 }
 
 // MARK: - Console Specification
@@ -819,9 +440,6 @@ extension Strato_Agent_V1_NetworkSpec: Codable {
 /// Console preference for the VM. Drivers decide how (and whether) to realize it.
 public typealias ConsoleSpec = Strato_Agent_V1_ConsoleSpec
 extension Strato_Agent_V1_ConsoleSpec: Codable {
-    /// Whether the guest also gets a framebuffer, and over which protocol
-    /// (issue #566). Nil from callers that want today's headless behavior;
-    /// consumers read nil through `effectiveGraphics`.
 
     public init(graphics: GraphicsMode? = nil) {
         self.init()
@@ -845,8 +463,4 @@ extension Strato_Agent_V1_ConsoleSpec: Codable {
         try container.encodeIfPresent(_jsonGraphics, forKey: .graphics)
     }
 
-    var _jsonGraphics: GraphicsMode? {
-        get { hasGraphics ? (graphics) : nil }
-        set { if let value = newValue { graphics = value } else { clearGraphics() } }
-    }
 }

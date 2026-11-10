@@ -6,12 +6,6 @@ import SwiftProtobuf
 /// How the sandbox proceeds once its checkpoint is captured.
 public typealias SandboxSnapshotMode = Strato_Agent_V1_SandboxSnapshotMode
 extension Strato_Agent_V1_SandboxSnapshotMode: Codable {
-    /// Resume the guest after the snapshot: the sandbox keeps running and
-    /// the snapshot is a point-in-time checkpoint it can later be restored to.
-
-    /// Leave the guest stopped after the snapshot (checkpoint-and-stop): the
-    /// sandbox converges to `stopped` and can later resume from the
-    /// checkpoint via restore.
 
     public var protocolValue: String {
         switch self {
@@ -125,9 +119,6 @@ extension Strato_Agent_V1_SandboxSnapshotArtifactKind: Codable {
 /// integrity metadata is not agent-supplied.
 public typealias SandboxSnapshotArtifactDescriptor = Strato_Agent_V1_SandboxSnapshotArtifactDescriptor
 extension Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Codable {
-    /// Control-plane-relative download path
-    /// (`/api/sandboxes/.../snapshots/.../artifacts/<kind>`).
-    /// Lowercase hex SHA-256 of the artifact bytes.
 
     public init(
         kind: SandboxSnapshotArtifactKind,
@@ -162,30 +153,12 @@ extension Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Codable {
         try container.encode(_jsonSha256, forKey: .sha256)
     }
 
-    var _jsonKind: SandboxSnapshotArtifactKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonDownloadURL: String {
-        get { downloadURL }
-        set { let value = newValue; downloadURL = value }
-    }
-    var _jsonSizeBytes: Int64 {
-        get { sizeBytes }
-        set { let value = newValue; sizeBytes = value }
-    }
-    var _jsonSha256: String {
-        get { sha256 }
-        set { let value = newValue; sha256 = value }
-    }
 }
 
 /// An mTLS upload slot for one snapshot artifact. The control plane hashes and
 /// sizes the stream as it lands in object storage.
 public typealias SandboxSnapshotArtifactUploadTarget = Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget
 extension Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: Codable {
-    /// Control-plane-relative upload path (same route as the download,
-    /// method PUT).
 
     public init(kind: SandboxSnapshotArtifactKind, uploadURL: String) {
         self.init()
@@ -209,12 +182,4 @@ extension Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: Codable {
         try container.encode(_jsonUploadURL, forKey: .uploadURL)
     }
 
-    var _jsonKind: SandboxSnapshotArtifactKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonUploadURL: String {
-        get { uploadURL }
-        set { let value = newValue; uploadURL = value }
-    }
 }

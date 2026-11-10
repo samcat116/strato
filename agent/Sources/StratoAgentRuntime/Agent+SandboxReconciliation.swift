@@ -223,7 +223,7 @@ extension Agent {
         defer { if let claim { capacityAdmissionLedger.release(claim) } }
         try await runtime.restoreSandbox(
             sandboxId: item.id, snapshotId: restore.snapshotID,
-            artifacts: restore.hasArtifacts ? restore.artifacts.values : nil, networkAttachments: attachments,
+            artifacts: restore.optionalArtifacts?.values, networkAttachments: attachments,
             expectedGeneration: desired.generation)
         if entry?.sandboxSuspension != nil {
             entry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
@@ -388,7 +388,7 @@ extension Agent {
         do {
             try await runtime.createSandbox(
                 sandboxId: item.id, spec: desired.spec,
-                registryCredential: desired.hasRegistryCredential ? desired.registryCredential : nil,
+                registryCredential: desired.optionalRegistryCredential,
                 networkAttachments: attachments)
         } catch {
             let released = await rollBackSandboxCreateManifest(

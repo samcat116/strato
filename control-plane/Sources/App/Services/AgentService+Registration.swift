@@ -466,7 +466,7 @@ extension AgentService {
         if applyPeriodicAgentState(
             accepted ?? message.resources,
             dependencyObservations: message.dependencyObservations.values,
-            hostResourceTelemetry: message.hasHostResourceTelemetry ? message.hostResourceTelemetry : nil,
+            hostResourceTelemetry: message.optionalHostResourceTelemetry,
             to: agent,
             at: instant)
         {
@@ -534,8 +534,8 @@ extension AgentService {
                     receivedAt: now,
                     at: instant)
                 if previous[observation.id]?.functionalState != observation.functionalState
-                    || previous[observation.id].flatMap({ $0.hasReason ? $0.reason.code : nil })
-                        != (observation.hasReason ? observation.reason.code : nil)
+                    || previous[observation.id].flatMap({ $0.optionalReason?.code })
+                        != observation.optionalReason?.code
                 {
                     app.logger.log(
                         level: observation.functionalState == .unhealthy ? .error : .info,

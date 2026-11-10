@@ -18,22 +18,6 @@ import SwiftProtobuf
 public typealias WorkloadKind = Strato_Agent_V1_WorkloadKind
 extension Strato_Agent_V1_WorkloadKind: Codable {
 
-    /// A managed volume (STR-148). Unlike the first two kinds, nothing is ever
-    /// written to `VMManifestStore` under this kind: a volume's durable record
-    /// on the agent is its directory in the storage backend, which is also what
-    /// the reconciler enumerates as its presence set. Attachment, the one piece
-    /// of volume state the filesystem cannot answer, rides the *VM's* manifest
-    /// entry (`VMSpec.volumes`), because that is what the spawn path reads.
-
-    /// A point-in-time copy of one volume's data — an external qcow2 overlay
-    /// (ADR 0001 stage 8, STR-150).
-
-    /// A full-VM checkpoint: guest RAM and device state inside the VM's own
-    /// qcow2 disks (STR-150).
-
-    /// A sandbox checkpoint: Firecracker memory + vmstate + rootfs copy in an
-    /// agent-owned directory (STR-150).
-
     /// Whether this kind names a snapshot artifact rather than a live
     /// workload. Artifacts are frozen bytes with a parent — they never boot,
     /// never hold a runtime session, and are enumerated from what the capturing

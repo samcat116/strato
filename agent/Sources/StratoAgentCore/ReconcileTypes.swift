@@ -195,7 +195,7 @@ public struct VMSizing: Equatable, Sendable {
     /// Whether `spec` asks for a different size than this.
     public func differs(from spec: VMSpec) -> Bool {
         cpus != spec.cpus || memoryBytes != spec.memoryBytes
-            || balloonTargetBytes != (spec.hasBalloonTargetBytes ? spec.balloonTargetBytes : nil)
+            || balloonTargetBytes != spec.optionalBalloonTargetBytes
     }
 }
 

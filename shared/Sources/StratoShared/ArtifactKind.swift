@@ -10,16 +10,6 @@ import SwiftProtobuf
 /// per-hypervisor compatibility from the set of kinds present.
 public typealias ArtifactKind = Strato_Agent_V1_ArtifactKind
 extension Strato_Agent_V1_ArtifactKind: Codable {
-    /// A bootable disk image (qcow2/raw). Consumed by QEMU; can also be attached
-    /// as a Firecracker root drive.
-
-    /// An uncompressed kernel image for direct kernel boot (Firecracker, or QEMU
-    /// `-kernel`). Opaque blob, no disk format.
-
-    /// An optional initial ramdisk paired with a `kernel`. Opaque blob.
-
-    /// A root filesystem image attached as the boot drive under direct-kernel
-    /// boot. Carries a disk format (raw/qcow2).
 
     /// Human-readable display name.
     public var displayName: String {

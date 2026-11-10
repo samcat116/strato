@@ -7,7 +7,7 @@ extension Agent {
     /// Keeping withdrawal on that path prevents an older in-flight pass from
     /// repopulating the cache after the newer intent has retired it.
     func retireGuestConfigObservation(_ item: ReconcileWorkItem) async {
-        guard item.kind == .vm, item.desired.flatMap({ $0.hasGuestConfig ? $0.guestConfig : nil })?.isEmpty != false
+        guard item.kind == .vm, item.desired.flatMap({ $0.optionalGuestConfig })?.isEmpty != false
         else { return }
         guestConfigObservationCache.removeValue(forKey: item.id)
     }
@@ -48,7 +48,7 @@ extension Agent {
         guestConfigObservationCache[item.id] = observation
         if observation.status == .failed {
             throw GuestConfigurationFailure.failed(
-                reason: GuestConfigurationFailure.safeReason(observation.hasError ? observation.error : nil))
+                reason: GuestConfigurationFailure.safeReason(observation.optionalError))
         }
     }
 

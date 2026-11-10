@@ -18,7 +18,7 @@ extension FirecrackerSandboxRuntime {
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: spec.hasResourceClass ? spec.resourceClass : nil, enforcement: burstableEnforcement)
+            resourceClass: spec.optionalResourceClass, enforcement: burstableEnforcement)
         if spec.resourceClass.policy.kind == .burstable {
             guard jailNewSandboxes else {
                 throw ConvergenceError.blocked("Burstable sandboxes require the jailer boundary")
@@ -77,7 +77,7 @@ extension FirecrackerSandboxRuntime {
         // give the workload a writable root, and the cache entry must never be
         // written. (An overlay would avoid the copy; that is future work.)
         let materialized = try await imageService.materializeRootfs(
-            image: spec.image, imageDigest: spec.hasImageDigest ? spec.imageDigest : nil, credential: registryCredential
+            image: spec.image, imageDigest: spec.optionalImageDigest, credential: registryCredential
         )
 
         // Stage the config drive the guest init reads at boot. Every config
@@ -434,7 +434,7 @@ extension FirecrackerSandboxRuntime {
 
             jailOptions = try makeJailerOptions(
                 plan: plan, guestMemoryBytes: spec.memoryBytes,
-                resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+                resourceClass: spec.optionalResourceClass)
         } else {
             jailPlan = nil
             let dir = sandboxDirectory(vmId)
@@ -481,7 +481,7 @@ extension FirecrackerSandboxRuntime {
                 MachineConfig(
                     vcpuCount: Int(spec.cpus),
                     memSizeMib: Int(spec.memoryBytes / (1024 * 1024)),
-                    cpuTemplate: spec.hasCpuTemplate ? spec.cpuTemplate : nil))
+                    cpuTemplate: spec.optionalCpuTemplate))
 
             let bootSource = SwiftFirecracker.BootSource(
                 kernelImagePath: apiPaths.kernel,
@@ -610,7 +610,7 @@ extension FirecrackerSandboxRuntime {
                 vmId: sandboxId,
                 jail: makeJailerOptions(
                     plan: plan, guestMemoryBytes: spec.memoryBytes,
-                    resourceClass: spec.hasResourceClass ? spec.resourceClass : nil),
+                    resourceClass: spec.optionalResourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
@@ -661,7 +661,7 @@ extension FirecrackerSandboxRuntime {
         // download descriptors the sync carried (issue #428).
         let archiveDir = try await stageSnapshotArchive(
             sourceSandboxId: sourceSandboxId, snapshotId: snapshotId,
-            artifacts: restoreFrom.hasArtifacts ? restoreFrom.artifacts.values : nil)
+            artifacts: restoreFrom.optionalArtifacts?.values)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
@@ -733,7 +733,7 @@ extension FirecrackerSandboxRuntime {
                 vmId: sandboxId,
                 jail: makeJailerOptions(
                     plan: plan, guestMemoryBytes: spec.memoryBytes,
-                    resourceClass: spec.hasResourceClass ? spec.resourceClass : nil),
+                    resourceClass: spec.optionalResourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
@@ -886,7 +886,7 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.hasResourceClass ? managed.spec.resourceClass : nil,
+            resourceClass: managed.spec.optionalResourceClass,
             enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
@@ -1095,7 +1095,7 @@ extension FirecrackerSandboxRuntime {
 
         let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
         let materialized = try await imageService.materializeRootfs(
-            image: managed.spec.image, imageDigest: managed.spec.hasImageDigest ? managed.spec.imageDigest : nil,
+            image: managed.spec.image, imageDigest: managed.spec.optionalImageDigest,
             credential: managed.registryCredential)
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
@@ -1211,7 +1211,7 @@ extension FirecrackerSandboxRuntime {
         sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
     ) async throws -> SandboxStatus {
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: spec.hasResourceClass ? spec.resourceClass : nil, enforcement: burstableEnforcement)
+            resourceClass: spec.optionalResourceClass, enforcement: burstableEnforcement)
         if let managed = sandboxes[sandboxId] {
             try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
             // A replayed sync can race adoption; if already managed, adoption is
@@ -1260,7 +1260,7 @@ extension FirecrackerSandboxRuntime {
                     plan,
                     try makeJailerOptions(
                         plan: plan, guestMemoryBytes: spec.memoryBytes,
-                        resourceClass: spec.hasResourceClass ? spec.resourceClass : nil),
+                        resourceClass: spec.optionalResourceClass),
                     jailedSocketPath
                 ))
         }

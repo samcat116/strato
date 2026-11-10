@@ -111,7 +111,7 @@ extension Agent {
                         kind: .vm,
                         pidFilePath: "/run/libvirt/qemu/\(id).pid",
                         resourceLimits: try? BurstableResourceLimits.plan(
-                            resourceClass: entry.spec.hasResourceClass ? entry.spec.resourceClass : nil,
+                            resourceClass: entry.spec.optionalResourceClass,
                             guestGrantBytes: entry.spec.memoryBytes,
                             backendOverheadBytes: configuration.qemuMemoryOverheadBytes)))
             case .firecracker, .appleVirtualization, .unspecified, .UNRECOGNIZED:
@@ -136,7 +136,7 @@ extension Agent {
                     workloadID: id, kind: .sandbox,
                     directCgroupPath: cgroupPath,
                     resourceLimits: try? BurstableResourceLimits.plan(
-                        resourceClass: entry.sandboxSpec.flatMap { $0.hasResourceClass ? $0.resourceClass : nil },
+                        resourceClass: entry.sandboxSpec.flatMap { $0.optionalResourceClass },
                         guestGrantBytes: entry.spec.memoryBytes,
                         backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)))
         }

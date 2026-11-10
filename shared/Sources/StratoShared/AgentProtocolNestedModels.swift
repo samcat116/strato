@@ -28,18 +28,6 @@ extension Strato_Agent_V1_GuestConfigFileObservation: Codable {
         try container.encodeIfPresent(_jsonMode, forKey: .mode)
     }
 
-    var _jsonPath: String {
-        get { path }
-        set { let value = newValue; path = value }
-    }
-    var _jsonSha256: String? {
-        get { hasSha256 ? (sha256) : nil }
-        set { if let value = newValue { sha256 = value } else { clearSha256() } }
-    }
-    var _jsonMode: String? {
-        get { hasMode ? (mode) : nil }
-        set { if let value = newValue { mode = value } else { clearMode() } }
-    }
 }
 
 extension Strato_Agent_V1_GuestConfigItemFailure: Codable {
@@ -70,18 +58,6 @@ extension Strato_Agent_V1_GuestConfigItemFailure: Codable {
         try container.encode(_jsonReason, forKey: .reason)
     }
 
-    var _jsonSection: Section {
-        get { section }
-        set { let value = newValue; section = value }
-    }
-    var _jsonIdentity: String {
-        get { identity }
-        set { let value = newValue; identity = value }
-    }
-    var _jsonReason: String {
-        get { reason }
-        set { let value = newValue; reason = value }
-    }
 }
 
 extension Strato_Agent_V1_GuestConfigPackageObservation: Codable {
@@ -108,14 +84,6 @@ extension Strato_Agent_V1_GuestConfigPackageObservation: Codable {
         try container.encodeIfPresent(_jsonVersion, forKey: .version)
     }
 
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonVersion: String? {
-        get { hasVersion ? (version) : nil }
-        set { if let value = newValue { version = value } else { clearVersion() } }
-    }
 }
 
 extension Strato_Agent_V1_GuestConfigObservationSection: Codable {
@@ -184,18 +152,6 @@ extension Strato_Agent_V1_GuestConfigServiceObservation: Codable {
         try container.encodeIfPresent(_jsonActiveState, forKey: .activeState)
     }
 
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonEnabled: Bool? {
-        get { hasEnabled ? (enabled) : nil }
-        set { if let value = newValue { enabled = value } else { clearEnabled() } }
-    }
-    var _jsonActiveState: String? {
-        get { hasActiveState ? (activeState) : nil }
-        set { if let value = newValue { activeState = value } else { clearActiveState() } }
-    }
 }
 
 extension Strato_Agent_V1_GuestConfigObservationStatus: Codable {
@@ -257,14 +213,6 @@ extension Strato_Agent_V1_GuestConfigSysctlObservation: Codable {
         try container.encodeIfPresent(_jsonValue, forKey: .value)
     }
 
-    var _jsonKey: String {
-        get { key }
-        set { let value = newValue; key = value }
-    }
-    var _jsonValue: String? {
-        get { hasValue ? (value) : nil }
-        set { if let value = newValue { self.value = value } else { clearValue() } }
-    }
 }
 
 extension Strato_Agent_V1_HostMemoryTenantClass: Codable {

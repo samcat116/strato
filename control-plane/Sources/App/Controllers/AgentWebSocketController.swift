@@ -437,7 +437,7 @@ struct AgentWebSocketController: RouteCollection {
                 // waiting on a connection that will never come.
                 req.consoleSessionManager.closeSession(
                     sessionId: message.sessionID, fromAgentKey: agentKey,
-                    reason: message.hasReason ? message.reason : nil)
+                    reason: message.optionalReason)
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
@@ -477,11 +477,11 @@ struct AgentWebSocketController: RouteCollection {
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
                 if !(await req.vmCommandExecutionService.handleClosed(
                     sessionId: message.sessionID, fromAgentKey: agentKey,
-                    reason: message.hasReason ? message.reason : nil))
+                    reason: message.optionalReason))
                 {
                     await req.guestExecSessionManager.handleClosed(
                         sessionId: message.sessionID, fromAgentKey: agentKey,
-                        reason: message.hasReason ? message.reason : nil)
+                        reason: message.optionalReason)
                 }
 
             case .guestExecRecordedState:

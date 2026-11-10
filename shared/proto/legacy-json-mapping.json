@@ -1,0 +1,427 @@
+{
+  "version": 1,
+  "messages": {
+    "AgentHeartbeatMessage": {},
+    "AgentRegisterMessage": {},
+    "AgentRegisterResponseMessage": {},
+    "AgentResources": {
+      "available_cpu": {
+        "name": "_jsonAvailableCPU",
+        "representation": "int"
+      },
+      "available_cpu_micro_units": {
+        "name": "_jsonAvailableCPUMicroUnits"
+      },
+      "total_cpu": {
+        "name": "_jsonTotalCPU",
+        "representation": "int"
+      }
+    },
+    "AgentUnregisterMessage": {},
+    "AppliedBlockDevicePolicy": {
+      "queue_count": {
+        "representation": "int"
+      }
+    },
+    "ArtifactInfo": {
+      "download_url": {
+        "name": "_jsonDownloadURL"
+      }
+    },
+    "CephVolumeStorage": {},
+    "ConsoleConnectMessage": {},
+    "ConsoleConnectedMessage": {},
+    "ConsoleDataMessage": {},
+    "ConsoleDisconnectMessage": {},
+    "ConsoleDisconnectedMessage": {},
+    "ConsoleSpec": {},
+    "DesiredAgentUpdate": {
+      "artifact_url": {
+        "name": "_jsonArtifactURL"
+      }
+    },
+    "DesiredCephCredentialRevocation": {},
+    "DesiredDNSRecord": {
+      "ttl": {
+        "representation": "int"
+      }
+    },
+    "DesiredDNSZone": {},
+    "DesiredFloatingIP": {
+      "external_ip": {
+        "name": "_jsonExternalIP"
+      },
+      "logical_ip": {
+        "name": "_jsonLogicalIP"
+      },
+      "nic_index": {
+        "representation": "int"
+      }
+    },
+    "DesiredLoadBalancer": {},
+    "DesiredLoadBalancerBackend": {
+      "health_check_source_ip": {
+        "name": "_jsonHealthCheckSourceIP"
+      },
+      "nic_index": {
+        "representation": "int"
+      }
+    },
+    "DesiredLoadBalancerHealthCheck": {
+      "failure_threshold": {
+        "representation": "int"
+      },
+      "interval_seconds": {
+        "representation": "int"
+      },
+      "success_threshold": {
+        "representation": "int"
+      },
+      "timeout_seconds": {
+        "representation": "int"
+      }
+    },
+    "DesiredLoadBalancerListener": {
+      "backend_port": {
+        "representation": "int"
+      },
+      "port": {
+        "representation": "int"
+      }
+    },
+    "DesiredNetworkACL": {},
+    "DesiredNetworkACLRule": {
+      "port_range_max": {
+        "representation": "int"
+      },
+      "port_range_min": {
+        "representation": "int"
+      },
+      "remote_cidr": {
+        "name": "_jsonRemoteCIDR"
+      },
+      "rule_number": {
+        "representation": "int"
+      }
+    },
+    "DesiredNetworkState": {
+      "lease_time": {
+        "representation": "int"
+      },
+      "network_ac_ls": {
+        "name": "_jsonNetworkACLs"
+      }
+    },
+    "DesiredRestore": {},
+    "DesiredSandboxState": {
+      "idle_pending_command_count": {
+        "representation": "int"
+      }
+    },
+    "DesiredSecurityGroup": {},
+    "DesiredSecurityGroupRule": {
+      "port_range_max": {
+        "representation": "int"
+      },
+      "port_range_min": {
+        "representation": "int"
+      },
+      "remote_cidr": {
+        "name": "_jsonRemoteCIDR"
+      }
+    },
+    "DesiredSnapshotCapture": {
+      "attached_vm_id": {
+        "name": "_jsonAttachedVMId"
+      }
+    },
+    "DesiredSnapshotExport": {},
+    "DesiredSnapshotState": {},
+    "DesiredStateMessage": {},
+    "DesiredVMState": {},
+    "DesiredVolumeAttachment": {
+      "boot_order": {
+        "representation": "int"
+      }
+    },
+    "DesiredVolumeSource": {
+      "source_vm_id": {
+        "name": "_jsonSourceVMId"
+      }
+    },
+    "DesiredVolumeState": {},
+    "DesiredWorkloadTombstone": {},
+    "ErrorMessage": {},
+    "GuestAgentObservation": {},
+    "GuestConfig": {},
+    "GuestConfigFileObservation": {},
+    "GuestConfigItemFailure": {},
+    "GuestConfigObservation": {},
+    "GuestConfigPackageObservation": {},
+    "GuestConfigServiceObservation": {},
+    "GuestConfigSysctlObservation": {},
+    "GuestExecCloseMessage": {},
+    "GuestExecClosedMessage": {},
+    "GuestExecExitMessage": {
+      "exit_code": {
+        "representation": "int"
+      }
+    },
+    "GuestExecInputMessage": {},
+    "GuestExecOutputMessage": {},
+    "GuestExecRecordedAckMessage": {},
+    "GuestExecRecordedStateMessage": {
+      "exit_code": {
+        "representation": "int"
+      }
+    },
+    "GuestExecResizeMessage": {
+      "cols": {
+        "representation": "int"
+      },
+      "rows": {
+        "representation": "int"
+      }
+    },
+    "GuestExecStartMessage": {
+      "cols": {
+        "representation": "int"
+      },
+      "rows": {
+        "representation": "int"
+      }
+    },
+    "GuestExecStartedMessage": {},
+    "GuestFile": {},
+    "GuestIPAddress": {
+      "prefix_length": {
+        "representation": "int"
+      }
+    },
+    "GuestInfo": {},
+    "GuestNetworkInterface": {},
+    "GuestPackage": {},
+    "GuestService": {},
+    "GuestSysctl": {},
+    "HostInfo": {
+      "logical_core_count": {
+        "representation": "int"
+      },
+      "physical_core_count": {
+        "representation": "int"
+      }
+    },
+    "HostMemoryAccounting": {},
+    "HostMemoryProfileConfiguration": {
+      "ksm_pages_to_scan": {
+        "representation": "int"
+      },
+      "ksm_sleep_milliseconds": {
+        "representation": "int"
+      },
+      "require_mglru": {
+        "name": "_jsonRequireMGLRU"
+      },
+      "zswap_pool_percent": {
+        "representation": "int"
+      }
+    },
+    "HostMemoryProfileObservation": {},
+    "HostResourceTelemetry": {},
+    "HypervisorSupport": {
+      "supports_volume_io_limits": {
+        "name": "_jsonSupportsVolumeIOLimits"
+      }
+    },
+    "IdentityPolicy": {
+      "ttl_seconds": {
+        "representation": "int"
+      }
+    },
+    "ImageInfo": {},
+    "InstanceMetadata": {},
+    "MachineProfile": {},
+    "MetadataNIC": {
+      "ipv6_prefix_length": {
+        "representation": "int"
+      },
+      "mtu": {
+        "representation": "int"
+      },
+      "prefix_length": {
+        "representation": "int"
+      }
+    },
+    "NetworkSpec": {
+      "ipv6_prefix_length": {
+        "representation": "int"
+      },
+      "lease_time": {
+        "representation": "int"
+      },
+      "mtu": {
+        "representation": "int"
+      },
+      "order_index": {
+        "representation": "int"
+      }
+    },
+    "NodeDependencyFailureReason": {},
+    "NodeDependencyObservation": {
+      "consecutive_failures": {
+        "representation": "int"
+      },
+      "remediation_count": {
+        "representation": "int"
+      },
+      "restart_count": {
+        "representation": "int"
+      }
+    },
+    "ObservedAgentUpdateStatus": {},
+    "ObservedLoadBalancerBackend": {},
+    "ObservedLoadBalancerState": {},
+    "ObservedManifestStatus": {
+      "quarantined_entries": {
+        "representation": "int"
+      }
+    },
+    "ObservedNetworkState": {},
+    "ObservedPortMembershipState": {},
+    "ObservedSandboxState": {
+      "exit_code": {
+        "representation": "int"
+      }
+    },
+    "ObservedSecurityGroupState": {},
+    "ObservedSnapshotFacts": {
+      "fork_layout_version": {
+        "representation": "int"
+      },
+      "guest_control_protocol_version": {
+        "representation": "int"
+      }
+    },
+    "ObservedSnapshotState": {},
+    "ObservedStateReport": {},
+    "ObservedStorageDevice": {},
+    "ObservedTeardownRefusal": {
+      "present_workloads": {
+        "representation": "int"
+      },
+      "requested_teardowns": {
+        "representation": "int"
+      }
+    },
+    "ObservedVMState": {},
+    "ObservedVolumeState": {
+      "attached_vm_id": {
+        "name": "_jsonAttachedVMId"
+      }
+    },
+    "PressureStallSample": {},
+    "PressureStallTelemetry": {},
+    "RegistryCredential": {},
+    "ResourceEnforcementSnapshot": {
+      "agent_boot_id": {
+        "name": "_jsonAgentBootID"
+      }
+    },
+    "ResourceTelemetryFlag": {},
+    "ResourceTelemetryValue": {},
+    "SandboxAutomaticSuspensionFence": {
+      "guest_protocol_version": {
+        "representation": "int"
+      }
+    },
+    "SandboxGuestIdleActivity": {},
+    "SandboxIdleActivityReport": {
+      "host_pending_command_count": {
+        "representation": "int"
+      },
+      "pending_command_count": {
+        "representation": "int"
+      }
+    },
+    "SandboxIdlePolicy": {
+      "excluded_sandbox_i_ds": {
+        "representation": "uuid-set"
+      }
+    },
+    "SandboxLogMessage": {},
+    "SandboxSnapshotArtifactDescriptor": {
+      "download_url": {
+        "name": "_jsonDownloadURL"
+      }
+    },
+    "SandboxSnapshotArtifactUploadTarget": {
+      "upload_url": {
+        "name": "_jsonUploadURL"
+      }
+    },
+    "SandboxSnapshotRef": {},
+    "SandboxSpec": {
+      "cpus": {
+        "representation": "int"
+      }
+    },
+    "SandboxSuspensionEvidence": {},
+    "StorageDeviceIdentity": {},
+    "SuccessMessage": {},
+    "UnrecognizedWorkload": {},
+    "VMLogMessage": {},
+    "VMMemoryStats": {},
+    "VMSpec": {
+      "cpus": {
+        "representation": "int"
+      },
+      "max_cpus": {
+        "representation": "int"
+      }
+    },
+    "VolumeIOLimits": {},
+    "VolumeIOObservedRate": {},
+    "VolumeSpec": {
+      "boot_order": {
+        "representation": "int"
+      }
+    },
+    "WorkloadAdmittedReservation": {
+      "granted_cp_us": {
+        "name": "_jsonGrantedCPUs",
+        "representation": "int"
+      }
+    },
+    "WorkloadEnforcementAcknowledgement": {},
+    "WorkloadMemoryEventsTelemetry": {},
+    "WorkloadResourceClassEnforcement": {},
+    "WorkloadResourceClassPolicy": {
+      "cpu_weight": {
+        "representation": "int"
+      },
+      "max_cpu_pressure10": {
+        "name": "_jsonMaxCPUPressure10"
+      },
+      "max_telemetry_age_seconds": {
+        "representation": "int"
+      },
+      "memory_high_percent": {
+        "representation": "int"
+      }
+    },
+    "WorkloadResourceClassSnapshot": {
+      "class_id": {
+        "name": "_jsonClassID"
+      },
+      "site_id": {
+        "name": "_jsonSiteID"
+      }
+    },
+    "WorkloadResourceTelemetry": {},
+    "WorkloadRuntimeLimits": {
+      "cpu_weight": {
+        "representation": "int"
+      }
+    }
+  }
+}

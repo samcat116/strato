@@ -129,7 +129,7 @@ actor MockHypervisorService: HypervisorService {
             // Only when the spec asked for one, so simulation mode reproduces
             // the real refusal for a headless VM rather than always offering a
             // display.
-            vncSocketPath: (vm.spec.hasConsole ? vm.spec.console.effectiveGraphics : nil) == .vnc
+            vncSocketPath: vm.spec.optionalConsole?.effectiveGraphics == .vnc
                 ? "/var/run/strato/vm-\(vmId)-vnc.sock" : nil
         )
     }

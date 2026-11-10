@@ -73,22 +73,6 @@ extension Strato_Agent_V1_GuestConfig: Codable {
         try container.encode(_jsonSysctls, forKey: .sysctls)
     }
 
-    var _jsonPackages: [GuestPackage] {
-        get { packages.values }
-        set { let value = newValue; packages = Strato_Agent_V1_GuestConfigPackagesSection.with { $0.values = value } }
-    }
-    var _jsonFiles: [GuestFile] {
-        get { files.values }
-        set { let value = newValue; files = Strato_Agent_V1_GuestConfigFilesSection.with { $0.values = value } }
-    }
-    var _jsonServices: [GuestService] {
-        get { services.values }
-        set { let value = newValue; services = Strato_Agent_V1_GuestConfigServicesSection.with { $0.values = value } }
-    }
-    var _jsonSysctls: [GuestSysctl] {
-        get { sysctls.values }
-        set { let value = newValue; sysctls = Strato_Agent_V1_GuestConfigSysctlsSection.with { $0.values = value } }
-    }
 }
 
 public typealias GuestPackageState = Strato_Agent_V1_GuestPackageState
@@ -158,14 +142,6 @@ extension Strato_Agent_V1_GuestPackage: Codable {
         try container.encode(_jsonState, forKey: .state)
     }
 
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonState: GuestPackageState {
-        get { state }
-        set { let value = newValue; state = value }
-    }
 }
 
 public typealias GuestFile = Strato_Agent_V1_GuestFile
@@ -217,18 +193,6 @@ extension Strato_Agent_V1_GuestFile: Codable {
         try container.encode(_jsonMode, forKey: .mode)
     }
 
-    var _jsonPath: String {
-        get { path }
-        set { let value = newValue; path = value }
-    }
-    var _jsonContent: String {
-        get { content }
-        set { let value = newValue; content = value }
-    }
-    var _jsonMode: String {
-        get { mode }
-        set { let value = newValue; mode = value }
-    }
 }
 
 public typealias GuestService = Strato_Agent_V1_GuestService
@@ -261,14 +225,6 @@ extension Strato_Agent_V1_GuestService: Codable {
         try container.encode(_jsonEnabled, forKey: .enabled)
     }
 
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonEnabled: Bool {
-        get { enabled }
-        set { let value = newValue; enabled = value }
-    }
 }
 
 public typealias GuestSysctl = Strato_Agent_V1_GuestSysctl
@@ -311,14 +267,6 @@ extension Strato_Agent_V1_GuestSysctl: Codable {
         try container.encode(_jsonValue, forKey: .value)
     }
 
-    var _jsonKey: String {
-        get { key }
-        set { let value = newValue; key = value }
-    }
-    var _jsonValue: String {
-        get { value }
-        set { let value = newValue; self.value = value }
-    }
 }
 
 public struct GuestConfigValidationError: Error, Sendable, CustomStringConvertible {

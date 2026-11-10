@@ -277,13 +277,13 @@ public enum EC2MetadataRenderer {
             return listing(keys)
 
         case .hostname, .localHostname:
-            return metadata.hasHostname ? metadata.hostname : nil
+            return metadata.optionalHostname
         case .instanceID:
             return metadata.instanceID
         case .ipv6:
-            return primaryNIC.flatMap { $0.hasIpv6Address ? $0.ipv6Address : nil }
+            return primaryNIC.flatMap { $0.optionalIpv6Address }
         case .localIPv4:
-            return primaryNIC.flatMap { $0.hasIpAddress ? $0.ipAddress : nil }
+            return primaryNIC.flatMap { $0.optionalIpAddress }
         case .mac:
             return primaryNIC?.macAddress.lowercased()
 
@@ -312,10 +312,10 @@ public enum EC2MetadataRenderer {
             return listing(keys)
         case .availabilityZone:
             guard options.disclosePlacement else { return nil }
-            return metadata.hasAvailabilityZone ? metadata.availabilityZone : nil
+            return metadata.optionalAvailabilityZone
         case .region:
             guard options.disclosePlacement else { return nil }
-            return metadata.hasRegion ? metadata.region : nil
+            return metadata.optionalRegion
 
         case .publicKeys:
             let keys = servableSSHKeys(metadata)
@@ -362,7 +362,7 @@ public enum EC2MetadataRenderer {
                     ? metadata.availabilityZone : nil,
                 instanceId: metadata.instanceID,
                 privateIp: metadata.nics.values.first.flatMap {
-                    $0.hasIpAddress ? $0.ipAddress : ($0.hasIpv6Address ? $0.ipv6Address : nil)
+                    $0.hasIpAddress ? $0.ipAddress : $0.optionalIpv6Address
                 },
                 region: options.disclosePlacement && metadata.hasRegion ? metadata.region : nil,
                 version: "2017-09-30")
@@ -422,11 +422,11 @@ public enum EC2MetadataRenderer {
             let suffix = nic.deviceName.hasPrefix("net") ? String(nic.deviceName.dropFirst(3)) : ""
             guard let number = Int(suffix), suffix == String(number) else { return String(index) }
             return String(number)
-        case .ipv6s: return nic.hasIpv6Address ? nic.ipv6Address : nil
+        case .ipv6s: return nic.optionalIpv6Address
         case .localHostname:
             guard nic.hasIpAddress || nic.hasIpv6Address else { return nil }
-            return metadata.hasHostname ? metadata.hostname : nil
-        case .localIPv4s: return nic.hasIpAddress ? nic.ipAddress : nil
+            return metadata.optionalHostname
+        case .localIPv4s: return nic.optionalIpAddress
         case .mac: return nic.macAddress.lowercased()
         case .ownerID: return metadata.projectID
         case .subnetID: return nic.networkID

@@ -90,24 +90,4 @@ extension Strato_Agent_V1_HostMemoryAccounting: Codable {
         try container.encode(_jsonQemuOverheadBytes, forKey: .qemuOverheadBytes)
     }
 
-    var _jsonPhysicalBytes: Int64 {
-        get { physicalBytes }
-        set { let value = newValue; physicalBytes = value }
-    }
-    var _jsonHostReservedBytes: Int64 {
-        get { hostReservedBytes }
-        set { let value = newValue; hostReservedBytes = value }
-    }
-    var _jsonWorkloadEffectiveBytes: Int64 {
-        get { workloadEffectiveBytes }
-        set { let value = newValue; workloadEffectiveBytes = value }
-    }
-    var _jsonRemainingAllocatableBytes: Int64 {
-        get { remainingAllocatableBytes }
-        set { let value = newValue; remainingAllocatableBytes = value }
-    }
-    var _jsonQemuOverheadBytes: Int64 {
-        get { qemuOverheadBytes }
-        set { let value = newValue; qemuOverheadBytes = value }
-    }
 }

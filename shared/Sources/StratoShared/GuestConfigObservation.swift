@@ -135,49 +135,6 @@ extension Strato_Agent_V1_GuestConfigObservation: Codable {
         try container.encode(_jsonSysctls, forKey: .sysctls)
     }
 
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonStatus: Status {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonError: String? {
-        get { hasError ? (error) : nil }
-        set { if let value = newValue { error = value } else { clearError() } }
-    }
-    var _jsonFailedItem: ItemFailure? {
-        get { hasFailedItem ? (failedItem) : nil }
-        set { if let value = newValue { failedItem = value } else { clearFailedItem() } }
-    }
-    var _jsonPackages: [Package] {
-        get { packages.values }
-        set {
-            let value = newValue;
-            packages = Strato_Agent_V1_GuestConfigObservationPackagesSection.with { $0.values = value }
-        }
-    }
-    var _jsonFiles: [File] {
-        get { files.values }
-        set {
-            let value = newValue; files = Strato_Agent_V1_GuestConfigObservationFilesSection.with { $0.values = value }
-        }
-    }
-    var _jsonServices: [Service] {
-        get { services.values }
-        set {
-            let value = newValue;
-            services = Strato_Agent_V1_GuestConfigObservationServicesSection.with { $0.values = value }
-        }
-    }
-    var _jsonSysctls: [Sysctl] {
-        get { sysctls.values }
-        set {
-            let value = newValue;
-            sysctls = Strato_Agent_V1_GuestConfigObservationSysctlsSection.with { $0.values = value }
-        }
-    }
 }
 
 public enum GuestConfigObservationError: Error, LocalizedError, Sendable {

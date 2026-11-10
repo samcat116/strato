@@ -600,7 +600,7 @@ actor LibvirtService: HypervisorService {
         metadata: InstanceMetadata? = nil,
         vsockCID: UInt32? = nil
     ) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         try await perform("create", vmId: vmId) {
             logger.info("Creating libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
 
@@ -651,9 +651,9 @@ actor LibvirtService: HypervisorService {
             if needsSeed {
                 do {
                     _ = try await cloudInitProvisioner.makeNoCloudISO(
-                        at: isoPath, vmId: vmId, hostname: metadata.flatMap { $0.hasHostname ? $0.hostname : nil },
+                        at: isoPath, vmId: vmId, hostname: metadata.flatMap { $0.optionalHostname },
                         sshAuthorizedKeys: spec.sshAuthorizedKeys.values,
-                        userData: spec.hasUserData ? spec.userData : nil,
+                        userData: spec.optionalUserData,
                         guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
                         metadataSource: spec.metadataSource,
                         noCloudSeedToken: metadata.flatMap {
@@ -683,12 +683,12 @@ actor LibvirtService: HypervisorService {
                     : nil)
             var xml = try DomainXMLBuilder.build(input)
             if let limits = try burstableLimits(
-                spec.hasResourceClass ? spec.resourceClass : nil, guestBytes: spec.memoryBytes)
+                spec.optionalResourceClass, guestBytes: spec.memoryBytes)
             {
                 xml =
                     try DomainBurstableTuning.updating(
                         in: xml, limits: limits, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
-                        resourceClass: spec.hasResourceClass ? spec.resourceClass : nil,
+                        resourceClass: spec.optionalResourceClass,
                         guestGrantBytes: spec.memoryBytes) ?? xml
             }
 
@@ -872,8 +872,8 @@ actor LibvirtService: HypervisorService {
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
             do {
                 _ = try await cloudInitProvisioner.makeNoCloudISO(
-                    at: isoPath, vmId: vmId, hostname: metadata.hasHostname ? metadata.hostname : nil,
-                    sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.hasUserData ? spec.userData : nil,
+                    at: isoPath, vmId: vmId, hostname: metadata.optionalHostname,
+                    sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.optionalUserData,
                     guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
                     metadataSource: spec.metadataSource,
                     noCloudSeedToken: try UUID(protocolString: metadata.noCloudSeedToken),
@@ -898,15 +898,15 @@ actor LibvirtService: HypervisorService {
     /// Required boot-time convergence, separate from best-effort widening.
     /// The inactive definition is the source the next QEMU process reads.
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         do {
             try await perform("memory-ceiling", vmId: vmId) {
                 let dom = try await domain(vmId)
                 if let limits = try burstableLimits(
-                    spec.hasResourceClass ? spec.resourceClass : nil, guestBytes: spec.memoryBytes)
+                    spec.optionalResourceClass, guestBytes: spec.memoryBytes)
                 {
                     try await defineBurstableControls(
-                        dom, vmId: vmId, limits: limits, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.optionalResourceClass
                     )
                     return
                 }
@@ -1181,7 +1181,7 @@ actor LibvirtService: HypervisorService {
     /// the manifest spec — a define over the VM's existing disks, which is
     /// exactly the right recovery.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         let serializesControls = (spec.hasResourceClass && spec.resourceClass.policy.kind == .burstable)
         if serializesControls, !burstableOperations.insert(vmId).inserted {
             throw ConvergenceError.blocked("A libvirt resource operation is already in flight for this workload")
@@ -1191,7 +1191,7 @@ actor LibvirtService: HypervisorService {
             let dom = try await domain(vmId)
             let status = LibvirtDomain.vmStatus(forRawState: try await state(of: dom, vmId: vmId))
             if let limits = try burstableLimits(
-                spec.hasResourceClass ? spec.resourceClass : nil, guestBytes: spec.memoryBytes)
+                spec.optionalResourceClass, guestBytes: spec.memoryBytes)
             {
                 let persisted = try DomainBurstableTuning.resourceClass(
                     in: try await inactiveDomainXML(dom, vmId: vmId))
@@ -1203,7 +1203,7 @@ actor LibvirtService: HypervisorService {
                     try verifyBurstableControls(vmId: vmId, limits: limits)
                 } else {
                     try await defineBurstableControls(
-                        dom, vmId: vmId, limits: limits, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.optionalResourceClass
                     )
                 }
                 return status
@@ -1777,10 +1777,10 @@ actor LibvirtService: HypervisorService {
         }
 
         let applied = try await readDiskIOLimits(dom: dom, vmId: vmId, target: target)
-        let appliedIOPS = applied.hasIopsTotal ? applied.iopsTotal : nil
-        let appliedBPS = applied.hasBpsTotal ? applied.bpsTotal : nil
-        let requestedIOPS = limits.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil }
-        let requestedBPS = limits.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil }
+        let appliedIOPS = applied.optionalIopsTotal
+        let appliedBPS = applied.optionalBpsTotal
+        let requestedIOPS = limits.flatMap { $0.optionalIopsTotal }
+        let requestedBPS = limits.flatMap { $0.optionalBpsTotal }
         guard appliedIOPS == requestedIOPS, appliedBPS == requestedBPS else {
             throw HypervisorServiceError.diskError(
                 "libvirt read back volume target \(target) with IOPS/BPS limits "
@@ -1878,7 +1878,7 @@ actor LibvirtService: HypervisorService {
     ///   the guest may ignore, and `domainMemoryStats`' `actualBalloon` on the
     ///   next poll is what says whether memory came back.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         try await perform("resize", vmId: vmId) {
             let dom = try await domain(vmId)
             let info = try await call(
@@ -1904,7 +1904,7 @@ actor LibvirtService: HypervisorService {
                 ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
 
             if let target = try burstableLimits(
-                spec.hasResourceClass ? spec.resourceClass : nil, guestBytes: targetGuestMemory)
+                spec.optionalResourceClass, guestBytes: targetGuestMemory)
             {
                 if live && layout.virtioMem == nil && targetGuestMemory != currentGuestMemory {
                     throw ConvergenceError.blocked(
@@ -1951,7 +1951,7 @@ actor LibvirtService: HypervisorService {
                     try await resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: false)
                 }
                 try await defineBurstableControls(
-                    dom, vmId: vmId, limits: target, resourceClass: spec.hasResourceClass ? spec.resourceClass : nil)
+                    dom, vmId: vmId, limits: target, resourceClass: spec.optionalResourceClass)
                 if live { await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout) }
                 return
             }
@@ -2698,7 +2698,7 @@ actor LibvirtService: HypervisorService {
     /// cannot see.
     private func resolveFirmware(spec: VMSpec, machine: MachineProfile) -> FirmwareSet? {
         guard case .disk(let disk) = spec.boot.value else { return nil }
-        let perVMPath = disk.hasFirmware ? disk.firmware : nil
+        let perVMPath = disk.optionalFirmware
         switch FirmwareResolver.domainFirmware(
             secureBoot: machine.secureBoot, perVMPath: perVMPath, overrides: firmware)
         {
@@ -2792,12 +2792,12 @@ actor LibvirtService: HypervisorService {
             disks.append(
                 ResolvedDisk(
                     attachment: attachment, readonly: volume.readonly,
-                    bootOrder: volume.hasBootOrder ? Int(volume.bootOrder) : nil,
+                    bootOrder: volume.optionalBootOrder.map(Int.init),
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.
                     volumeId: volume.volumeID,
-                    blockPolicy: volume.hasAppliedBlockPolicy ? volume.appliedBlockPolicy : nil,
-                    ioLimits: volume.hasIoLimits ? volume.ioLimits : nil))
+                    blockPolicy: volume.optionalAppliedBlockPolicy,
+                    ioLimits: volume.optionalIoLimits))
         }
 
         if disks.isEmpty {

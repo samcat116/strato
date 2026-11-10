@@ -122,8 +122,8 @@ enum SandboxIdleFenceService {
             old.controlPlaneActivityRevision == previous?.activity_revision,
             report.evidenceAgeMilliseconds <= 30_000,
             report.idleFenceSupported,
-            let guest = report.hasGuest ? report.guest : nil,
-            let oldGuest = old.hasGuest ? old.guest : nil,
+            let guest = report.optionalGuest,
+            let oldGuest = old.optionalGuest,
             guest.hasCompleteQuiescentCoverage, oldGuest.hasCompleteQuiescentCoverage,
             guest.monitorIncarnation == oldGuest.monitorIncarnation,
             guest.sampleSequence > oldGuest.sampleSequence,
@@ -294,11 +294,11 @@ enum SandboxIdleFenceService {
             guard
                 let report = try? WireProtocol.makeDecoder().decode(
                     SandboxIdleActivityReport.self, from: Data(row.report.utf8)), report.isCompleteQuiet,
-                let policy = report.hasPolicy ? report.policy : nil, policy.enabled,
+                let policy = report.optionalPolicy, policy.enabled,
                 !policy.excludedSandboxIDs.values.contains(where: { UUID(uuidString: $0) == row.id }),
                 policy.idleSeconds.isFinite, policy.idleSeconds > 0,
                 policy.minimumResidencySeconds.isFinite, policy.minimumResidencySeconds > 0,
-                let quiet = report.hasHostQuietMilliseconds ? report.hostQuietMilliseconds : nil,
+                let quiet = report.optionalHostQuietMilliseconds,
                 Double(quiet) / 1000 >= policy.idleSeconds,
                 now.date.timeIntervalSince(row.last_active_at ?? row.created_at ?? now.date)
                     >= policy.idleSeconds,
@@ -337,11 +337,11 @@ enum SandboxIdleFenceService {
                 report.controlPlaneActivityRevision == state.activity_revision,
                 report.isCompleteQuiet, let received = state.received_at,
                 received <= current.date, current.date.timeIntervalSince(received) <= 30,
-                let policy = report.hasPolicy ? report.policy : nil, policy.enabled,
+                let policy = report.optionalPolicy, policy.enabled,
                 !policy.excludedSandboxIDs.values.contains(where: { UUID(uuidString: $0) == id }),
                 policy.idleSeconds.isFinite, policy.idleSeconds > 0,
                 policy.minimumResidencySeconds.isFinite, policy.minimumResidencySeconds > 0,
-                let quiet = report.hasHostQuietMilliseconds ? report.hostQuietMilliseconds : nil,
+                let quiet = report.optionalHostQuietMilliseconds,
                 Double(quiet) / 1000 >= policy.idleSeconds,
                 current.date.timeIntervalSince(sandbox.lastActiveAt ?? sandbox.createdAt ?? current.date)
                     >= policy.idleSeconds,

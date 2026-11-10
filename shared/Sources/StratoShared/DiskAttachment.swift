@@ -241,38 +241,6 @@ extension Strato_Agent_V1_AppliedBlockDevicePolicy: Codable {
         try container.encodeIfPresent(_jsonFallbackReason, forKey: .fallbackReason)
     }
 
-    var _jsonActive: Bool {
-        get { active }
-        set { let value = newValue; active = value }
-    }
-    var _jsonRequestedMode: VolumeBlockMode {
-        get { requestedMode }
-        set { let value = newValue; requestedMode = value }
-    }
-    var _jsonCacheMode: BlockDeviceCacheMode? {
-        get { hasCacheMode ? (cacheMode) : nil }
-        set { if let value = newValue { cacheMode = value } else { clearCacheMode() } }
-    }
-    var _jsonIoMode: BlockDeviceIOMode? {
-        get { hasIoMode ? (ioMode) : nil }
-        set { if let value = newValue { ioMode = value } else { clearIoMode() } }
-    }
-    var _jsonDiscard: Bool {
-        get { discard }
-        set { let value = newValue; discard = value }
-    }
-    var _jsonNonRotational: Bool {
-        get { nonRotational }
-        set { let value = newValue; nonRotational = value }
-    }
-    var _jsonQueueCount: Int? {
-        get { hasQueueCount ? (Int(queueCount)) : nil }
-        set { if let value = newValue { queueCount = Int64(value) } else { clearQueueCount() } }
-    }
-    var _jsonFallbackReason: String? {
-        get { hasFallbackReason ? (fallbackReason) : nil }
-        set { if let value = newValue { fallbackReason = value } else { clearFallbackReason() } }
-    }
 }
 
 /// A storage-backend-owned disk reference that a hypervisor can realize.

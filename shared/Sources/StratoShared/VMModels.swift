@@ -22,9 +22,8 @@ extension Strato_Agent_V1_VMStatus: Codable {
         }
     }
 
-    /// Tolerant decoding: an unrecognized status string (e.g. from a control plane or
-    /// agent running a different protocol version) decodes to `.unknown` instead of
-    /// throwing, so version skew cannot crash message handling.
+    /// Legacy JSON decoding maps unrecognized status strings in stored or
+    /// public records to `.unknown`. Binary workload validation remains strict.
     public init(from decoder: Swift.Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = VMStatus(rawValue: raw) ?? .unknown
@@ -83,18 +82,6 @@ extension Strato_Agent_V1_VMStatus: Codable {
 /// own wire-version bump and gate, not by being tolerated here.
 public typealias GraphicsMode = Strato_Agent_V1_GraphicsMode
 extension Strato_Agent_V1_GraphicsMode: Codable {
-    /// Headless — no display device, no framebuffer server. Today's behavior.
-    ///
-    /// Spelled `headless` rather than `none` deliberately. `graphics` is an
-    /// Optional, and `spec.console?.graphics == .none` would compile against
-    /// `Optional.none` — reading as "has a graphics mode of headless" while
-    /// actually testing "the field is absent". The raw value stays `"None"`,
-    /// so this is a source-level rename with no wire change.
-
-    /// A VNC server on a Unix socket in the VM's directory, relayed to the
-    /// browser by the agent. There is no RFB password: the socket's file mode
-    /// and the control plane's `view_console` authorization are the security
-    /// boundary, exactly as for the QMP and serial sockets beside it.
 
     public var protocolValue: String {
         switch self {

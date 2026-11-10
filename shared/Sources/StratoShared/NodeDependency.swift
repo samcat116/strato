@@ -102,11 +102,6 @@ extension Strato_Agent_V1_NodeDependencyRole: Codable {
 /// Who may change a dependency's host state.
 public typealias NodeDependencyOwnership = Strato_Agent_V1_NodeDependencyOwnership
 extension Strato_Agent_V1_NodeDependencyOwnership: Codable {
-    /// An operator or external orchestrator owns it. Strato only observes.
-
-    /// Strato may enable/start/restart the low-level supervisor, within policy.
-
-    /// Strato owns both desired configuration and lifecycle.
 
     public var protocolValue: String {
         switch self {
@@ -449,14 +444,6 @@ extension Strato_Agent_V1_NodeDependencyFailureReason: Codable {
         try container.encode(_jsonMessage, forKey: .message)
     }
 
-    var _jsonCode: NodeDependencyFailureCode {
-        get { code }
-        set { let value = newValue; code = value }
-    }
-    var _jsonMessage: String {
-        get { message }
-        set { let value = newValue; message = value }
-    }
 }
 
 /// The latest level-triggered observation of one node dependency.
@@ -576,79 +563,4 @@ extension Strato_Agent_V1_NodeDependencyObservation: Codable {
         try container.encode(_jsonAffectedCapabilities, forKey: .affectedCapabilities)
     }
 
-    var _jsonId: NodeDependencyID {
-        get { id }
-        set { let value = newValue; id = value }
-    }
-    var _jsonRole: NodeDependencyRole {
-        get { role }
-        set { let value = newValue; role = value }
-    }
-    var _jsonDesiredState: NodeDependencyDesiredState {
-        get { desiredState }
-        set { let value = newValue; desiredState = value }
-    }
-    var _jsonOwnership: NodeDependencyOwnership {
-        get { ownership }
-        set { let value = newValue; ownership = value }
-    }
-    var _jsonSupervisorState: NodeDependencySupervisorState {
-        get { supervisorState }
-        set { let value = newValue; supervisorState = value }
-    }
-    var _jsonInstalledVersion: String? {
-        get { hasInstalledVersion ? (installedVersion) : nil }
-        set { if let value = newValue { installedVersion = value } else { clearInstalledVersion() } }
-    }
-    var _jsonDaemonVersion: String? {
-        get { hasDaemonVersion ? (daemonVersion) : nil }
-        set { if let value = newValue { daemonVersion = value } else { clearDaemonVersion() } }
-    }
-    var _jsonCompatibility: NodeDependencyCompatibility {
-        get { compatibility }
-        set { let value = newValue; compatibility = value }
-    }
-    var _jsonFunctionalState: NodeDependencyFunctionalState {
-        get { functionalState }
-        set { let value = newValue; functionalState = value }
-    }
-    var _jsonCheckedAt: Date {
-        get { checkedAt.date }
-        set { let value = newValue; checkedAt = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonLastHealthyAt: Date? {
-        get { hasLastHealthyAt ? (lastHealthyAt.date) : nil }
-        set {
-            if let value = newValue {
-                lastHealthyAt = Google_Protobuf_Timestamp(date: value)
-            } else {
-                clearLastHealthyAt()
-            }
-        }
-    }
-    var _jsonReason: NodeDependencyFailureReason? {
-        get { hasReason ? (reason) : nil }
-        set { if let value = newValue { reason = value } else { clearReason() } }
-    }
-    var _jsonConsecutiveFailures: Int {
-        get { Int(consecutiveFailures) }
-        set { let value = newValue; consecutiveFailures = Int64(value) }
-    }
-    var _jsonRemediationCount: Int {
-        get { Int(remediationCount) }
-        set { let value = newValue; remediationCount = Int64(value) }
-    }
-    var _jsonRestartCount: Int {
-        get { Int(restartCount) }
-        set { let value = newValue; restartCount = Int64(value) }
-    }
-    var _jsonAffectedCapabilities: [NodeCapability] {
-        get { affectedCapabilities.values }
-        set {
-            let value = newValue;
-            affectedCapabilities = Strato_Agent_V1_NodeDependencyObservationAffectedCapabilitiesSection.with {
-                $0.values = value
-            }
-        }
-    }
 }

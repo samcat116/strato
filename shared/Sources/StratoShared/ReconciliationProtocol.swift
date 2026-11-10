@@ -14,10 +14,6 @@ import SwiftProtobuf
 public typealias DesiredVMStatus = Strato_Agent_V1_DesiredVMStatus
 extension Strato_Agent_V1_DesiredVMStatus: Codable {
 
-    /// The VM should not exist on the agent at all (deletion in progress).
-    /// Rows are removed from the control-plane database only after an agent
-    /// confirms absence, so deletes survive restarts on both sides.
-
     /// Whether an observed status already satisfies this goal, i.e. the
     /// reconciler has nothing to do. `.created` satisfies `.shutdown` because
     /// a defined-but-never-booted VM and a shut-down VM are the same resting
@@ -93,21 +89,6 @@ extension Strato_Agent_V1_DesiredVMStatus: Codable {
 /// Absent means "no restore has ever been asked for", never "undo one".
 public typealias DesiredRestore = Strato_Agent_V1_DesiredRestore
 extension Strato_Agent_V1_DesiredRestore: Codable {
-    /// Monotonic per-workload counter, bumped once per accepted restore request.
-    /// The agent acts when this exceeds the nonce it last applied and recorded.
-    /// The artifact to load. Travels with the nonce rather than beside it so a
-    /// nonce can never be attributed to the wrong point in time: two restores of
-    /// different checkpoints are two different values of one field.
-    /// Download descriptors for an exported snapshot, present only when the
-    /// workload does not live on the agent that captured it (issue #428).
-    /// Resolved fresh at sync assembly, like `ImageInfo`, so a long-desired
-    /// restore never carries a stale locator.
-    ///
-    /// Sandbox-only: a VM checkpoint lives *inside* the VM's own disks, so it
-    /// cannot move between hosts and a VM restore never carries one. The field
-    /// is shared rather than forked for `DesiredSnapshotState`'s reason — the
-    /// nonce, the guard and the durable record are the same three times over,
-    /// and only the payload differs.
 
     public init(
         generation: Int64,
@@ -139,62 +120,11 @@ extension Strato_Agent_V1_DesiredRestore: Codable {
         try container.encodeIfPresent(_jsonArtifacts, forKey: .artifacts)
     }
 
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonSnapshotId: UUID {
-        get { UUID(uuidString: snapshotID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; snapshotID = value.uuidString }
-    }
-    var _jsonArtifacts: [SandboxSnapshotArtifactDescriptor]? {
-        get { hasArtifacts ? (artifacts.values) : nil }
-        set {
-            if let value = newValue {
-                artifacts = Strato_Agent_V1_DesiredRestoreArtifactsSection.with { $0.values = value }
-            } else {
-                clearArtifacts()
-            }
-        }
-    }
 }
 
 /// One VM's authoritative desired state, as assembled by the control plane.
 public typealias DesiredVMState = Strato_Agent_V1_DesiredVMState
 extension Strato_Agent_V1_DesiredVMState: Codable {
-    /// Which backend should realize this VM. Pinned at scheduling time.
-    /// Monotonic per-VM counter, bumped by the control plane on every desired
-    /// status or spec change. The agent records the generation it last applied
-    /// and rejects older ones, so replayed or reordered syncs cannot roll a VM
-    /// backward.
-    /// Download info for the VM's boot image, so an agent that does not yet
-    /// have the VM can materialize it. Download URLs are control-plane-relative
-    /// paths fetched over SVID mTLS — no signature, so nothing here expires.
-    /// What the VM's link-local metadata service should tell the guest about
-    /// itself (STR-48). Riding the sync is what makes the metadata store
-    /// level-triggered, generation-guarded, and replay-safe without a second
-    /// control loop or transport: an operator's edit lands on the next sync
-    /// instead of requiring the guest to be rebuilt around a new seed ISO.
-    ///
-    /// Nil is authoritative: there is nothing to serve, and an agent holding
-    /// stale metadata must drop it.
-    /// How many times this VM has been asked to reboot (ADR 0001 stage 9,
-    /// STR-151) — the `kubectl rollout restart` nonce, applied to the one VM
-    /// verb that is an edge rather than a state.
-    ///
-    /// A reboot starts and ends `.running`, so `desiredStatus` cannot express
-    /// it and the old `vm_reboot` RPC was fire-and-forget: a socket dropped
-    /// mid-flight lost the reboot silently. Counting it makes it level-triggered
-    /// like everything else — the agent acts when this outranks the nonce it
-    /// durably recorded, and a lost sync costs latency rather than the reboot.
-    ///
-    /// Nil means no reboot has ever been requested and, being a count of
-    /// requests, is never an instruction to undo one.
-    /// The checkpoint this VM should have been restored to, as a nonce
-    /// (STR-151). Nil means no restore has ever been requested.
-    /// Nil means no managed guest intent. Omission never reverses previous guest changes.
-    /// Changes share this VM's generation; no separate guest generation exists.
-    /// Durable control-plane verdict. A matching generation must never reissue guest work after restart.
 
     public init(
         vmId: UUID,
@@ -261,52 +191,6 @@ extension Strato_Agent_V1_DesiredVMState: Codable {
         try container.encodeIfPresent(_jsonGuestConfigFailedGeneration, forKey: .guestConfigFailedGeneration)
     }
 
-    var _jsonVmId: UUID {
-        get { UUID(uuidString: vmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; vmID = value.uuidString }
-    }
-    var _jsonHypervisorType: HypervisorType {
-        get { hypervisorType }
-        set { let value = newValue; hypervisorType = value }
-    }
-    var _jsonSpec: VMSpec {
-        get { spec }
-        set { let value = newValue; spec = value }
-    }
-    var _jsonDesiredStatus: DesiredVMStatus {
-        get { desiredStatus }
-        set { let value = newValue; desiredStatus = value }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonImageInfo: ImageInfo? {
-        get { hasImageInfo ? (imageInfo) : nil }
-        set { if let value = newValue { imageInfo = value } else { clearImageInfo() } }
-    }
-    var _jsonMetadata: InstanceMetadata? {
-        get { hasMetadata ? (metadata) : nil }
-        set { if let value = newValue { metadata = value } else { clearMetadata() } }
-    }
-    var _jsonRebootGeneration: Int64? {
-        get { hasRebootGeneration ? (rebootGeneration) : nil }
-        set { if let value = newValue { rebootGeneration = value } else { clearRebootGeneration() } }
-    }
-    var _jsonRestore: DesiredRestore? {
-        get { hasRestore ? (restore) : nil }
-        set { if let value = newValue { restore = value } else { clearRestore() } }
-    }
-    var _jsonGuestConfig: GuestConfig? {
-        get { hasGuestConfig ? (guestConfig) : nil }
-        set { if let value = newValue { guestConfig = value } else { clearGuestConfig() } }
-    }
-    var _jsonGuestConfigFailedGeneration: Int64? {
-        get { hasGuestConfigFailedGeneration ? (guestConfigFailedGeneration) : nil }
-        set {
-            if let value = newValue { guestConfigFailedGeneration = value } else { clearGuestConfigFailedGeneration() }
-        }
-    }
 }
 
 // MARK: - Desired Sandbox State
@@ -316,20 +200,6 @@ extension Strato_Agent_V1_DesiredVMState: Codable {
 /// generation-guarded, safe to drop or replay.
 public typealias DesiredSandboxState = Strato_Agent_V1_DesiredSandboxState
 extension Strato_Agent_V1_DesiredSandboxState: Codable {
-    /// Monotonic per-sandbox counter, bumped by the control plane on every
-    /// desired status or spec change. The agent records the generation it last
-    /// applied and rejects older ones, so replayed or reordered syncs cannot
-    /// roll a sandbox backward.
-    /// Pull credential for the spec's image when it lives in a private
-    /// registry, minted fresh at sync assembly (see `RegistryCredential`).
-    /// Nil for public images — zero-configuration public pulls must work.
-    /// The snapshot this sandbox should have been restored **into itself** from,
-    /// as a nonce (ADR 0001 stage 9, STR-151).
-    ///
-    /// This is an edge applied to a sandbox that already exists — same id, same
-    /// addresses, rewound — and is consulted only while it is present.
-    /// Total admitted internal checkpoint bytes, including the retained predecessor.
-    /// Existing durable guest state must never be replaced by a cold OCI create.
 
     public init(
         sandboxId: UUID,
@@ -405,78 +275,6 @@ extension Strato_Agent_V1_DesiredSandboxState: Codable {
         try container.encodeIfPresent(_jsonIdlePendingCommandCount, forKey: .idlePendingCommandCount)
     }
 
-    var _jsonSandboxId: UUID {
-        get { UUID(uuidString: sandboxID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; sandboxID = value.uuidString }
-    }
-    var _jsonSpec: SandboxSpec {
-        get { spec }
-        set { let value = newValue; spec = value }
-    }
-    var _jsonDesiredStatus: DesiredSandboxStatus {
-        get { desiredStatus }
-        set { let value = newValue; desiredStatus = value }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonRegistryCredential: RegistryCredential? {
-        get { hasRegistryCredential ? (registryCredential) : nil }
-        set { if let value = newValue { registryCredential = value } else { clearRegistryCredential() } }
-    }
-    var _jsonRestore: DesiredRestore? {
-        get { hasRestore ? (restore) : nil }
-        set { if let value = newValue { restore = value } else { clearRestore() } }
-    }
-    var _jsonSuspensionStorageBudgetBytes: Int64? {
-        get { hasSuspensionStorageBudgetBytes ? (suspensionStorageBudgetBytes) : nil }
-        set {
-            if let value = newValue {
-                suspensionStorageBudgetBytes = value
-            } else {
-                clearSuspensionStorageBudgetBytes()
-            }
-        }
-    }
-    var _jsonSuspensionAfterSnapshotId: UUID? {
-        get {
-            hasSuspensionAfterSnapshotID
-                ? (UUID(uuidString: suspensionAfterSnapshotID)
-                    ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set {
-            if let value = newValue {
-                suspensionAfterSnapshotID = value.uuidString
-            } else {
-                clearSuspensionAfterSnapshotID()
-            }
-        }
-    }
-    var _jsonSuspensionCheckpointId: UUID? {
-        get {
-            hasSuspensionCheckpointID
-                ? (UUID(uuidString: suspensionCheckpointID)
-                    ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set {
-            if let value = newValue { suspensionCheckpointID = value.uuidString } else { clearSuspensionCheckpointID() }
-        }
-    }
-    var _jsonAutomaticSuspensionFence: SandboxAutomaticSuspensionFence? {
-        get { hasAutomaticSuspensionFence ? (automaticSuspensionFence) : nil }
-        set { if let value = newValue { automaticSuspensionFence = value } else { clearAutomaticSuspensionFence() } }
-    }
-    var _jsonIdleControlPlaneRevision: Int64? {
-        get { hasIdleControlPlaneRevision ? (idleControlPlaneRevision) : nil }
-        set { if let value = newValue { idleControlPlaneRevision = value } else { clearIdleControlPlaneRevision() } }
-    }
-    var _jsonIdlePendingCommandCount: Int? {
-        get { hasIdlePendingCommandCount ? (Int(idlePendingCommandCount)) : nil }
-        set {
-            if let value = newValue { idlePendingCommandCount = Int64(value) } else { clearIdlePendingCommandCount() }
-        }
-    }
 }
 
 // MARK: - Desired Volume State
@@ -495,10 +293,6 @@ extension Strato_Agent_V1_DesiredSandboxState: Codable {
 /// it has.
 public typealias DesiredVolumeStatus = Strato_Agent_V1_DesiredVolumeStatus
 extension Strato_Agent_V1_DesiredVolumeStatus: Codable {
-
-    /// The volume should not exist on the agent at all (deletion in progress).
-    /// Rows are removed from the control-plane database only after an agent
-    /// confirms absence by omitting the volume from its observed report.
 
     public var protocolValue: String {
         switch self {
@@ -556,23 +350,6 @@ extension Strato_Agent_V1_DesiredVolumeSource: Codable {
     /// Copy another volume on this same agent; `sourceVolumeId` names it.
     public static let clone = "clone"
 
-    /// Present for `image`. Download URLs are control-plane-relative paths
-    /// fetched over SVID mTLS — no signature, so nothing here expires and the
-    /// entry stays safe to sit in a sync indefinitely.
-    /// The typed image artifact whose bytes initialize this volume. Required
-    /// for `image`: QEMU boot/data volumes use `.diskImage`, while a
-    /// Firecracker boot volume uses `.rootfs`.
-    /// Present for `clone`. The volume/VM co-location constraint guarantees the
-    /// source lives on this same agent, and the agent derives the source path
-    /// from its own layout — no path travels on the wire (STR-180).
-    /// The VM that currently owns an attached clone source. The agent holds
-    /// this VM's reconciliation lane for the complete copy, so a later desired
-    /// state cannot start the source guest while its bytes are being read. Nil
-    /// for a detached clone source.
-    /// The source volume's format, when known, so the agent can pick a copy
-    /// strategy without probing. Advisory: the backend detects rather than
-    /// assumes.
-
     public init(
         kind: String,
         imageInfo: ImageInfo? = nil,
@@ -628,37 +405,6 @@ extension Strato_Agent_V1_DesiredVolumeSource: Codable {
         try container.encodeIfPresent(_jsonSourceFormat, forKey: .sourceFormat)
     }
 
-    var _jsonKind: String {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonImageInfo: ImageInfo? {
-        get { hasImageInfo ? (imageInfo) : nil }
-        set { if let value = newValue { imageInfo = value } else { clearImageInfo() } }
-    }
-    var _jsonArtifactKind: ArtifactKind? {
-        get { hasArtifactKind ? (artifactKind) : nil }
-        set { if let value = newValue { artifactKind = value } else { clearArtifactKind() } }
-    }
-    var _jsonSourceVolumeId: UUID? {
-        get {
-            hasSourceVolumeID
-                ? (UUID(uuidString: sourceVolumeID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
-                : nil
-        }
-        set { if let value = newValue { sourceVolumeID = value.uuidString } else { clearSourceVolumeID() } }
-    }
-    var _jsonSourceVMId: UUID? {
-        get {
-            hasSourceVmID
-                ? (UUID(uuidString: sourceVmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set { if let value = newValue { sourceVmID = value.uuidString } else { clearSourceVmID() } }
-    }
-    var _jsonSourceFormat: String? {
-        get { hasSourceFormat ? (sourceFormat) : nil }
-        set { if let value = newValue { sourceFormat = value } else { clearSourceFormat() } }
-    }
 }
 
 /// Absolute per-volume I/O ceilings (STR-19).
@@ -684,9 +430,6 @@ extension Strato_Agent_V1_DesiredVolumeSource: Codable {
 ///   misreading that matters.
 public typealias VolumeIOLimits = Strato_Agent_V1_VolumeIOLimits
 extension Strato_Agent_V1_VolumeIOLimits: Codable {
-    /// Total (read + write) IOPS ceiling. Nil means uncapped in that dimension.
-    /// Total (read + write) throughput ceiling in bytes per second. Nil means
-    /// uncapped in that dimension.
 
     /// Whether this carries no cap at all. Equal *in effect* to nil, but not
     /// `==` to it, which is exactly why `normalized(_:_:)` exists.
@@ -722,14 +465,6 @@ extension Strato_Agent_V1_VolumeIOLimits: Codable {
         try container.encodeIfPresent(_jsonBpsTotal, forKey: .bpsTotal)
     }
 
-    var _jsonIopsTotal: Int64? {
-        get { hasIopsTotal ? (iopsTotal) : nil }
-        set { if let value = newValue { iopsTotal = value } else { clearIopsTotal() } }
-    }
-    var _jsonBpsTotal: Int64? {
-        get { hasBpsTotal ? (bpsTotal) : nil }
-        set { if let value = newValue { bpsTotal = value } else { clearBpsTotal() } }
-    }
 }
 
 /// The measured aggregate I/O rate for one attached volume (STR-270).
@@ -764,14 +499,6 @@ extension Strato_Agent_V1_VolumeIOObservedRate: Codable {
         try container.encode(_jsonBytesPerSecond, forKey: .bytesPerSecond)
     }
 
-    var _jsonIops: Double {
-        get { iops }
-        set { let value = newValue; iops = value }
-    }
-    var _jsonBytesPerSecond: Double {
-        get { bytesPerSecond }
-        set { let value = newValue; bytesPerSecond = value }
-    }
 }
 
 /// Where a volume should be plugged in. Nil on the desired entry means
@@ -779,13 +506,6 @@ extension Strato_Agent_V1_VolumeIOObservedRate: Codable {
 /// `vmId` as `deviceName`.
 public typealias DesiredVolumeAttachment = Strato_Agent_V1_DesiredVolumeAttachment
 extension Strato_Agent_V1_DesiredVolumeAttachment: Codable {
-    /// The control-plane-assigned slot ("disk1", ...). Stable across power
-    /// cycles so a re-realized attachment lands where the guest's fstab
-    /// expects it, unique within its VM, and validated by its type — the slot
-    /// becomes a hypervisor object id, so a sync cannot carry one a hypervisor
-    /// would refuse (STR-129).
-    /// Explicit boot priority; informational to the agent, which receives
-    /// `VMSpec.volumes` pre-sorted.
 
     public init(vmId: UUID, deviceName: VolumeDeviceName, readonly: Bool = false, bootOrder: Int? = nil) {
         self.init()
@@ -815,22 +535,6 @@ extension Strato_Agent_V1_DesiredVolumeAttachment: Codable {
         try container.encodeIfPresent(_jsonBootOrder, forKey: .bootOrder)
     }
 
-    var _jsonVmId: UUID {
-        get { UUID(uuidString: vmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; vmID = value.uuidString }
-    }
-    var _jsonDeviceName: VolumeDeviceName {
-        get { VolumeDeviceName(deviceName) ?? .disk(0) }
-        set { let value = newValue; deviceName = value.rawValue }
-    }
-    var _jsonReadonly: Bool {
-        get { readonly }
-        set { let value = newValue; readonly = value }
-    }
-    var _jsonBootOrder: Int? {
-        get { hasBootOrder ? (Int(bootOrder)) : nil }
-        set { if let value = newValue { bootOrder = Int64(value) } else { clearBootOrder() } }
-    }
 }
 
 /// One volume's authoritative desired state (ADR 0001 stage 5, STR-148).
@@ -843,34 +547,6 @@ extension Strato_Agent_V1_DesiredVolumeAttachment: Codable {
 /// other way on the observed report.
 public typealias DesiredVolumeState = Strato_Agent_V1_DesiredVolumeState
 extension Strato_Agent_V1_DesiredVolumeState: Codable {
-    /// Monotonic per-volume counter, bumped by the control plane on every
-    /// desired change. The agent records the generation it last applied and
-    /// rejects older ones, so replayed or reordered syncs cannot roll a volume
-    /// backward.
-    /// Desired virtual size in bytes. Growth plans a `.resize`; a *shrink* is a
-    /// permanent failure the agent refuses rather than a truncation it
-    /// performs.
-    /// "qcow2" or "raw", parsed by the agent with `DiskFormat(rawValue:)` and
-    /// rejected there. A `String` at the boundary for the same reason
-    /// `VolumeCreateMessage.format` was one: an unknown format must fail this
-    /// volume, not the sync. Immutable after create — a mismatch is a
-    /// permanent failure, never a silent conversion.
-    /// Backend-specific realization configuration. Local volumes preserve the
-    /// historical agent-owned path layout; Ceph volumes carry a complete,
-    /// project-scoped client configuration so any eligible site agent can
-    /// converge the same RBD image.
-    /// How to fill a volume that does not exist yet. Nil means blank.
-    /// Nil means the volume should be detached.
-    /// Absolute I/O ceilings for this volume (STR-19). Nil means uncapped, and
-    /// is what every volume created before this field existed means.
-    ///
-    /// Emitted whether or not the volume is attached: a ceiling is a property
-    /// of the volume, latent while it is detached and realized by the attach.
-    /// Always built through `VolumeIOLimits.normalized(iopsTotal:bpsTotal:)`,
-    /// so an all-nil pair travels as an absent field — see the type's note on
-    /// why the desired and observed sides normalize in opposite directions.
-    /// Requested QEMU host-cache policy. Existing desired entries decode to
-    /// the conservative path so optimized caching never appears by upgrade.
 
     public init(
         volumeId: UUID,
@@ -938,46 +614,6 @@ extension Strato_Agent_V1_DesiredVolumeState: Codable {
         try container.encode(_jsonBlockMode, forKey: .blockMode)
     }
 
-    var _jsonVolumeId: UUID {
-        get { UUID(uuidString: volumeID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; volumeID = value.uuidString }
-    }
-    var _jsonDesiredStatus: DesiredVolumeStatus {
-        get { desiredStatus }
-        set { let value = newValue; desiredStatus = value }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonSizeBytes: Int64 {
-        get { sizeBytes }
-        set { let value = newValue; sizeBytes = value }
-    }
-    var _jsonFormat: String {
-        get { format }
-        set { let value = newValue; format = value }
-    }
-    var _jsonStorage: DesiredVolumeStorage {
-        get { storage }
-        set { let value = newValue; storage = value }
-    }
-    var _jsonSource: DesiredVolumeSource? {
-        get { hasSource ? (source) : nil }
-        set { if let value = newValue { source = value } else { clearSource() } }
-    }
-    var _jsonAttachment: DesiredVolumeAttachment? {
-        get { hasAttachment ? (attachment) : nil }
-        set { if let value = newValue { attachment = value } else { clearAttachment() } }
-    }
-    var _jsonIoLimits: VolumeIOLimits? {
-        get { hasIoLimits ? (ioLimits) : nil }
-        set { if let value = newValue { ioLimits = value } else { clearIoLimits() } }
-    }
-    var _jsonBlockMode: VolumeBlockMode {
-        get { blockMode }
-        set { let value = newValue; blockMode = value }
-    }
 }
 
 // MARK: - Workload tombstones
@@ -1023,18 +659,6 @@ extension Strato_Agent_V1_DesiredWorkloadTombstone: Codable {
         try container.encode(_jsonGeneration, forKey: .generation)
     }
 
-    var _jsonKind: WorkloadKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonWorkloadId: UUID {
-        get { UUID(uuidString: workloadID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; workloadID = value.uuidString }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
 }
 
 // MARK: - Desired Agent Update
@@ -1054,14 +678,6 @@ extension Strato_Agent_V1_DesiredWorkloadTombstone: Codable {
 /// `ObservedStateReport.agentUpdateStatus` and retries on later syncs.
 public typealias DesiredAgentUpdate = Strato_Agent_V1_DesiredAgentUpdate
 extension Strato_Agent_V1_DesiredAgentUpdate: Codable {
-    /// The version the agent should be running. Informational to the updater
-    /// (the artifact decides what is installed) but the agent uses it to
-    /// no-op when already converged and to label its status reports.
-    /// Where to download the artifact. May be presigned — treat the query
-    /// string as a credential (see `redactURL`).
-    /// Hex SHA-256 the downloaded artifact must match.
-    /// Shape of the artifact (tarball to extract vs. bare binary).
-    /// Member to extract when `artifactKind == .tarball`.
 
     public init(
         targetVersion: String,
@@ -1122,43 +738,8 @@ extension Strato_Agent_V1_DesiredAgentUpdate: Codable {
         try container.encodeIfPresent(_jsonTarballMember, forKey: .tarballMember)
     }
 
-    var _jsonTargetVersion: String {
-        get { targetVersion }
-        set { let value = newValue; targetVersion = value }
-    }
-    var _jsonArtifactURL: String {
-        get { artifactURL }
-        set { let value = newValue; artifactURL = value }
-    }
-    var _jsonSha256: String {
-        get { sha256 }
-        set { let value = newValue; sha256 = value }
-    }
-    var _jsonArtifactKind: AgentUpdateArtifactKind {
-        get { artifactKind }
-        set { let value = newValue; artifactKind = value }
-    }
-    var _jsonTarballMember: String? {
-        get { hasTarballMember ? (tarballMember) : nil }
-        set { if let value = newValue { tarballMember = value } else { clearTarballMember() } }
-    }
 }
 
-/// Control plane → agent: the full authoritative set of VMs that should exist
-/// on the receiving agent.
-///
-/// Full-list semantics make the message level-triggered and idempotent:
-/// identical syncs diff to nothing, and the message is safe to drop, replay, or
-/// reorder (per-VM `generation` guards handle reordering). Fetched on agent
-/// registration, nudged on any desired-state change, and fetched
-/// unconditionally on an agent-owned interval as the correctness backstop.
-///
-/// Omission is **not** teardown (STR-98). A workload the agent holds that this
-/// message does not list is held, untouched, and reported back as an
-/// `UnrecognizedWorkload`; it is removed only once the control plane answers
-/// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
-/// that, the whole safety of a host's workloads rested on the assembler's
-/// `WHERE` clause returning a complete list.
 /// A permanent instruction to remove one retired Ceph runtime credential from
 /// an agent. It is append-only and intentionally has no generation or expiry:
 /// current, re-enrolled, and future clients in the cluster's site all receive
@@ -1188,80 +769,26 @@ extension Strato_Agent_V1_DesiredCephCredentialRevocation: Codable {
         try container.encode(_jsonCredentialId, forKey: .credentialId)
     }
 
-    var _jsonClusterId: UUID {
-        get { UUID(uuidString: clusterID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; clusterID = value.uuidString }
-    }
-    var _jsonCredentialId: UUID {
-        get { UUID(uuidString: credentialID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; credentialID = value.uuidString }
-    }
 }
 
+/// Control plane → agent: the full authoritative set of VMs that should exist
+/// on the receiving agent.
+///
+/// Full-list semantics make the message level-triggered and idempotent:
+/// identical syncs diff to nothing, and the message is safe to drop, replay, or
+/// reorder (per-VM `generation` guards handle reordering). Fetched on agent
+/// registration, nudged on any desired-state change, and fetched
+/// unconditionally on an agent-owned interval as the correctness backstop.
+///
+/// Omission is **not** teardown (STR-98). A workload the agent holds that this
+/// message does not list is held, untouched, and reported back as an
+/// `UnrecognizedWorkload`; it is removed only once the control plane answers
+/// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
+/// that, the whole safety of a host's workloads rested on the assembler's
+/// `WHERE` clause returning a complete list.
 public typealias DesiredStateMessage = Strato_Agent_V1_DesiredStateMessage
 extension Strato_Agent_V1_DesiredStateMessage: WebSocketMessage {
     public var type: MessageType { .desiredState }
-    /// Correlation id for logging/tracing a sync end to end. No semantics.
-    /// The full authoritative set of sandboxes that should exist on the
-    /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
-    /// here should not exist — and, like a VM, is held and reported rather
-    /// than destroyed until a tombstone says otherwise).
-    /// The full authoritative set of logical networks that should exist on the
-    /// receiving agent (full-list, same semantics as `vms`: a network omitted
-    /// here should be torn down). An empty list authoritatively means this agent
-    /// should realize no logical-network topology.
-    /// Whether the receiving agent is the topology authority for its OVN
-    /// northbound database. The authority reconciles `networks` — creating and
-    /// tearing down switches, routers, and NAT. A non-authoritative agent shares
-    /// its site's NB with peers and must leave topology alone (it still binds
-    /// its own VMs' ports); exactly one agent per site is authoritative, so the
-    /// shared NB has a single topology writer. Site-less agents own their local
-    /// NB outright and are always authoritative.
-    /// The agent build this agent should be running (issue #434), with a
-    /// freshly resolved artifact. Nil means "no opinion" — deployments without
-    /// a meaningful target (dev builds), agents with auto-update off, and agents
-    /// the fleet rollout has not reached yet. Never an instruction to downgrade
-    /// or tear anything down, so absence is always safe.
-    /// The security groups the receiving agent needs realized as OVN port
-    /// groups + ACLs: every group attached to a NIC of a VM in this sync's
-    /// scope, plus the transitive closure of groups referenced by their rules
-    /// (so `$pg_…` address-set references always resolve). Only the topology
-    /// authority acts on this list; other agents consume just the per-NIC
-    /// `NetworkSpec.securityGroupIds` for port membership. Nil means this agent
-    /// is not authoritative for security-group topology — never "tear down all
-    /// port groups": the agent skips security-group reconciliation entirely.
-    /// Workloads the receiving agent holds that the control plane has
-    /// confirmed have no row, and which it therefore authorizes the agent to
-    /// tear down (STR-98). Each entry is the answer to an
-    /// `UnrecognizedWorkload` the agent reported, so a tombstone is always the
-    /// second half of a round trip — never something the control plane
-    /// volunteers. An empty list means no teardown is authorized.
-    /// The full authoritative set of volumes that should exist on the receiving
-    /// agent (ADR 0001 stage 5, STR-148), with the same full-list semantics as
-    /// `vms`. An empty list authoritatively means this host should hold no
-    /// volumes.
-    /// The full authoritative set of snapshot artifacts — volume snapshots, VM
-    /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
-    /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
-    /// One list rather than three because the diff, the generation guard and
-    /// the absent-then-confirm dance are identical across the families; only
-    /// the backend that captures the bytes differs, and the entry's own `kind`
-    /// says which. An empty list authoritatively means this host should retain
-    /// no snapshot artifacts.
-    /// Retired Ceph secret/config identities this site must never retain.
-    /// Unlike workload desired state this ledger is append-only: an empty list
-    /// means there are no recorded revocations for this site, never that an
-    /// agent should forget ones it already applied.
-    /// The DNS zones the receiving agent should realize into the OVN `DNS`
-    /// table (STR-39): every zone attached to a network whose topology this
-    /// agent authors, with the zone's full effective record set.
-    ///
-    /// Nil is "the sender has no opinion about DNS" and the agent leaves every
-    /// managed row alone — what a *non-authority* agent gets, since realizing
-    /// switch-scoped rows from two writers would have them fight over teardown.
-    /// `[]` is an opinion and means "no
-    /// zone reaches any network you author": managed rows are removed, which
-    /// is what makes detaching the last zone from a network take effect.
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1342,93 +869,6 @@ extension Strato_Agent_V1_DesiredStateMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonDnsZones, forKey: .dnsZones)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonSyncId: String {
-        get { syncID }
-        set { let value = newValue; syncID = value }
-    }
-    var _jsonVms: [DesiredVMState] {
-        get { vms.values }
-        set { let value = newValue; vms = Strato_Agent_V1_DesiredStateMessageVmsSection.with { $0.values = value } }
-    }
-    var _jsonSandboxes: [DesiredSandboxState] {
-        get { sandboxes.values }
-        set {
-            let value = newValue;
-            sandboxes = Strato_Agent_V1_DesiredStateMessageSandboxesSection.with { $0.values = value }
-        }
-    }
-    var _jsonNetworks: [DesiredNetworkState] {
-        get { networks.values }
-        set {
-            let value = newValue;
-            networks = Strato_Agent_V1_DesiredStateMessageNetworksSection.with { $0.values = value }
-        }
-    }
-    var _jsonNetworksAuthoritative: Bool {
-        get { networksAuthoritative }
-        set { let value = newValue; networksAuthoritative = value }
-    }
-    var _jsonDesiredAgentUpdate: DesiredAgentUpdate? {
-        get { hasDesiredAgentUpdate ? (desiredAgentUpdate) : nil }
-        set { if let value = newValue { desiredAgentUpdate = value } else { clearDesiredAgentUpdate() } }
-    }
-    var _jsonSecurityGroups: [DesiredSecurityGroup]? {
-        get { hasSecurityGroups ? (securityGroups.values) : nil }
-        set {
-            if let value = newValue {
-                securityGroups = Strato_Agent_V1_DesiredStateMessageSecurityGroupsSection.with { $0.values = value }
-            } else {
-                clearSecurityGroups()
-            }
-        }
-    }
-    var _jsonTombstones: [DesiredWorkloadTombstone] {
-        get { tombstones.values }
-        set {
-            let value = newValue;
-            tombstones = Strato_Agent_V1_DesiredStateMessageTombstonesSection.with { $0.values = value }
-        }
-    }
-    var _jsonVolumes: [DesiredVolumeState] {
-        get { volumes.values }
-        set {
-            let value = newValue; volumes = Strato_Agent_V1_DesiredStateMessageVolumesSection.with { $0.values = value }
-        }
-    }
-    var _jsonSnapshots: [DesiredSnapshotState] {
-        get { snapshots.values }
-        set {
-            let value = newValue;
-            snapshots = Strato_Agent_V1_DesiredStateMessageSnapshotsSection.with { $0.values = value }
-        }
-    }
-    var _jsonCephCredentialRevocations: [DesiredCephCredentialRevocation] {
-        get { cephCredentialRevocations.values }
-        set {
-            let value = newValue;
-            cephCredentialRevocations = Strato_Agent_V1_DesiredStateMessageCephCredentialRevocationsSection.with {
-                $0.values = value
-            }
-        }
-    }
-    var _jsonDnsZones: [DesiredDNSZone]? {
-        get { hasDnsZones ? (dnsZones.values) : nil }
-        set {
-            if let value = newValue {
-                dnsZones = Strato_Agent_V1_DesiredStateMessageDnsZonesSection.with { $0.values = value }
-            } else {
-                clearDnsZones()
-            }
-        }
-    }
 }
 
 // MARK: - Desired Security Groups
@@ -1443,19 +883,6 @@ extension Strato_Agent_V1_DesiredStateMessage: WebSocketMessage {
 /// exactly like floating-IP port names.
 public typealias DesiredSecurityGroupRule = Strato_Agent_V1_DesiredSecurityGroupRule
 extension Strato_Agent_V1_DesiredSecurityGroupRule: Codable {
-    /// The control-plane rule row's id, stamped into the ACL's `external_ids`
-    /// so operators can trace an OVN ACL back to the rule that produced it.
-    /// "ingress" (traffic to the VM, `to-lport`) or "egress" (traffic from
-    /// the VM, `from-lport`).
-    /// "ipv4" or "ipv6" — which address family the rule matches.
-    /// "tcp", "udp", or "icmp"; nil matches any protocol of the ethertype.
-    /// For tcp/udp: the destination port range (min == max for one port).
-    /// For icmp: `portRangeMin` is the ICMP type and `portRangeMax` the code.
-    /// Nil means all ports/types.
-    /// CIDR peer (source for ingress, destination for egress).
-    /// Security-group peer: matches the addresses of the referenced group's
-    /// member ports via its auto-generated address set.
-    /// Whether the ACL should log the packets it matches.
 
     public init(
         id: UUID,
@@ -1513,46 +940,6 @@ extension Strato_Agent_V1_DesiredSecurityGroupRule: Codable {
         try container.encode(_jsonLog, forKey: .log)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonDirection: String {
-        get { direction }
-        set { let value = newValue; direction = value }
-    }
-    var _jsonEthertype: String {
-        get { ethertype }
-        set { let value = newValue; ethertype = value }
-    }
-    var _jsonProtocolName: String? {
-        get { hasProtocolName ? (protocolName) : nil }
-        set { if let value = newValue { protocolName = value } else { clearProtocolName() } }
-    }
-    var _jsonPortRangeMin: Int? {
-        get { hasPortRangeMin ? (Int(portRangeMin)) : nil }
-        set { if let value = newValue { portRangeMin = Int64(value) } else { clearPortRangeMin() } }
-    }
-    var _jsonPortRangeMax: Int? {
-        get { hasPortRangeMax ? (Int(portRangeMax)) : nil }
-        set { if let value = newValue { portRangeMax = Int64(value) } else { clearPortRangeMax() } }
-    }
-    var _jsonRemoteCIDR: String? {
-        get { hasRemoteCidr ? (remoteCidr) : nil }
-        set { if let value = newValue { remoteCidr = value } else { clearRemoteCidr() } }
-    }
-    var _jsonRemoteGroupId: UUID? {
-        get {
-            hasRemoteGroupID
-                ? (UUID(uuidString: remoteGroupID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
-                : nil
-        }
-        set { if let value = newValue { remoteGroupID = value.uuidString } else { clearRemoteGroupID() } }
-    }
-    var _jsonLog: Bool {
-        get { log }
-        set { let value = newValue; log = value }
-    }
 }
 
 /// The state the control plane wants one security group to be in: an OVN port
@@ -1588,20 +975,6 @@ extension Strato_Agent_V1_DesiredSecurityGroup: Codable {
         try container.encode(_jsonRules, forKey: .rules)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonRules: [DesiredSecurityGroupRule] {
-        get { rules.values }
-        set {
-            let value = newValue; rules = Strato_Agent_V1_DesiredSecurityGroupRulesSection.with { $0.values = value }
-        }
-    }
 }
 
 // MARK: - Desired Network ACLs
@@ -1614,12 +987,6 @@ extension Strato_Agent_V1_DesiredSecurityGroup: Codable {
 /// not expose backend-specific priority values.
 public typealias DesiredNetworkACLRule = Strato_Agent_V1_DesiredNetworkACLRule
 extension Strato_Agent_V1_DesiredNetworkACLRule: Codable {
-    /// "ingress" (`to-lport`) or "egress" (`from-lport`).
-    /// "ipv4" or "ipv6".
-    /// "allow" or "deny". These are policy verdicts, not raw OVN actions.
-    /// "tcp", "udp", or "icmp"; nil matches any IP protocol.
-    /// Destination ports for TCP/UDP, or ICMP type/code.
-    /// Source CIDR for ingress, destination CIDR for egress.
 
     public init(
         id: UUID,
@@ -1677,42 +1044,6 @@ extension Strato_Agent_V1_DesiredNetworkACLRule: Codable {
         try container.encode(_jsonRemoteCIDR, forKey: .remoteCIDR)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonRuleNumber: Int {
-        get { Int(ruleNumber) }
-        set { let value = newValue; ruleNumber = Int64(value) }
-    }
-    var _jsonDirection: String {
-        get { direction }
-        set { let value = newValue; direction = value }
-    }
-    var _jsonEthertype: String {
-        get { ethertype }
-        set { let value = newValue; ethertype = value }
-    }
-    var _jsonAction: String {
-        get { action }
-        set { let value = newValue; action = value }
-    }
-    var _jsonProtocolName: String? {
-        get { hasProtocolName ? (protocolName) : nil }
-        set { if let value = newValue { protocolName = value } else { clearProtocolName() } }
-    }
-    var _jsonPortRangeMin: Int? {
-        get { hasPortRangeMin ? (Int(portRangeMin)) : nil }
-        set { if let value = newValue { portRangeMin = Int64(value) } else { clearPortRangeMin() } }
-    }
-    var _jsonPortRangeMax: Int? {
-        get { hasPortRangeMax ? (Int(portRangeMax)) : nil }
-        set { if let value = newValue { portRangeMax = Int64(value) } else { clearPortRangeMax() } }
-    }
-    var _jsonRemoteCIDR: String {
-        get { remoteCidr }
-        set { let value = newValue; remoteCidr = value }
-    }
 }
 
 /// The one network ACL attached to a logical network.
@@ -1748,18 +1079,6 @@ extension Strato_Agent_V1_DesiredNetworkACL: Codable {
         try container.encode(_jsonRules, forKey: .rules)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonRules: [DesiredNetworkACLRule] {
-        get { rules.values }
-        set { let value = newValue; rules = Strato_Agent_V1_DesiredNetworkACLRulesSection.with { $0.values = value } }
-    }
 }
 
 // MARK: - Desired Network State
@@ -1776,13 +1095,6 @@ extension Strato_Agent_V1_DesiredNetworkACL: Codable {
 /// carried on the wire, so naming stays a single-owner concern.
 public typealias DesiredFloatingIP = Strato_Agent_V1_DesiredFloatingIP
 extension Strato_Agent_V1_DesiredFloatingIP: Codable {
-    /// The floating (external) IPv4 address, from a control-plane floating IP
-    /// pool. Used as the NAT rule's `external_ip`.
-    /// The attached NIC's fixed IPv4 address on the tenant network. Used as
-    /// the NAT rule's `logical_ip`.
-    /// The VM owning the attached NIC.
-    /// The NIC's position in the VM's interface list (orderIndex), matching
-    /// the index the agent used when naming the NIC's logical switch port.
 
     public init(
         externalIP: String, logicalIP: String, vmId: UUID? = nil, nicIndex: Int? = nil
@@ -1814,22 +1126,6 @@ extension Strato_Agent_V1_DesiredFloatingIP: Codable {
         try container.encodeIfPresent(_jsonNicIndex, forKey: .nicIndex)
     }
 
-    var _jsonExternalIP: String {
-        get { externalIp }
-        set { let value = newValue; externalIp = value }
-    }
-    var _jsonLogicalIP: String {
-        get { logicalIp }
-        set { let value = newValue; logicalIp = value }
-    }
-    var _jsonVmId: UUID? {
-        get { hasVmID ? (UUID(uuidString: vmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil }
-        set { if let value = newValue { vmID = value.uuidString } else { clearVmID() } }
-    }
-    var _jsonNicIndex: Int? {
-        get { hasNicIndex ? (Int(nicIndex)) : nil }
-        set { if let value = newValue { nicIndex = Int64(value) } else { clearNicIndex() } }
-    }
 }
 
 /// One listener on an OVN-native L4 load balancer (STR-28). The control plane
@@ -1863,18 +1159,6 @@ extension Strato_Agent_V1_DesiredLoadBalancerListener: Codable {
         try container.encode(_jsonBackendPort, forKey: .backendPort)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonPort: Int {
-        get { Int(port) }
-        set { let value = newValue; port = Int64(value) }
-    }
-    var _jsonBackendPort: Int {
-        get { Int(backendPort) }
-        set { let value = newValue; backendPort = Int64(value) }
-    }
 }
 
 /// One backend address for a desired load balancer. VM identity is carried
@@ -1883,8 +1167,6 @@ extension Strato_Agent_V1_DesiredLoadBalancerListener: Codable {
 /// address but no VM, NIC, or member switch.
 public typealias DesiredLoadBalancerBackend = Strato_Agent_V1_DesiredLoadBalancerBackend
 extension Strato_Agent_V1_DesiredLoadBalancerBackend: Codable {
-    /// Router-port address on the backend's subnet, used as OVN's probe source
-    /// in `ip_port_mappings`. Nil for off-platform targets.
 
     public init(
         id: UUID,
@@ -1929,33 +1211,6 @@ extension Strato_Agent_V1_DesiredLoadBalancerBackend: Codable {
         try container.encodeIfPresent(_jsonHealthCheckSourceIP, forKey: .healthCheckSourceIP)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonIpAddress: String {
-        get { ipAddress }
-        set { let value = newValue; ipAddress = value }
-    }
-    var _jsonVmId: UUID? {
-        get { hasVmID ? (UUID(uuidString: vmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil }
-        set { if let value = newValue { vmID = value.uuidString } else { clearVmID() } }
-    }
-    var _jsonNicIndex: Int? {
-        get { hasNicIndex ? (Int(nicIndex)) : nil }
-        set { if let value = newValue { nicIndex = Int64(value) } else { clearNicIndex() } }
-    }
-    var _jsonNetworkId: UUID? {
-        get {
-            hasNetworkID
-                ? (UUID(uuidString: networkID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set { if let value = newValue { networkID = value.uuidString } else { clearNetworkID() } }
-    }
-    var _jsonHealthCheckSourceIP: String? {
-        get { hasHealthCheckSourceIp ? (healthCheckSourceIp) : nil }
-        set { if let value = newValue { healthCheckSourceIp = value } else { clearHealthCheckSourceIp() } }
-    }
 }
 
 public typealias DesiredLoadBalancerHealthCheck = Strato_Agent_V1_DesiredLoadBalancerHealthCheck
@@ -2000,26 +1255,6 @@ extension Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Codable {
         try container.encode(_jsonFailureThreshold, forKey: .failureThreshold)
     }
 
-    var _jsonEnabled: Bool {
-        get { enabled }
-        set { let value = newValue; enabled = value }
-    }
-    var _jsonIntervalSeconds: Int {
-        get { Int(intervalSeconds) }
-        set { let value = newValue; intervalSeconds = Int64(value) }
-    }
-    var _jsonTimeoutSeconds: Int {
-        get { Int(timeoutSeconds) }
-        set { let value = newValue; timeoutSeconds = Int64(value) }
-    }
-    var _jsonSuccessThreshold: Int {
-        get { Int(successThreshold) }
-        set { let value = newValue; successThreshold = Int64(value) }
-    }
-    var _jsonFailureThreshold: Int {
-        get { Int(failureThreshold) }
-        set { let value = newValue; failureThreshold = Int64(value) }
-    }
 }
 
 /// A first-class Strato L4 load balancer, keyed by its resource UUID rather
@@ -2080,44 +1315,6 @@ extension Strato_Agent_V1_DesiredLoadBalancer: Codable {
         try container.encode(_jsonBackends, forKey: .backends)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonVip: String {
-        get { vip }
-        set { let value = newValue; vip = value }
-    }
-    var _jsonProtocolName: String {
-        get { protocolName }
-        set { let value = newValue; protocolName = value }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonHealthCheck: DesiredLoadBalancerHealthCheck {
-        get { healthCheck }
-        set { let value = newValue; healthCheck = value }
-    }
-    var _jsonListeners: [DesiredLoadBalancerListener] {
-        get { listeners.values }
-        set {
-            let value = newValue;
-            listeners = Strato_Agent_V1_DesiredLoadBalancerListenersSection.with { $0.values = value }
-        }
-    }
-    var _jsonBackends: [DesiredLoadBalancerBackend] {
-        get { backends.values }
-        set {
-            let value = newValue;
-            backends = Strato_Agent_V1_DesiredLoadBalancerBackendsSection.with { $0.values = value }
-        }
-    }
 }
 
 /// The state the control plane wants a logical network to be in on an agent.
@@ -2134,104 +1331,6 @@ extension Strato_Agent_V1_DesiredLoadBalancer: Codable {
 /// the same subnet (issue #765).
 public typealias DesiredNetworkState = Strato_Agent_V1_DesiredNetworkState
 extension Strato_Agent_V1_DesiredNetworkState: Codable {
-    /// Human label for logs and external-ids. **Not** the OVN switch name — the
-    /// agent derives that from `networkId` (issue #342) — and not unique:
-    /// names are scoped per project, so two entries in one sync may share one
-    /// (issue #765).
-    /// The network's subnet in CIDR form, e.g. `192.168.1.0/24`. Used as the
-    /// SNAT `logical_ip` and to size the router port's address.
-    /// The L3 gateway address the router presents on this network (the router
-    /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
-    /// host address. Nil disables L3 for the network (switch only).
-    /// The network's IPv6 subnet in CIDR form (a /64, e.g.
-    /// `fd12:3456:789a::/64`), when the network is dual-stack. Nil on
-    /// v4-only networks.
-    /// The IPv6 gateway (router-port address) inside `subnet6`, when
-    /// dual-stack. The agent adds it to the router port and announces it via
-    /// Router Advertisements (dhcpv6_stateful mode) — DHCPv6 itself cannot
-    /// convey a default route.
-    /// Identity of the logical router this network attaches to. Networks sharing
-    /// a `routerKey` share one router. Opaque to the agent — do not parse it.
-    /// Whether the agent should program outbound SNAT to the site uplink for
-    /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
-    /// IPv6 stays internal (no NAT66, no default route) in this phase.
-    /// Whether the network's guests are addressed by OVN's DHCP responder.
-    /// Carried here — not only on per-NIC specs — because DHCP edits don't
-    /// bump VM generations, so converged VMs never re-realize their NICs; the
-    /// level-triggered network reconcile is what converges the DHCP_Options
-    /// rows (including deleting them when DHCP is turned off).
-    /// The network's DNS resolvers; may be mixed-family (the agent splits per
-    /// DHCP family).
-    ///
-    /// **What this list is depends on `resolverEnabled`** (wire v37, STR-40).
-    /// With the resolver off it is what the guest is told over DHCP, which is
-    /// all it ever was. With the resolver on, the guest is told
-    /// `NetworkResolverEndpoint.address` instead and this becomes the
-    /// *upstream forwarders* the network's CoreDNS sends misses to. The field
-    /// did not change shape or validation, only its consumer — and the two
-    /// readings agree on the values that matter, because a resolver list was
-    /// already a list of recursive resolvers.
-    /// DNS search domain advertised over DHCP.
-    /// DHCPv4 lease time in seconds; agents default it when nil.
-    /// Whether this network's guests can reach the instance metadata service at
-    /// `InstanceMetadataEndpoint`. Realized as an OVN `localport` on the
-    /// network's logical switch — instantiated on every chassis, never
-    /// forwarded across tunnels — converged level-triggered by the network
-    /// reconcile, including deletion when turned off.
-    ///
-    /// Carried here rather than only on per-NIC specs for `dhcpEnabled`'s
-    /// reason: network-level metadata settings don't bump each attached VM's
-    /// generation, so a converged VM never re-realizes its NICs and the network
-    /// reconcile is the only path that reaches a live network whose setting
-    /// changed.
-    ///
-    /// `false` is authoritative and removes the managed metadata port; that is
-    /// what makes turning the feature off converge.
-    /// Whether this network's guests get a resolver at the addresses in
-    /// `resolverAddresses` (STR-40, wire v37): the host-wide CoreDNS each agent
-    /// runs in its *host* namespace, which serves the network's zones in full —
-    /// including the CNAME/TXT/SRV the OVN `DNS` table cannot express — and
-    /// forwards everything else to `dnsServers`.
-    ///
-    /// Realized on a **second** `localport` of its own, not the one
-    /// `metadataEnabled` authors, because the two services terminate in
-    /// different namespaces and one OVS interface claims one `iface-id` (ADR
-    /// 0008). It is still a second flag on one carrier rather than a second
-    /// carrier, because both are properties of the same network row.
-    ///
-    /// Nil means this sender has no resolver opinion and leaves managed rows in
-    /// place; `false` is authoritative and removes them. This flag also decides
-    /// what the DHCP `dns_server` option contains, so a network flipping it
-    /// changes what guests are told at their next lease.
-    ///
-    /// The control plane withholds `true` unless *every* agent in the site
-    /// reports `AgentRegisterMessage.resolverCapable`.
-    /// This network's own resolver addresses, v4 first (STR-40).
-    ///
-    /// **Distinct per network**, which is what lets every resolver on a host
-    /// share one namespace — the host's — and so forward upstream through the
-    /// hypervisor's own egress. A single well-known address could not: the
-    /// listener would have no way to tell which network asked, and the host no
-    /// way to route a reply back to a `10.0.0.5` that exists on three switches.
-    ///
-    /// Non-nil exactly when `resolverEnabled` is true. Two fields rather than
-    /// one derived from an index on the wire, because the agent should realize
-    /// what it was told rather than re-derive an allocation scheme the control
-    /// plane owns.
-    /// Monotonic per-network counter, bumped by the control plane on any change
-    /// that alters realization (subnet, gateway, router membership, external
-    /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
-    /// edits deliberately don't bump it — the network reconcile is
-    /// level-triggered, so same-generation networks still converge DHCP.
-    /// Floating IPs attached to this network's NICs, realized as
-    /// `dnat_and_snat` rules on the network's router (issue #344). Only
-    /// meaningful on `externalAccess` networks (the NAT needs the router's uplink).
-    /// Native OVN load balancers whose VIP belongs to this network. An empty
-    /// array is authoritative.
-    /// The network-level ACL attached to this switch (STR-33). The schema
-    /// permits at most one entry, while the collection shape preserves the
-    /// desired-state distinction between no opinion (`nil`) and authoritative
-    /// absence (`[]`), which tells the agent to remove managed switch ACLs.
 
     public init(
         networkId: UUID,
@@ -2331,105 +1430,6 @@ extension Strato_Agent_V1_DesiredNetworkState: Codable {
         try container.encodeIfPresent(_jsonNetworkACLs, forKey: .networkACLs)
     }
 
-    var _jsonNetworkId: UUID {
-        get { UUID(uuidString: networkID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; networkID = value.uuidString }
-    }
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonSubnet: String {
-        get { subnet }
-        set { let value = newValue; subnet = value }
-    }
-    var _jsonGateway: String? {
-        get { hasGateway ? (gateway) : nil }
-        set { if let value = newValue { gateway = value } else { clearGateway() } }
-    }
-    var _jsonSubnet6: String? {
-        get { hasSubnet6 ? (subnet6) : nil }
-        set { if let value = newValue { subnet6 = value } else { clearSubnet6() } }
-    }
-    var _jsonGateway6: String? {
-        get { hasGateway6 ? (gateway6) : nil }
-        set { if let value = newValue { gateway6 = value } else { clearGateway6() } }
-    }
-    var _jsonRouterKey: String {
-        get { routerKey }
-        set { let value = newValue; routerKey = value }
-    }
-    var _jsonExternalAccess: Bool {
-        get { externalAccess }
-        set { let value = newValue; externalAccess = value }
-    }
-    var _jsonDhcpEnabled: Bool {
-        get { dhcpEnabled }
-        set { let value = newValue; dhcpEnabled = value }
-    }
-    var _jsonDnsServers: [String] {
-        get { dnsServers.values }
-        set {
-            let value = newValue;
-            dnsServers = Strato_Agent_V1_DesiredNetworkStateDnsServersSection.with { $0.values = value }
-        }
-    }
-    var _jsonDomainName: String? {
-        get { hasDomainName ? (domainName) : nil }
-        set { if let value = newValue { domainName = value } else { clearDomainName() } }
-    }
-    var _jsonLeaseTime: Int? {
-        get { hasLeaseTime ? (Int(leaseTime)) : nil }
-        set { if let value = newValue { leaseTime = Int64(value) } else { clearLeaseTime() } }
-    }
-    var _jsonMetadataEnabled: Bool {
-        get { metadataEnabled }
-        set { let value = newValue; metadataEnabled = value }
-    }
-    var _jsonResolverEnabled: Bool? {
-        get { hasResolverEnabled ? (resolverEnabled) : nil }
-        set { if let value = newValue { resolverEnabled = value } else { clearResolverEnabled() } }
-    }
-    var _jsonResolverAddresses: [String]? {
-        get { hasResolverAddresses ? (resolverAddresses.values) : nil }
-        set {
-            if let value = newValue {
-                resolverAddresses = Strato_Agent_V1_DesiredNetworkStateResolverAddressesSection.with {
-                    $0.values = value
-                }
-            } else {
-                clearResolverAddresses()
-            }
-        }
-    }
-    var _jsonGeneration: Int64 {
-        get { generation }
-        set { let value = newValue; generation = value }
-    }
-    var _jsonFloatingIPs: [DesiredFloatingIP] {
-        get { floatingIPs.values }
-        set {
-            let value = newValue;
-            floatingIPs = Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection.with { $0.values = value }
-        }
-    }
-    var _jsonLoadBalancers: [DesiredLoadBalancer] {
-        get { loadBalancers.values }
-        set {
-            let value = newValue;
-            loadBalancers = Strato_Agent_V1_DesiredNetworkStateLoadBalancersSection.with { $0.values = value }
-        }
-    }
-    var _jsonNetworkACLs: [DesiredNetworkACL]? {
-        get { hasNetworkAcLs ? (networkAcLs.values) : nil }
-        set {
-            if let value = newValue {
-                networkAcLs = Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection.with { $0.values = value }
-            } else {
-                clearNetworkAcLs()
-            }
-        }
-    }
 }
 
 // MARK: - Desired DNS zones
@@ -2449,21 +1449,6 @@ extension Strato_Agent_V1_DesiredNetworkState: Codable {
 /// entry this agent ignores, never fail the whole sync.
 public typealias DesiredDNSRecord = Strato_Agent_V1_DesiredDNSRecord
 extension Strato_Agent_V1_DesiredDNSRecord: Codable {
-    /// Fully-qualified owner name, lowercased and without a trailing dot. For
-    /// a `PTR` this is the `in-addr.arpa` / `ip6.arpa` name.
-    /// `A`, `AAAA`, `PTR`, `CNAME`, `TXT`, `SRV` — uppercase, as zone files
-    /// spell them.
-    /// The RRset's values, deduplicated and sorted by the control plane so two
-    /// assemblies of the same data compare (and hash) equal.
-    /// The RRset's TTL in seconds (wire v37, STR-40).
-    ///
-    /// v36 deliberately left this off: an OVN `DNS` row has nowhere to put a
-    /// TTL, so carrying one would have been dead weight on every sync. A zone
-    /// file has to write one, and it writes **one per RRset** — which is why
-    /// the control plane enforces a single TTL across an RRset (RFC 2181 §5.2)
-    /// rather than storing it per value.
-    ///
-    /// Defaults to the conventional zone TTL for convenient construction.
 
     public init(name: String, type: String, values: [String], ttl: Int = 300) {
         self.init()
@@ -2493,22 +1478,6 @@ extension Strato_Agent_V1_DesiredDNSRecord: Codable {
         try container.encode(_jsonTtl, forKey: .ttl)
     }
 
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonType: String {
-        get { type }
-        set { let value = newValue; type = value }
-    }
-    var _jsonValues: [String] {
-        get { values.values }
-        set { let value = newValue; values = Strato_Agent_V1_DesiredDNSRecordValuesSection.with { $0.values = value } }
-    }
-    var _jsonTtl: Int {
-        get { Int(ttl) }
-        set { let value = newValue; ttl = Int64(value) }
-    }
 }
 
 /// A DNS zone the receiving agent should realize (STR-39, roadmap #769).
@@ -2541,28 +1510,6 @@ extension Strato_Agent_V1_DesiredDNSRecord: Codable {
 /// `DesiredStateMessage.networksAuthoritative`.
 public typealias DesiredDNSZone = Strato_Agent_V1_DesiredDNSZone
 extension Strato_Agent_V1_DesiredDNSZone: Codable {
-    /// The zone's fully-qualified name, lowercased with no trailing dot. Not
-    /// an identifier — zone names are unique only within a project — and used
-    /// only as a human label on the realized row.
-    /// The networks that should answer from this zone, restricted to the ones
-    /// this agent has something to do with — those it authors topology for,
-    /// plus (from v37) those it runs a local NIC on. The agent derives switch
-    /// and namespace names from the ids (`OVNNaming.switchName`,
-    /// `ChassisServicePlan.netnsName`), so user-chosen names never enter the
-    /// OVN or host namespace.
-    /// The zone's effective contents, derived ∪ authored, in a stable order.
-    /// A digest of the `records` carried here — which is the zone minus its
-    /// `.external`-view entries, since those are for publication elsewhere and
-    /// never reach an agent. Computed by the control plane. The agent stamps it
-    /// on the realized row's `external_ids` and compares it on the next sync,
-    /// so an unchanged zone costs no OVSDB transaction: records are
-    /// O(VMs on the network) and ship on every sync, and rewriting the whole
-    /// map every cycle is what level-triggering must not degenerate into.
-    ///
-    /// Never load-bearing for correctness — a stamp that disagrees with the
-    /// row's actual contents (a hand-edited row, an agent whose realization
-    /// changed across an upgrade) still heals, because the agent also compares
-    /// the records it would write against the ones the row carries.
 
     public init(
         zoneId: UUID, zoneName: String, networkIds: [UUID], records: [DesiredDNSRecord],
@@ -2600,35 +1547,6 @@ extension Strato_Agent_V1_DesiredDNSZone: Codable {
         try container.encode(_jsonRecordsHash, forKey: .recordsHash)
     }
 
-    var _jsonZoneId: UUID {
-        get { UUID(uuidString: zoneID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; zoneID = value.uuidString }
-    }
-    var _jsonZoneName: String {
-        get { zoneName }
-        set { let value = newValue; zoneName = value }
-    }
-    var _jsonNetworkIds: [UUID] {
-        get {
-            networkIds.values.map {
-                UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-            }
-        }
-        set {
-            let value = newValue;
-            networkIds = Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection.with {
-                $0.values = value.map { $0.uuidString }
-            }
-        }
-    }
-    var _jsonRecords: [DesiredDNSRecord] {
-        get { records.values }
-        set { let value = newValue; records = Strato_Agent_V1_DesiredDNSZoneRecordsSection.with { $0.values = value } }
-    }
-    var _jsonRecordsHash: String {
-        get { recordsHash }
-        set { let value = newValue; recordsHash = value }
-    }
 }
 
 // MARK: - Observed VM State
@@ -2681,45 +1599,6 @@ extension Strato_Agent_V1_ObservedFailureClassification: Codable {
 /// One VM's state as actually observed on an agent.
 public typealias ObservedVMState = Strato_Agent_V1_ObservedVMState
 extension Strato_Agent_V1_ObservedVMState: Codable {
-    /// The desired-state generation this observation reflects: the last
-    /// generation the agent finished converging toward (0 if none yet). The
-    /// control plane records it as `observed_generation` and completes pending
-    /// operations only once the observed generation has caught up.
-    /// Set while the agent is still converging this VM toward a newer
-    /// generation — a human-readable stage like "downloading image". Progress
-    /// only: the control plane surfaces it but must not treat the entry as a
-    /// settled observation for operation completion.
-    /// The most recent convergence failure for this VM, if the last attempt
-    /// failed. Lets the control plane fail a pending operation with a real
-    /// error instead of waiting for its completion budget to expire.
-    /// The generation whose convergence produced `lastError`. The control
-    /// plane fails a pending operation on `lastError` only when this matches
-    /// the VM's current generation — otherwise a stale error from a previous
-    /// generation (still carried on heartbeat reports until the new
-    /// generation's work item runs) would fail a brand-new operation before
-    /// the agent ever attempted it.
-    /// The agent-side retry category for this failure. Only `.blocked` tells
-    /// the control plane to retain the desired state while surfacing the error;
-    /// nil is the legacy terminal behavior for reports from older agents.
-    /// What the QEMU guest agent reported about this VM's guest OS, if the
-    /// agent has a recent successful probe (issue #563). Nil for VMs without
-    /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
-    /// so `Optional` keeps this backward-decodable both ways (an older control
-    /// plane ignores the key; an older agent never sends it, which synthesized
-    /// `Codable` decodes to nil, not a failure). Purely informational: it never
-    /// participates in convergence.
-    /// Terminal failure of the guest configuration step, including channel failure without read-back.
-    /// Guest memory usage from the VM's virtio-balloon device (issue #567).
-    /// Nil for guests without the virtio_balloon driver, still booting, or on
-    /// agents/hypervisors that don't poll it — the same tolerant-both-ways
-    /// `Optional` contract as `guestInfo`. Purely informational: it never
-    /// participates in convergence.
-    /// Last host-side contention sample for this VM. Every scalar carries
-    /// explicit availability so a backend without a per-workload cgroup or a
-    /// guest without a steal-time source never reports a synthetic zero.
-    /// Interface ids present in the agent's durable VM manifest (wire v40).
-    /// Nil means the reporting agent predates per-NIC reconciliation; an empty
-    /// array is an authoritative networkless VM.
 
     public init(
         vmId: UUID,
@@ -2804,77 +1683,6 @@ extension Strato_Agent_V1_ObservedVMState: Codable {
         try container.encodeIfPresent(_jsonAppliedNetworkInterfaceIds, forKey: .appliedNetworkInterfaceIds)
     }
 
-    var _jsonVmId: UUID {
-        get { UUID(uuidString: vmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; vmID = value.uuidString }
-    }
-    var _jsonStatus: VMStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonConvergencePhase: String? {
-        get { hasConvergencePhase ? (convergencePhase) : nil }
-        set { if let value = newValue { convergencePhase = value } else { clearConvergencePhase() } }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailedGeneration: Int64? {
-        get { hasFailedGeneration ? (failedGeneration) : nil }
-        set { if let value = newValue { failedGeneration = value } else { clearFailedGeneration() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
-    var _jsonGuestInfo: GuestInfo? {
-        get { hasGuestInfo ? (guestInfo) : nil }
-        set { if let value = newValue { guestInfo = value } else { clearGuestInfo() } }
-    }
-    var _jsonGuestAgentObservation: GuestAgentObservation? {
-        get { hasGuestAgentObservation ? (guestAgentObservation) : nil }
-        set { if let value = newValue { guestAgentObservation = value } else { clearGuestAgentObservation() } }
-    }
-    var _jsonGuestConfigObservation: GuestConfigObservation? {
-        get { hasGuestConfigObservation ? (guestConfigObservation) : nil }
-        set { if let value = newValue { guestConfigObservation = value } else { clearGuestConfigObservation() } }
-    }
-    var _jsonGuestConfigFailedGeneration: Int64? {
-        get { hasGuestConfigFailedGeneration ? (guestConfigFailedGeneration) : nil }
-        set {
-            if let value = newValue { guestConfigFailedGeneration = value } else { clearGuestConfigFailedGeneration() }
-        }
-    }
-    var _jsonMemoryStats: VMMemoryStats? {
-        get { hasMemoryStats ? (memoryStats) : nil }
-        set { if let value = newValue { memoryStats = value } else { clearMemoryStats() } }
-    }
-    var _jsonResourceTelemetry: WorkloadResourceTelemetry? {
-        get { hasResourceTelemetry ? (resourceTelemetry) : nil }
-        set { if let value = newValue { resourceTelemetry = value } else { clearResourceTelemetry() } }
-    }
-    var _jsonAppliedNetworkInterfaceIds: [UUID]? {
-        get {
-            hasAppliedNetworkInterfaceIds
-                ? (appliedNetworkInterfaceIds.values.map {
-                    UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-                }) : nil
-        }
-        set {
-            if let value = newValue {
-                appliedNetworkInterfaceIds = Strato_Agent_V1_ObservedVMStateAppliedNetworkInterfaceIdsSection.with {
-                    $0.values = value.map { $0.uuidString }
-                }
-            } else {
-                clearAppliedNetworkInterfaceIds()
-            }
-        }
-    }
 }
 
 // MARK: - Observed Sandbox State
@@ -2884,20 +1692,6 @@ extension Strato_Agent_V1_ObservedVMState: Codable {
 /// contract); `exitCode` is the sandbox-specific addition.
 public typealias ObservedSandboxState = Strato_Agent_V1_ObservedSandboxState
 extension Strato_Agent_V1_ObservedSandboxState: Codable {
-    /// The desired-state generation this observation reflects (0 if none yet).
-    /// Human-readable convergence stage (e.g. "pulling image") while the agent
-    /// is still working toward a newer generation. Progress only.
-    /// The most recent convergence failure, if the last attempt failed.
-    /// The generation whose convergence produced `lastError` (see
-    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
-    /// Retry semantics for `lastError`; see
-    /// `ObservedVMState.failureClassification`.
-    /// Exit code of the workload once it has ended (`status == .exited`), as
-    /// reported by the guest agent over vsock. Nil while running, when the
-    /// sandbox was stopped by request rather than by the workload ending, or
-    /// when the guest could not report one.
-    /// Last host-side contention sample for this sandbox.
-    /// Next capture estimate, based on actual local files; nil means unsupported/unavailable.
 
     public init(
         sandboxId: UUID,
@@ -2976,70 +1770,6 @@ extension Strato_Agent_V1_ObservedSandboxState: Codable {
         try container.encodeIfPresent(_jsonSuspensionStorageEstimateBytes, forKey: .suspensionStorageEstimateBytes)
     }
 
-    var _jsonSandboxId: UUID {
-        get { UUID(uuidString: sandboxID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; sandboxID = value.uuidString }
-    }
-    var _jsonStatus: SandboxStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonConvergencePhase: String? {
-        get { hasConvergencePhase ? (convergencePhase) : nil }
-        set { if let value = newValue { convergencePhase = value } else { clearConvergencePhase() } }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailedGeneration: Int64? {
-        get { hasFailedGeneration ? (failedGeneration) : nil }
-        set { if let value = newValue { failedGeneration = value } else { clearFailedGeneration() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
-    var _jsonExitCode: Int? {
-        get { hasExitCode ? (Int(exitCode)) : nil }
-        set { if let value = newValue { exitCode = Int64(value) } else { clearExitCode() } }
-    }
-    var _jsonResourceTelemetry: WorkloadResourceTelemetry? {
-        get { hasResourceTelemetry ? (resourceTelemetry) : nil }
-        set { if let value = newValue { resourceTelemetry = value } else { clearResourceTelemetry() } }
-    }
-    var _jsonIdleActivity: SandboxIdleActivityReport? {
-        get { hasIdleActivity ? (idleActivity) : nil }
-        set { if let value = newValue { idleActivity = value } else { clearIdleActivity() } }
-    }
-    var _jsonSuspension: SandboxSuspensionEvidence? {
-        get { hasSuspension ? (suspension) : nil }
-        set { if let value = newValue { suspension = value } else { clearSuspension() } }
-    }
-    var _jsonSuspensionStorageReservedBytes: Int64? {
-        get { hasSuspensionStorageReservedBytes ? (suspensionStorageReservedBytes) : nil }
-        set {
-            if let value = newValue {
-                suspensionStorageReservedBytes = value
-            } else {
-                clearSuspensionStorageReservedBytes()
-            }
-        }
-    }
-    var _jsonSuspensionStorageEstimateBytes: Int64? {
-        get { hasSuspensionStorageEstimateBytes ? (suspensionStorageEstimateBytes) : nil }
-        set {
-            if let value = newValue {
-                suspensionStorageEstimateBytes = value
-            } else {
-                clearSuspensionStorageEstimateBytes()
-            }
-        }
-    }
 }
 
 // MARK: - Observed Volume State
@@ -3066,57 +1796,6 @@ extension Strato_Agent_V1_ObservedSandboxState: Codable {
 /// path — is the right home for those if a reader ever appears.
 public typealias ObservedVolumeState = Strato_Agent_V1_ObservedVolumeState
 extension Strato_Agent_V1_ObservedVolumeState: Codable {
-    /// Whether the volume's data exists on this host. A `false` entry is a
-    /// volume the agent is listing because it is mid-create or failed with no
-    /// bytes yet — the mirror of the VM report's in-flight and
-    /// failed-convergence sections. *Absence from the list* is what confirms a
-    /// deletion; `present: false` explicitly does not.
-    /// How the agent exposes the disk. The agent owns storage layout, so this
-    /// is the only direction the descriptor originates: the control plane
-    /// stores what it is told and never derives one.
-    /// The volume's **virtual size on disk** (STR-199) — what `qemu-img info`
-    /// reports, not what anyone asked for.
-    ///
-    /// It exists because the two can disagree for a long time and nothing said
-    /// so. A grow refused while the guest holding the image is running leaves
-    /// the desired size persisted and the file untouched; before this field the
-    /// API answered that volume's size with the number it had failed to reach,
-    /// which reads exactly like a grow that worked.
-    ///
-    /// Nil means **this agent did not say** — a pre-v38 agent, or a volume
-    /// whose size probe failed. Never "zero bytes", and never a licence to
-    /// clear what a previous report recorded.
-    /// The VM this volume is attached to, from the agent's *durable attachment
-    /// record* rather than a live hypervisor query. A powered-off guest has no
-    /// live device list, and reporting "detached" for it would plan an attach
-    /// against a dead control channel on every sync and degrade the volume for
-    /// the crime of having a stopped VM.
-    /// The desired-state generation this observation reflects (0 if none yet).
-    /// Human-readable convergence stage ("creating", "cloning", ...) while the
-    /// agent is still working toward a newer generation. Progress only.
-    /// The most recent convergence failure, if the last attempt failed.
-    /// The generation whose convergence produced `lastError` (see
-    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
-    /// Retry semantics for `lastError`; see
-    /// `ObservedVMState.failureClassification`.
-    /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
-    /// not a derivation, and the only thing that distinguishes "capped" from
-    /// "ignored".
-    ///
-    /// The capability gate prevents new work from reaching an agent that has
-    /// never heard of ceilings, while this field proves that a capable agent
-    /// actually read the requested values back. The generation pair alone is
-    /// not sufficient evidence for this mutation.
-    ///
-    /// Nil means **this agent does not report applied limits**. It must never be
-    /// written through as a clear. "Applied, and the answer is uncapped" is spelled
-    /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
-    /// unlike the desired side, this one is deliberately *not* normalized.
-    /// Block policy this agent actually applied, or an explicit inactive value
-    /// for a detached volume. Nil is reserved for agents predating wire v62.
-    /// Measured read + write rate between two live libvirt block-stat samples.
-    /// Optional because a first sample, a stopped domain, or a failed stats
-    /// read has no honest rate to report.
 
     public init(
         volumeId: UUID,
@@ -3192,61 +1871,6 @@ extension Strato_Agent_V1_ObservedVolumeState: Codable {
         try container.encodeIfPresent(_jsonIoObservedRate, forKey: .ioObservedRate)
     }
 
-    var _jsonVolumeId: UUID {
-        get { UUID(uuidString: volumeID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; volumeID = value.uuidString }
-    }
-    var _jsonPresent: Bool {
-        get { present }
-        set { let value = newValue; present = value }
-    }
-    var _jsonAttachment: DiskAttachment? {
-        get { hasAttachment ? (attachment) : nil }
-        set { if let value = newValue { attachment = value } else { clearAttachment() } }
-    }
-    var _jsonSizeBytes: Int64? {
-        get { hasSizeBytes ? (sizeBytes) : nil }
-        set { if let value = newValue { sizeBytes = value } else { clearSizeBytes() } }
-    }
-    var _jsonAttachedVMId: UUID? {
-        get {
-            hasAttachedVmID
-                ? (UUID(uuidString: attachedVmID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) : nil
-        }
-        set { if let value = newValue { attachedVmID = value.uuidString } else { clearAttachedVmID() } }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonConvergencePhase: String? {
-        get { hasConvergencePhase ? (convergencePhase) : nil }
-        set { if let value = newValue { convergencePhase = value } else { clearConvergencePhase() } }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailedGeneration: Int64? {
-        get { hasFailedGeneration ? (failedGeneration) : nil }
-        set { if let value = newValue { failedGeneration = value } else { clearFailedGeneration() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
-    var _jsonIoLimits: VolumeIOLimits? {
-        get { hasIoLimits ? (ioLimits) : nil }
-        set { if let value = newValue { ioLimits = value } else { clearIoLimits() } }
-    }
-    var _jsonBlockPolicy: AppliedBlockDevicePolicy? {
-        get { hasBlockPolicy ? (blockPolicy) : nil }
-        set { if let value = newValue { blockPolicy = value } else { clearBlockPolicy() } }
-    }
-    var _jsonIoObservedRate: VolumeIOObservedRate? {
-        get { hasIoObservedRate ? (ioObservedRate) : nil }
-        set { if let value = newValue { ioObservedRate = value } else { clearIoObservedRate() } }
-    }
 }
 
 // MARK: - Observed Agent Update Status
@@ -3266,13 +1890,6 @@ extension Strato_Agent_V1_ObservedAgentUpdateStatus: Codable {
     /// version). The agent will not retry this artifact within the current
     /// process lifetime, so the rollout should halt rather than wait.
     public static let dispositionFailed = "failed"
-
-    /// The `DesiredAgentUpdate.targetVersion` this status is about, so a
-    /// stale report can never be attributed to a newer rollout target.
-    /// One of the `disposition*` constants. A string rather than an enum so
-    /// a disposition added later still decodes on older control planes
-    /// (unknown values are treated as `blocked`, the conservative reading).
-    /// Human-readable explanation, surfaced on the agent's API resource.
 
     public init(targetVersion: String, disposition: String, reason: String) {
         self.init()
@@ -3299,18 +1916,6 @@ extension Strato_Agent_V1_ObservedAgentUpdateStatus: Codable {
         try container.encode(_jsonReason, forKey: .reason)
     }
 
-    var _jsonTargetVersion: String {
-        get { targetVersion }
-        set { let value = newValue; targetVersion = value }
-    }
-    var _jsonDisposition: String {
-        get { disposition }
-        set { let value = newValue; disposition = value }
-    }
-    var _jsonReason: String {
-        get { reason }
-        set { let value = newValue; reason = value }
-    }
 }
 
 // MARK: - Unrecognized workloads
@@ -3325,13 +1930,6 @@ extension Strato_Agent_V1_ObservedAgentUpdateStatus: Codable {
 /// later sync.
 public typealias UnrecognizedWorkload = Strato_Agent_V1_UnrecognizedWorkload
 extension Strato_Agent_V1_UnrecognizedWorkload: Codable {
-    /// The last desired-state generation the agent applied for this workload
-    /// (0 if it never applied one), so the control plane can mint a tombstone
-    /// generation that outranks it rather than one the agent would drop as
-    /// stale.
-    /// The workload's observed status, persisted onto the control plane's
-    /// `AgentWorkloadClaim` and logged — "holding a *running* VM nothing
-    /// describes" reads very differently from holding a stopped one.
 
     public init(kind: WorkloadKind, workloadId: UUID, observedGeneration: Int64, status: String? = nil) {
         self.init()
@@ -3361,22 +1959,6 @@ extension Strato_Agent_V1_UnrecognizedWorkload: Codable {
         try container.encodeIfPresent(_jsonStatus, forKey: .status)
     }
 
-    var _jsonKind: WorkloadKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonWorkloadId: UUID {
-        get { UUID(uuidString: workloadID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; workloadID = value.uuidString }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonStatus: String? {
-        get { hasStatus ? (status) : nil }
-        set { if let value = newValue { status = value } else { clearStatus() } }
-    }
 }
 
 /// Why an agent refused to converge the teardowns a sync authorized (STR-98
@@ -3387,12 +1969,6 @@ extension Strato_Agent_V1_UnrecognizedWorkload: Codable {
 /// agent keeps converging everything else in the sync.
 public typealias ObservedTeardownRefusal = Strato_Agent_V1_ObservedTeardownRefusal
 extension Strato_Agent_V1_ObservedTeardownRefusal: Codable {
-    /// The sync whose teardowns were refused, so the refusal can be correlated
-    /// with the control-plane side of the same exchange.
-    /// How many tombstoned workloads that sync would have destroyed.
-    /// How many workloads the host holds in total, the denominator of the
-    /// percentage half of the guard.
-    /// Human-readable explanation, surfaced on the agent's API resource.
 
     public init(syncId: String, requestedTeardowns: Int, presentWorkloads: Int, reason: String) {
         self.init()
@@ -3424,22 +2000,6 @@ extension Strato_Agent_V1_ObservedTeardownRefusal: Codable {
         try container.encode(_jsonReason, forKey: .reason)
     }
 
-    var _jsonSyncId: String {
-        get { syncID }
-        set { let value = newValue; syncID = value }
-    }
-    var _jsonRequestedTeardowns: Int {
-        get { Int(requestedTeardowns) }
-        set { let value = newValue; requestedTeardowns = Int64(value) }
-    }
-    var _jsonPresentWorkloads: Int {
-        get { Int(presentWorkloads) }
-        set { let value = newValue; presentWorkloads = Int64(value) }
-    }
-    var _jsonReason: String {
-        get { reason }
-        set { let value = newValue; reason = value }
-    }
 }
 
 /// Agent → control plane: what the agent's durable workload manifest — its
@@ -3449,22 +2009,6 @@ extension Strato_Agent_V1_ObservedTeardownRefusal: Codable {
 /// Sent only when there is something wrong to say; nil is the steady state.
 public typealias ObservedManifestStatus = Strato_Agent_V1_ObservedManifestStatus
 extension Strato_Agent_V1_ObservedManifestStatus: Codable {
-    /// Whether the `vms`/`sandboxes` lists on this report are a complete
-    /// inventory of the host.
-    ///
-    /// **False changes the meaning of the whole report.** The manifest could
-    /// not be read at all, so the agent cannot enumerate its own workloads:
-    /// the lists are empty because it doesn't know, not because the host is
-    /// empty. Absence confirms nothing — not a deletion, not a loss — and the
-    /// control plane must apply none of the report's workload half.
-    /// Entries that decoded far enough to prove a workload exists under that
-    /// id, but not far enough to route operations to it (an unrecognized
-    /// hypervisor type, a spec this build cannot read). They keep reserving
-    /// capacity and are reported as present, but nothing can be done to them
-    /// until an agent that understands them runs here.
-    /// Operator-facing explanation, surfaced on the agent's API resource.
-    /// (The unreadable manifest itself is preserved beside the original on
-    /// the host for post-mortem; the agent logs where.)
 
     public init(
         inventoryComplete: Bool,
@@ -3495,18 +2039,6 @@ extension Strato_Agent_V1_ObservedManifestStatus: Codable {
         try container.encode(_jsonReason, forKey: .reason)
     }
 
-    var _jsonInventoryComplete: Bool {
-        get { inventoryComplete }
-        set { let value = newValue; inventoryComplete = value }
-    }
-    var _jsonQuarantinedEntries: Int {
-        get { Int(quarantinedEntries) }
-        set { let value = newValue; quarantinedEntries = Int64(value) }
-    }
-    var _jsonReason: String {
-        get { reason }
-        set { let value = newValue; reason = value }
-    }
 }
 
 // MARK: - Observed Network Fabric State
@@ -3603,30 +2135,6 @@ extension Strato_Agent_V1_ObservedNetworkState: Codable {
         try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonStatus: ObservedNetworkFabricStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailedGeneration: Int64? {
-        get { hasFailedGeneration ? (failedGeneration) : nil }
-        set { if let value = newValue { failedGeneration = value } else { clearFailedGeneration() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
 }
 
 /// What the site's OVN topology authority observed after reconciling one
@@ -3680,30 +2188,6 @@ extension Strato_Agent_V1_ObservedSecurityGroupState: Codable {
         try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonStatus: ObservedNetworkFabricStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailedGeneration: Int64? {
-        get { hasFailedGeneration ? (failedGeneration) : nil }
-        set { if let value = newValue { failedGeneration = value } else { clearFailedGeneration() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
 }
 
 /// The result of converging one VM or sandbox port's security-group
@@ -3757,39 +2241,6 @@ extension Strato_Agent_V1_ObservedPortMembershipState: Codable {
         try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
     }
 
-    var _jsonInterfaceId: UUID {
-        get { UUID(uuidString: interfaceID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; interfaceID = value.uuidString }
-    }
-    var _jsonPortName: String {
-        get { portName }
-        set { let value = newValue; portName = value }
-    }
-    var _jsonSecurityGroupIds: [UUID] {
-        get {
-            securityGroupIds.values.map {
-                UUID(uuidString: $0) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
-            }
-        }
-        set {
-            let value = newValue;
-            securityGroupIds = Strato_Agent_V1_ObservedPortMembershipStateSecurityGroupIdsSection.with {
-                $0.values = value.map { $0.uuidString }
-            }
-        }
-    }
-    var _jsonStatus: ObservedNetworkFabricStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonFailureClassification: ObservedFailureClassification? {
-        get { hasFailureClassification ? (failureClassification) : nil }
-        set { if let value = newValue { failureClassification = value } else { clearFailureClassification() } }
-    }
 }
 
 // MARK: - Observed Load Balancer State
@@ -3906,24 +2357,6 @@ extension Strato_Agent_V1_ObservedLoadBalancerBackend: Codable {
         try container.encodeIfPresent(_jsonLastCheckedAt, forKey: .lastCheckedAt)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonHealthStatus: ObservedLoadBalancerBackendHealth {
-        get { healthStatus }
-        set { let value = newValue; healthStatus = value }
-    }
-    var _jsonLastCheckedAt: Date? {
-        get { hasLastCheckedAt ? (lastCheckedAt.date) : nil }
-        set {
-            if let value = newValue {
-                lastCheckedAt = Google_Protobuf_Timestamp(date: value)
-            } else {
-                clearLastCheckedAt()
-            }
-        }
-    }
 }
 
 /// What the site's single OVN author observed after reconciling one native
@@ -3971,29 +2404,6 @@ extension Strato_Agent_V1_ObservedLoadBalancerState: Codable {
         try container.encode(_jsonBackends, forKey: .backends)
     }
 
-    var _jsonId: UUID {
-        get { UUID(uuidString: id) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; id = value.uuidString }
-    }
-    var _jsonObservedGeneration: Int64 {
-        get { observedGeneration }
-        set { let value = newValue; observedGeneration = value }
-    }
-    var _jsonStatus: ObservedLoadBalancerStatus {
-        get { status }
-        set { let value = newValue; status = value }
-    }
-    var _jsonLastError: String? {
-        get { hasLastError ? (lastError) : nil }
-        set { if let value = newValue { lastError = value } else { clearLastError() } }
-    }
-    var _jsonBackends: [ObservedLoadBalancerBackend] {
-        get { backends.values }
-        set {
-            let value = newValue;
-            backends = Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection.with { $0.values = value }
-        }
-    }
 }
 
 /// Agent → control plane: everything the agent actually has, with resources.
@@ -4010,58 +2420,6 @@ extension Strato_Agent_V1_ObservedLoadBalancerState: Codable {
 public typealias ObservedStateReport = Strato_Agent_V1_ObservedStateReport
 extension Strato_Agent_V1_ObservedStateReport: WebSocketMessage {
     public var type: MessageType { .observedState }
-    /// Sandboxes actually present on this agent. Full-list, like `vms`: a
-    /// sandbox missing from the list does not exist, which is how sandbox
-    /// deletions are confirmed. The key is required even when the list is
-    /// empty.
-    /// Coherent wire67 enforcement/accounting acknowledgement. Nil is unknown.
-    /// Same independently sampled host-resource snapshot carried by the
-    /// heartbeat. It is duplicated here so either periodic path refreshes the
-    /// operator view without doing any probe work itself.
-    /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
-    /// is desired and something is in the way (issue #434). Nil when no update
-    /// is desired or convergence is proceeding (the agent restarts into the new
-    /// build rather than reporting progress).
-    /// Workloads this agent holds that its last sync did not list (STR-98).
-    /// They also appear in `vms`/`sandboxes` above — the agent really is
-    /// running them — so this list is the agent asking "should these exist?",
-    /// not a second inventory.
-    /// Set when the blast-radius guard refused a sync's teardowns. Nil in the
-    /// steady state.
-    /// Set when the agent's durable workload manifest could not be read in full
-    /// (STR-138). Nil in the steady state. `inventoryComplete == false`
-    /// suspends this report's full-list semantics — see
-    /// `ObservedManifestStatus`.
-    /// Volumes actually present on this agent (STR-148). Full-list, like
-    /// `vms`: a volume missing from the list does not exist here, which is how
-    /// volume deletions are confirmed.
-    ///
-    /// Optional rather than `[]`-defaulted because nil means the current agent
-    /// could not enumerate its volume store. The control plane must read that as
-    /// "unknown", not "every volume on this agent is gone" — which would reap
-    /// terminating volume rows and error live ones.
-    /// Snapshot artifacts actually present on this agent (STR-150). Full-list
-    /// and kind-tagged, like the desired counterpart: an artifact missing from
-    /// this list does not exist here, which is how snapshot deletions are
-    /// confirmed and how the finalizer reap learns a checkpoint's bytes are
-    /// really gone.
-    ///
-    /// `Optional` for `volumes`' reason. Nil means the current agent could not
-    /// enumerate one of its artifact stores, so the control plane must do
-    /// nothing rather than read the absence as "every checkpoint is gone".
-    /// Native LB programming and backend health observed by the site's
-    /// topology author. Nil means no opinion, not an empty authoritative set.
-    /// Logical-switch/router/SNAT/DHCP realization observed by the site's
-    /// topology authority. Nil means this agent has no topology opinion.
-    /// Port-group and ACL realization observed by the site's topology
-    /// authority. Nil means this agent has no authority-side opinion.
-    /// Per-workload port-group membership observed by this agent. Nil means the
-    /// agent did not attempt or cannot identify membership; an empty list is an
-    /// authoritative statement that this sync contained no managed local port.
-    /// Whole physical disks observed by this agent. A non-nil value is the
-    /// complete current inventory, including an authoritative empty list.
-    /// Nil means enumeration failed or is unsupported and must not be read as
-    /// device absence.
 
     public init(
         requestId: String = UUID().uuidString,
@@ -4168,128 +2526,4 @@ extension Strato_Agent_V1_ObservedStateReport: WebSocketMessage {
         try container.encodeIfPresent(_jsonStorageDevices, forKey: .storageDevices)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonAgentId: String {
-        get { agentID }
-        set { let value = newValue; agentID = value }
-    }
-    var _jsonVms: [ObservedVMState] {
-        get { vms.values }
-        set { let value = newValue; vms = Strato_Agent_V1_ObservedStateReportVmsSection.with { $0.values = value } }
-    }
-    var _jsonSandboxes: [ObservedSandboxState] {
-        get { sandboxes.values }
-        set {
-            let value = newValue;
-            sandboxes = Strato_Agent_V1_ObservedStateReportSandboxesSection.with { $0.values = value }
-        }
-    }
-    var _jsonResources: AgentResources {
-        get { resources }
-        set { let value = newValue; resources = value }
-    }
-    var _jsonResourceEnforcement: ResourceEnforcementSnapshot? {
-        get { hasResourceEnforcement ? (resourceEnforcement) : nil }
-        set { if let value = newValue { resourceEnforcement = value } else { clearResourceEnforcement() } }
-    }
-    var _jsonHostResourceTelemetry: HostResourceTelemetry? {
-        get { hasHostResourceTelemetry ? (hostResourceTelemetry) : nil }
-        set { if let value = newValue { hostResourceTelemetry = value } else { clearHostResourceTelemetry() } }
-    }
-    var _jsonAgentUpdateStatus: ObservedAgentUpdateStatus? {
-        get { hasAgentUpdateStatus ? (agentUpdateStatus) : nil }
-        set { if let value = newValue { agentUpdateStatus = value } else { clearAgentUpdateStatus() } }
-    }
-    var _jsonUnrecognized: [UnrecognizedWorkload] {
-        get { unrecognized.values }
-        set {
-            let value = newValue;
-            unrecognized = Strato_Agent_V1_ObservedStateReportUnrecognizedSection.with { $0.values = value }
-        }
-    }
-    var _jsonTeardownRefusal: ObservedTeardownRefusal? {
-        get { hasTeardownRefusal ? (teardownRefusal) : nil }
-        set { if let value = newValue { teardownRefusal = value } else { clearTeardownRefusal() } }
-    }
-    var _jsonManifestStatus: ObservedManifestStatus? {
-        get { hasManifestStatus ? (manifestStatus) : nil }
-        set { if let value = newValue { manifestStatus = value } else { clearManifestStatus() } }
-    }
-    var _jsonVolumes: [ObservedVolumeState]? {
-        get { hasVolumes ? (volumes.values) : nil }
-        set {
-            if let value = newValue {
-                volumes = Strato_Agent_V1_ObservedStateReportVolumesSection.with { $0.values = value }
-            } else {
-                clearVolumes()
-            }
-        }
-    }
-    var _jsonSnapshots: [ObservedSnapshotState]? {
-        get { hasSnapshots ? (snapshots.values) : nil }
-        set {
-            if let value = newValue {
-                snapshots = Strato_Agent_V1_ObservedStateReportSnapshotsSection.with { $0.values = value }
-            } else {
-                clearSnapshots()
-            }
-        }
-    }
-    var _jsonLoadBalancers: [ObservedLoadBalancerState]? {
-        get { hasLoadBalancers ? (loadBalancers.values) : nil }
-        set {
-            if let value = newValue {
-                loadBalancers = Strato_Agent_V1_ObservedStateReportLoadBalancersSection.with { $0.values = value }
-            } else {
-                clearLoadBalancers()
-            }
-        }
-    }
-    var _jsonNetworks: [ObservedNetworkState]? {
-        get { hasNetworks ? (networks.values) : nil }
-        set {
-            if let value = newValue {
-                networks = Strato_Agent_V1_ObservedStateReportNetworksSection.with { $0.values = value }
-            } else {
-                clearNetworks()
-            }
-        }
-    }
-    var _jsonSecurityGroups: [ObservedSecurityGroupState]? {
-        get { hasSecurityGroups ? (securityGroups.values) : nil }
-        set {
-            if let value = newValue {
-                securityGroups = Strato_Agent_V1_ObservedStateReportSecurityGroupsSection.with { $0.values = value }
-            } else {
-                clearSecurityGroups()
-            }
-        }
-    }
-    var _jsonPortMemberships: [ObservedPortMembershipState]? {
-        get { hasPortMemberships ? (portMemberships.values) : nil }
-        set {
-            if let value = newValue {
-                portMemberships = Strato_Agent_V1_ObservedStateReportPortMembershipsSection.with { $0.values = value }
-            } else {
-                clearPortMemberships()
-            }
-        }
-    }
-    var _jsonStorageDevices: [ObservedStorageDevice]? {
-        get { hasStorageDevices ? (storageDevices.values) : nil }
-        set {
-            if let value = newValue {
-                storageDevices = Strato_Agent_V1_ObservedStateReportStorageDevicesSection.with { $0.values = value }
-            } else {
-                clearStorageDevices()
-            }
-        }
-    }
 }

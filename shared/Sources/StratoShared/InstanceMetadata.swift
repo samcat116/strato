@@ -64,103 +64,6 @@ import SwiftProtobuf
 /// is an IMDS-specific limit below `maxBytes`, not a second transport.
 public typealias InstanceMetadata = Strato_Agent_V1_InstanceMetadata
 extension Strato_Agent_V1_InstanceMetadata: Codable {
-    /// The VM's id — the same UUID as `DesiredVMState.vmId`, restated here so a
-    /// renderer never has to reach outside the metadata it was handed.
-    /// The VM's DNS label, when it has one — also the name it registers under
-    /// in its network's primary DNS zone (see `docs/architecture/dns.md`), so
-    /// the two must not drift.
-    ///
-    /// Optional because `VM.hostname` is (issue #770): VMs predating the column
-    /// have none, and nothing on this side may invent one. A slugified `name`
-    /// is precisely the lossy derivation the stored column exists to avoid, and
-    /// a hostname fabricated here would disagree with the zone — breaking the
-    /// no-drift invariant above in the one case it was written for. So the
-    /// renderer decides what an unset hostname looks like, exactly as with
-    /// `environment`, and a hostname-less VM still gets all the rest of this.
-    /// The project owning the VM. Renderers expose it as the tenancy
-    /// identifier (EC2's account/owner slot); it is never an authorization
-    /// input — the IMDS serves whichever guest can reach it.
-    /// The VM's environment within its project (`production`, `staging`, ...),
-    /// when the project defines environments. Nil rather than the project's
-    /// default: the renderer decides what an unset environment looks like.
-    /// Placement, coarse: conventionally the VM's site name. One of the EC2
-    /// renderer's two placement keys.
-    ///
-    /// Populated here regardless of policy — whether a guest is *told* where it
-    /// runs is the renderer's call, not the model's, so that the decision lives
-    /// in one place instead of being baked into every assembler.
-    /// Placement, fine: conventionally the name of the agent hosting the VM.
-    /// The other EC2 placement key, with the same disclosure caveat as
-    /// `region` — it names a specific host, so a renderer that emits it is
-    /// telling the guest which machine it shares.
-    /// The VM's NICs, in the order the control plane realized them (`net0`,
-    /// `net1`, ...). Empty for a VM with no interfaces; never partially
-    /// populated — a NIC the control plane knows about appears here even if the
-    /// guest has not configured it.
-    /// SSH public keys to authorize for the guest's default user, the same set
-    /// carried on `VMSpec.sshAuthorizedKeys`. Duplicated deliberately: the spec
-    /// copy is what a *boot-time* provisioner consumes, this copy is what the
-    /// running guest can re-read after an operator rotates a key.
-    /// Caller-supplied cloud-init user data, verbatim and unvalidated beyond
-    /// what the create request already checked (see `CloudInitUserDataFormat`).
-    /// Nil when the caller supplied none — which is not the same as empty, and
-    /// renderers must keep the distinction: cloud-init treats a zero-length
-    /// user-data document as "provided, and does nothing".
-    /// Vendor data — Strato's own provisioning document, distinct from the
-    /// caller's `userData` so that platform config and tenant config never
-    /// have to be merged into one payload (cloud-init consumes them as
-    /// separate sources with separate precedence). Nil when the platform has
-    /// nothing to say.
-    /// Nil disables the Strato root daemon bootstrap; a release tag pins first-boot installation.
-    /// Free-form key/value labels from the VM's tags. Ordinary metadata, not
-    /// identity: nothing may authorize on a tag, because a guest reads its own
-    /// tags and an operator can set them to anything.
-    /// How, and whether, the IMDS may vend this instance a SPIFFE identity
-    /// (phase 3). Nil means it may not — the conservative reading, and the one
-    /// every VM gets until identity ships.
-
-    /// The per-VM capability carried by an IMDS-backed NoCloud seed URL.
-    ///
-    /// Stock NoCloud follows `seedfrom` with ordinary GETs and cannot perform
-    /// the IMDSv2 token handshake. This value lets the agent authenticate only
-    /// those three bootstrap document reads without weakening the ordinary
-    /// `/latest/*` tree. It is deliberately not rendered into any metadata
-    /// document; the agent copies it only into the VM's local seed ISO.
-    ///
-    /// Nil for an ISO-backed VM and for desired-state payloads produced before
-    /// STR-64. Although it rides the durable desired-state snapshot so agent
-    /// restarts do not invalidate an already-created ISO, it is a credential:
-    /// callers must never log this value or the seed URL containing it.
-
-    /// Whether the metadata service answers this instance at all — Strato's
-    /// per-instance kill switch, `VM.metadataEnabled`, and the equivalent of
-    /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
-    ///
-    /// Distinct from `NetworkSpec.metadataEnabled` / `DesiredNetworkState`'s,
-    /// which is per **network** and decides whether the link-local endpoint is
-    /// published on that switch at all. The two compose as an AND from the
-    /// guest's side, and neither is derived from the other: the network switch
-    /// is realized by the localport, this one by the listener refusing the
-    /// caller and by an ACL that denies its port the address.
-    ///
-    /// ## Why it lives on the document rather than beside it
-    ///
-    /// It could as easily have been a sibling of `metadata` on `DesiredVMState`.
-    /// Carrying it *inside* buys two things that separate fields cannot:
-    ///
-    /// - **It cannot drift from the payload it governs.** The agent's store,
-    ///   its durable copy and the snapshot pushed to a listener all move one
-    ///   value, so there is no second field to arrive late, be dropped by an
-    ///   older persisted record, or survive a restore without its policy.
-    /// - **It survives the fail-static path.** `MetadataStore` restores what the
-    ///   last sync said when the control plane is unreachable. A policy stored
-    ///   anywhere but next to the document would be the one thing that restore
-    ///   did not bring back — and an agent that comes up serving a VM its
-    ///   operator switched off is the exact failure this field exists to
-    ///   prevent.
-    ///
-    /// It is never rendered into a document: a disabled service publishes
-    /// nothing, so there is nothing for a guest to read this out of.
 
     /// Whether the service should answer this instance.
     public var isServiceEnabled: Bool { _jsonServiceEnabled }
@@ -254,73 +157,6 @@ extension Strato_Agent_V1_InstanceMetadata: Codable {
         try container.encode(_jsonServiceEnabled, forKey: .serviceEnabled)
     }
 
-    var _jsonInstanceId: UUID {
-        get { UUID(uuidString: instanceID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; instanceID = value.uuidString }
-    }
-    var _jsonHostname: String? {
-        get { hasHostname ? (hostname) : nil }
-        set { if let value = newValue { hostname = value } else { clearHostname() } }
-    }
-    var _jsonProjectId: UUID {
-        get { UUID(uuidString: projectID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; projectID = value.uuidString }
-    }
-    var _jsonEnvironment: String? {
-        get { hasEnvironment ? (environment) : nil }
-        set { if let value = newValue { environment = value } else { clearEnvironment() } }
-    }
-    var _jsonRegion: String? {
-        get { hasRegion ? (region) : nil }
-        set { if let value = newValue { region = value } else { clearRegion() } }
-    }
-    var _jsonAvailabilityZone: String? {
-        get { hasAvailabilityZone ? (availabilityZone) : nil }
-        set { if let value = newValue { availabilityZone = value } else { clearAvailabilityZone() } }
-    }
-    var _jsonNics: [MetadataNIC] {
-        get { nics.values }
-        set { let value = newValue; nics = Strato_Agent_V1_InstanceMetadataNicsSection.with { $0.values = value } }
-    }
-    var _jsonSshAuthorizedKeys: [String] {
-        get { sshAuthorizedKeys.values }
-        set {
-            let value = newValue;
-            sshAuthorizedKeys = Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSection.with { $0.values = value }
-        }
-    }
-    var _jsonUserData: String? {
-        get { hasUserData ? (userData) : nil }
-        set { if let value = newValue { userData = value } else { clearUserData() } }
-    }
-    var _jsonVendorData: String? {
-        get { hasVendorData ? (vendorData) : nil }
-        set { if let value = newValue { vendorData = value } else { clearVendorData() } }
-    }
-    var _jsonGuestAgentRelease: String? {
-        get { hasGuestAgentRelease ? (guestAgentRelease) : nil }
-        set { if let value = newValue { guestAgentRelease = value } else { clearGuestAgentRelease() } }
-    }
-    var _jsonTags: [String: String] {
-        get { tags.values }
-        set { let value = newValue; tags = Strato_Agent_V1_InstanceMetadataTagsSection.with { $0.values = value } }
-    }
-    var _jsonIdentity: IdentityPolicy? {
-        get { hasIdentity ? (identity) : nil }
-        set { if let value = newValue { identity = value } else { clearIdentity() } }
-    }
-    var _jsonNoCloudSeedToken: UUID? {
-        get {
-            hasNoCloudSeedToken
-                ? (UUID(uuidString: noCloudSeedToken) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)))
-                : nil
-        }
-        set { if let value = newValue { noCloudSeedToken = value.uuidString } else { clearNoCloudSeedToken() } }
-    }
-    var _jsonServiceEnabled: Bool {
-        get { serviceEnabled }
-        set { let value = newValue; serviceEnabled = value }
-    }
 }
 
 // MARK: - Metadata NIC
@@ -339,38 +175,6 @@ extension Strato_Agent_V1_InstanceMetadata: Codable {
 /// The dotted form is derivable; the reverse needs a validity check.
 public typealias MetadataNIC = Strato_Agent_V1_MetadataNIC
 extension Strato_Agent_V1_MetadataNIC: Codable {
-    /// Stable device name (`net0`, `net1`, ...) from the interface's
-    /// `deviceName`, ordered by `orderIndex`. Stable across reboots and
-    /// re-realization, which the guest-visible kernel name is not.
-    /// The NIC's MAC address. The EC2 renderer keys its whole interface tree on
-    /// this (`network/interfaces/macs/<mac>/`), and it is how a guest matches an
-    /// entry here to one of its own links.
-    /// The logical network the NIC attaches to.
-    /// The network's name — a human label for the guest, exactly as on
-    /// `NetworkSpec.network`. Names are unique only within a project, so
-    /// nothing may key on it.
-    /// The allocated IPv4 address, or nil on a NIC with no v4 assignment.
-    /// Prefix length of `ipAddress` within its subnet (24 for a /24).
-    /// The network's IPv4 gateway, when it has L3.
-    /// The allocated IPv6 address in canonical RFC 5952 form, on a dual-stack
-    /// network.
-    /// Prefix length of `ipv6Address` (64 for tenant networks).
-    /// The network's IPv6 gateway, when dual-stack.
-    /// Link MTU, when the network sets one.
-    /// Resolvers for this NIC's network; may be mixed-family, like
-    /// `DesiredNetworkState.dnsServers`. Carried because the IMDS has to be
-    /// able to tell a guest everything the seed ISO's static network config
-    /// used to, on networks where DHCP is off.
-    /// DNS search domain for this NIC's network, when set.
-    /// Whether this NIC should ask the network's DHCP responder for its guest
-    /// configuration. The NoCloud-net renderer needs the same decision the
-    /// seed ISO renderer receives on `NetworkSpec`; an allocated address alone
-    /// cannot distinguish DHCP from static configuration.
-    /// Whether this NIC's network publishes the link-local metadata endpoint.
-    /// Used only to render the on-link routes the existing seed ISO carries.
-    /// This network's link-local resolver addresses, or an empty list when the
-    /// resolver is unavailable. When present these replace `dnsServers` in
-    /// static guest configuration, exactly as in the seed ISO renderer.
 
     public init(
         deviceName: String,
@@ -461,75 +265,6 @@ extension Strato_Agent_V1_MetadataNIC: Codable {
         try container.encode(_jsonResolverAddresses, forKey: .resolverAddresses)
     }
 
-    var _jsonDeviceName: String {
-        get { deviceName }
-        set { let value = newValue; deviceName = value }
-    }
-    var _jsonMacAddress: String {
-        get { macAddress }
-        set { let value = newValue; macAddress = value }
-    }
-    var _jsonNetworkId: UUID {
-        get { UUID(uuidString: networkID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; networkID = value.uuidString }
-    }
-    var _jsonNetworkName: String {
-        get { networkName }
-        set { let value = newValue; networkName = value }
-    }
-    var _jsonIpAddress: String? {
-        get { hasIpAddress ? (ipAddress) : nil }
-        set { if let value = newValue { ipAddress = value } else { clearIpAddress() } }
-    }
-    var _jsonPrefixLength: Int? {
-        get { hasPrefixLength ? (Int(prefixLength)) : nil }
-        set { if let value = newValue { prefixLength = Int64(value) } else { clearPrefixLength() } }
-    }
-    var _jsonGateway: String? {
-        get { hasGateway ? (gateway) : nil }
-        set { if let value = newValue { gateway = value } else { clearGateway() } }
-    }
-    var _jsonIpv6Address: String? {
-        get { hasIpv6Address ? (ipv6Address) : nil }
-        set { if let value = newValue { ipv6Address = value } else { clearIpv6Address() } }
-    }
-    var _jsonIpv6PrefixLength: Int? {
-        get { hasIpv6PrefixLength ? (Int(ipv6PrefixLength)) : nil }
-        set { if let value = newValue { ipv6PrefixLength = Int64(value) } else { clearIpv6PrefixLength() } }
-    }
-    var _jsonGateway6: String? {
-        get { hasGateway6 ? (gateway6) : nil }
-        set { if let value = newValue { gateway6 = value } else { clearGateway6() } }
-    }
-    var _jsonMtu: Int? {
-        get { hasMtu ? (Int(mtu)) : nil }
-        set { if let value = newValue { mtu = Int64(value) } else { clearMtu() } }
-    }
-    var _jsonDnsServers: [String] {
-        get { dnsServers.values }
-        set {
-            let value = newValue; dnsServers = Strato_Agent_V1_MetadataNICDnsServersSection.with { $0.values = value }
-        }
-    }
-    var _jsonDomainName: String? {
-        get { hasDomainName ? (domainName) : nil }
-        set { if let value = newValue { domainName = value } else { clearDomainName() } }
-    }
-    var _jsonDhcpEnabled: Bool {
-        get { dhcpEnabled }
-        set { let value = newValue; dhcpEnabled = value }
-    }
-    var _jsonMetadataEnabled: Bool {
-        get { metadataEnabled }
-        set { let value = newValue; metadataEnabled = value }
-    }
-    var _jsonResolverAddresses: [String] {
-        get { resolverAddresses.values }
-        set {
-            let value = newValue;
-            resolverAddresses = Strato_Agent_V1_MetadataNICResolverAddressesSection.with { $0.values = value }
-        }
-    }
 }
 
 // MARK: - Identity Policy
@@ -548,16 +283,6 @@ extension Strato_Agent_V1_MetadataNIC: Codable {
 /// available today: no identity is vended.
 public typealias IdentityPolicy = Strato_Agent_V1_IdentityPolicy
 extension Strato_Agent_V1_IdentityPolicy: Codable {
-    /// The SPIFFE ID the instance may be issued documents for:
-    /// `spiffe://<trust-domain>/vm/<vm-uuid>`, the key the VM's workload
-    /// registration is filed under (STR-55). Authored by the control plane; the
-    /// agent never derives or extends it.
-    /// Audiences the IMDS may mint JWT-SVIDs for. Empty means none — a guest
-    /// asking for an audience outside this list is refused rather than served
-    /// a token nothing will accept.
-    /// Upper bound, in seconds, on the lifetime of a document handed to the
-    /// guest. Nil defers to the issuer's own default rather than meaning
-    /// "unbounded"; an identity document with no expiry is never the intent.
 
     public init(spiffeId: String, audiences: [String] = [], ttlSeconds: Int? = nil) {
         self.init()
@@ -587,18 +312,4 @@ extension Strato_Agent_V1_IdentityPolicy: Codable {
         try container.encodeIfPresent(_jsonTtlSeconds, forKey: .ttlSeconds)
     }
 
-    var _jsonSpiffeId: String {
-        get { spiffeID }
-        set { let value = newValue; spiffeID = value }
-    }
-    var _jsonAudiences: [String] {
-        get { audiences.values }
-        set {
-            let value = newValue; audiences = Strato_Agent_V1_IdentityPolicyAudiencesSection.with { $0.values = value }
-        }
-    }
-    var _jsonTtlSeconds: Int? {
-        get { hasTtlSeconds ? (Int(ttlSeconds)) : nil }
-        set { if let value = newValue { ttlSeconds = Int64(value) } else { clearTtlSeconds() } }
-    }
 }

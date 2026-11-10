@@ -234,7 +234,7 @@ public enum SecurityGroupACLBuilder {
             clauses.append("\(peerField) == \(reference)")
         }
 
-        switch rule.hasProtocolName ? rule.protocolName : nil {
+        switch rule.optionalProtocolName {
         case nil:
             break
         case "tcp", "udp":

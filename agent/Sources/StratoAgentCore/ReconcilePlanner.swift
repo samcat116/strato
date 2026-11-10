@@ -681,7 +681,7 @@ extension Reconciler {
         if desired.hasAttachment,
             observed.attachedVMId == attachment.vmID,
             observed.deviceName == attachment.deviceName,
-            !ioLimitsMatch(desired: desired.hasIoLimits ? desired.ioLimits : nil, observed: observed.ioLimits)
+            !ioLimitsMatch(desired: desired.optionalIoLimits, observed: observed.ioLimits)
         {
             return [.throttle]
         }
@@ -719,10 +719,10 @@ extension Reconciler {
         desired: VolumeIOLimits?, observed: VolumeIOLimits?
     ) -> Bool {
         guard let observed else { return false }
-        return desired.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil }
-            == (observed.hasIopsTotal ? observed.iopsTotal : nil)
-            && desired.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil }
-                == (observed.hasBpsTotal ? observed.bpsTotal : nil)
+        return desired.flatMap { $0.optionalIopsTotal }
+            == observed.optionalIopsTotal
+            && desired.flatMap { $0.optionalBpsTotal }
+                == observed.optionalBpsTotal
     }
 
     /// What to do about a volume whose size the agent could not read, once

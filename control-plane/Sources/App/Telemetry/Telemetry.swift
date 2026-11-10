@@ -536,15 +536,15 @@ enum Telemetry {
         recordVolumeIODimension(
             agentName: agentName,
             dimension: "iops",
-            configured: samples.map { $0.configured.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil } },
-            applied: samples.map { $0.applied.flatMap { $0.hasIopsTotal ? $0.iopsTotal : nil } },
+            configured: samples.map { $0.configured.flatMap { $0.optionalIopsTotal } },
+            applied: samples.map { $0.applied.flatMap { $0.optionalIopsTotal } },
             observed: samples.map { $0.observedRate?.iops },
             factory: factory)
         recordVolumeIODimension(
             agentName: agentName,
             dimension: "bytes_per_second",
-            configured: samples.map { $0.configured.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil } },
-            applied: samples.map { $0.applied.flatMap { $0.hasBpsTotal ? $0.bpsTotal : nil } },
+            configured: samples.map { $0.configured.flatMap { $0.optionalBpsTotal } },
+            applied: samples.map { $0.applied.flatMap { $0.optionalBpsTotal } },
             observed: samples.map { $0.observedRate?.bytesPerSecond },
             factory: factory)
     }
@@ -860,15 +860,15 @@ enum Telemetry {
         for (signal, label, value) in [
             (
                 "swap_in_pages_total", "strato_agent_swap_in_pages_total",
-                (telemetry.hasSwapInPagesTotal ? telemetry.swapInPagesTotal : nil)
+                telemetry.optionalSwapInPagesTotal
             ),
             (
                 "swap_out_pages_total", "strato_agent_swap_out_pages_total",
-                (telemetry.hasSwapOutPagesTotal ? telemetry.swapOutPagesTotal : nil)
+                telemetry.optionalSwapOutPagesTotal
             ),
             (
                 "zram_original_bytes", "strato_agent_zram_original_bytes",
-                (telemetry.hasZramOriginalBytes ? telemetry.zramOriginalBytes : nil)
+                telemetry.optionalZramOriginalBytes
             ),
         ] {
             recordRemoteValue(
@@ -878,11 +878,11 @@ enum Telemetry {
         for (signal, label, value) in [
             (
                 "swap_in_pages_per_second", "strato_agent_swap_in_pages_per_second",
-                (telemetry.hasSwapInPagesPerSecond ? telemetry.swapInPagesPerSecond : nil)
+                telemetry.optionalSwapInPagesPerSecond
             ),
             (
                 "swap_out_pages_per_second", "strato_agent_swap_out_pages_per_second",
-                (telemetry.hasSwapOutPagesPerSecond ? telemetry.swapOutPagesPerSecond : nil)
+                telemetry.optionalSwapOutPagesPerSecond
             ),
         ] {
             recordGauge(
@@ -892,14 +892,14 @@ enum Telemetry {
         }
         for (tier, original, compressed) in [
             (
-                "zswap", (telemetry.zswapStoredBytes.hasValue ? telemetry.zswapStoredBytes.value : nil),
-                (telemetry.zswapPoolBytes.hasValue ? telemetry.zswapPoolBytes.value : nil)
+                "zswap", telemetry.zswapStoredBytes.optionalValue,
+                telemetry.zswapPoolBytes.optionalValue
             ),
             (
                 "zram",
                 (telemetry.hasZramOriginalBytes && telemetry.zramOriginalBytes.hasValue
                     ? telemetry.zramOriginalBytes.value : nil),
-                (telemetry.zramUsedBytes.hasValue ? telemetry.zramUsedBytes.value : nil)
+                telemetry.zramUsedBytes.optionalValue
             ),
         ] {
             if let original, let compressed, compressed > 0 {
@@ -1075,7 +1075,7 @@ enum Telemetry {
             ),
             (
                 "balloon_actual_bytes", "strato_workload_balloon_actual_bytes",
-                balloon.flatMap { $0.hasBalloonActualBytes ? $0.balloonActualBytes : nil }.map(
+                balloon.flatMap { $0.optionalBalloonActualBytes }.map(
                     ResourceTelemetryValue.available)
                     ?? .unavailable
             ),
@@ -1134,7 +1134,7 @@ enum Telemetry {
         factory: (any MetricsFactory)?
     ) {
         for (stall, sample) in [
-            ("some", pressure.hasSome ? pressure.some : nil), ("full", pressure.hasFull ? pressure.full : nil),
+            ("some", pressure.optionalSome), ("full", pressure.optionalFull),
         ] {
             let dimensions = base + [("resource", resource), ("stall", stall)]
             let available = pressure.availability == .available && sample != nil

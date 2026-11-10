@@ -224,42 +224,6 @@ extension Strato_Agent_V1_WorkloadResourceClassPolicy: Codable {
         try container.encode(_jsonMaxTelemetryAgeSeconds, forKey: .maxTelemetryAgeSeconds)
     }
 
-    var _jsonKind: WorkloadResourceClassKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonCpuAllocationRatio: Double {
-        get { cpuAllocationRatio }
-        set { let value = newValue; cpuAllocationRatio = value }
-    }
-    var _jsonMemoryAllocationRatio: Double {
-        get { memoryAllocationRatio }
-        set { let value = newValue; memoryAllocationRatio = value }
-    }
-    var _jsonCpuWeight: Int {
-        get { Int(cpuWeight) }
-        set { let value = newValue; cpuWeight = Int64(value) }
-    }
-    var _jsonMemoryHighPercent: Int {
-        get { Int(memoryHighPercent) }
-        set { let value = newValue; memoryHighPercent = Int64(value) }
-    }
-    var _jsonHardLimitPolicy: WorkloadHardLimitPolicy {
-        get { hardLimitPolicy }
-        set { let value = newValue; hardLimitPolicy = value }
-    }
-    var _jsonMaxCPUPressure10: Double {
-        get { maxCpuPressure10 }
-        set { let value = newValue; maxCpuPressure10 = value }
-    }
-    var _jsonMaxMemoryPressure10: Double {
-        get { maxMemoryPressure10 }
-        set { let value = newValue; maxMemoryPressure10 = value }
-    }
-    var _jsonMaxTelemetryAgeSeconds: Int {
-        get { Int(maxTelemetryAgeSeconds) }
-        set { let value = newValue; maxTelemetryAgeSeconds = Int64(value) }
-    }
 }
 
 public typealias WorkloadRuntimeLimits = Strato_Agent_V1_WorkloadRuntimeLimits
@@ -307,18 +271,6 @@ extension Strato_Agent_V1_WorkloadRuntimeLimits: Codable {
         try container.encode(_jsonCpuWeight, forKey: .cpuWeight)
     }
 
-    var _jsonMemoryHighBytes: Int64 {
-        get { memoryHighBytes }
-        set { let value = newValue; memoryHighBytes = value }
-    }
-    var _jsonMemoryMaxBytes: Int64 {
-        get { memoryMaxBytes }
-        set { let value = newValue; memoryMaxBytes = value }
-    }
-    var _jsonCpuWeight: Int {
-        get { Int(cpuWeight) }
-        set { let value = newValue; cpuWeight = Int64(value) }
-    }
 }
 
 /// Identity is the compound (siteID, classID); built-in class IDs are stable across sites.
@@ -368,22 +320,6 @@ extension Strato_Agent_V1_WorkloadResourceClassSnapshot: Codable {
         try c.encode(_jsonRevision, forKey: .revision)
     }
 
-    var _jsonClassID: UUID {
-        get { UUID(uuidString: classID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; classID = value.uuidString }
-    }
-    var _jsonSiteID: UUID {
-        get { UUID(uuidString: siteID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; siteID = value.uuidString }
-    }
-    var _jsonRevision: Int64 {
-        get { revision }
-        set { let value = newValue; revision = value }
-    }
-    var _jsonPolicy: WorkloadResourceClassPolicy {
-        get { policy }
-        set { let value = newValue; policy = value }
-    }
 }
 
 /// A durable physical commitment. Growth prices only newly admitted guest/CPU
@@ -456,26 +392,6 @@ extension Strato_Agent_V1_WorkloadAdmittedReservation: Codable {
         try container.encode(_jsonBackendOverheadBytes, forKey: .backendOverheadBytes)
     }
 
-    var _jsonGrantedCPUs: Int {
-        get { Int(grantedCpUs) }
-        set { let value = newValue; grantedCpUs = Int64(value) }
-    }
-    var _jsonGuestCommitmentBytes: Int64 {
-        get { guestCommitmentBytes }
-        set { let value = newValue; guestCommitmentBytes = value }
-    }
-    var _jsonCpuMicroUnits: Int64 {
-        get { cpuMicroUnits }
-        set { let value = newValue; cpuMicroUnits = value }
-    }
-    var _jsonDiscountedGuestBytes: Int64 {
-        get { discountedGuestBytes }
-        set { let value = newValue; discountedGuestBytes = value }
-    }
-    var _jsonBackendOverheadBytes: Int64 {
-        get { backendOverheadBytes }
-        set { let value = newValue; backendOverheadBytes = value }
-    }
 }
 
 /// Each backend must prove the whole contract before it can be used for burstable work.
@@ -562,24 +478,4 @@ extension Strato_Agent_V1_WorkloadResourceClassEnforcement: Codable {
         try container.encode(_jsonEffectiveReadback, forKey: .effectiveReadback)
     }
 
-    var _jsonBackend: WorkloadResourceClassBackend {
-        get { backend }
-        set { let value = newValue; backend = value }
-    }
-    var _jsonControllersDelegated: Bool {
-        get { controllersDelegated }
-        set { let value = newValue; controllersDelegated = value }
-    }
-    var _jsonStableOwnership: Bool {
-        get { stableOwnership }
-        set { let value = newValue; stableOwnership = value }
-    }
-    var _jsonPreExecutionEnforcement: Bool {
-        get { preExecutionEnforcement }
-        set { let value = newValue; preExecutionEnforcement = value }
-    }
-    var _jsonEffectiveReadback: Bool {
-        get { effectiveReadback }
-        set { let value = newValue; effectiveReadback = value }
-    }
 }

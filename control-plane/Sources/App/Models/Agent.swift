@@ -328,8 +328,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.administrativelyOffline = false
         self.totalCPU = Int(resources.totalCpu)
         self.totalMemory = resources.totalMemory
-        self.memoryAccounting = (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
-        self.availableCPUMicroUnits = (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
+        self.memoryAccounting = resources.optionalMemoryAccounting
+        self.availableCPUMicroUnits = resources.optionalAvailableCpuMicroUnits
         self.totalDisk = resources.totalDisk
         self.availableCPU = Int(resources.availableCpu)
         self.availableMemory = resources.availableMemory
@@ -367,16 +367,16 @@ final class Agent: Model, Content, @unchecked Sendable {
                 || availableMemory != memory
                 || availableDisk != disk
                 || physicalFreeDisk != resources.physicalFreeDisk
-                || memoryAccounting != (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
+                || memoryAccounting != resources.optionalMemoryAccounting
                 || availableCPUMicroUnits
-                    != (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
+                    != resources.optionalAvailableCpuMicroUnits
         else { return false }
         availableCPU = cpu
         availableMemory = memory
         availableDisk = disk
         physicalFreeDisk = resources.physicalFreeDisk
-        availableCPUMicroUnits = (resources.hasAvailableCpuMicroUnits ? resources.availableCpuMicroUnits : nil)
-        memoryAccounting = (resources.hasMemoryAccounting ? resources.memoryAccounting : nil)
+        availableCPUMicroUnits = resources.optionalAvailableCpuMicroUnits
+        memoryAccounting = resources.optionalMemoryAccounting
         return true
     }
 
@@ -495,10 +495,10 @@ extension Agent {
         architecture = registration.architecture.protocolValue
         operatingSystem = registration.operatingSystem.protocolValue
         hypervisors = registration.hypervisors.values
-        networkCapability = registration.hasNetworkCapability ? registration.networkCapability.protocolValue : nil
+        networkCapability = registration.optionalNetworkCapability?.protocolValue
         if registration.hasHostInfo { self.hostInfo = registration.hostInfo }
         resourceClassEnforcement =
-            registration.hasResourceClassEnforcement ? registration.resourceClassEnforcement.values : nil
+            registration.optionalResourceClassEnforcement?.values
         sandboxCapable = registration.sandboxCapable
         sandboxNetworkingCapable = registration.sandboxNetworkingCapable
         tpmCapable = registration.tpmCapable
@@ -509,8 +509,8 @@ extension Agent {
         totalCPU = Int(registration.resources.totalCpu)
         totalMemory = registration.resources.totalMemory
         availableCPUMicroUnits =
-            registration.resources.hasAvailableCpuMicroUnits ? registration.resources.availableCpuMicroUnits : nil
-        memoryAccounting = registration.resources.hasMemoryAccounting ? registration.resources.memoryAccounting : nil
+            registration.resources.optionalAvailableCpuMicroUnits
+        memoryAccounting = registration.resources.optionalMemoryAccounting
         totalDisk = registration.resources.totalDisk
         _ = updateAvailableResources(registration.resources)
         lastHeartbeat = receivedAt

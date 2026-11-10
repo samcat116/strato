@@ -13,7 +13,7 @@ extension FirecrackerSandboxRuntime {
     ) throws -> (@Sendable (Int32, String) throws -> Void)? {
         guard
             let limits = try BurstableResourceLimits.plan(
-                resourceClass: spec.hasResourceClass ? spec.resourceClass : nil, guestGrantBytes: spec.memoryBytes,
+                resourceClass: spec.optionalResourceClass, guestGrantBytes: spec.memoryBytes,
                 backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)
         else { return nil }
         try BurstableGuestGrant.verify(

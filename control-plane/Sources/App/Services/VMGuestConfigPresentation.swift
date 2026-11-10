@@ -62,7 +62,7 @@ enum VMGuestConfigPresentation {
         // must not turn another path into a managed identity.
         guard
             report.files.values.allSatisfy({ fact in config.files.values.contains { sameBytes($0.path, fact.path) } }),
-            (report.hasFailedItem ? report.failedItem : nil).map({ item in
+            report.optionalFailedItem.map({ item in
                 item.section != .files || config.files.values.contains { sameBytes($0.path, item.identity) }
             }) ?? true
         else { throw GuestConfigObservationError.invalid }
@@ -116,8 +116,8 @@ enum VMGuestConfigPresentation {
     static func items(_ vm: VM, agentOnline: Bool) -> [VMGuestConfigurationItem] {
         guard let config = vm.guestConfig else { return [] }
         let report = vm.guestConfigEvidence?.observation
-        let failedItem = report.flatMap { $0.hasFailedItem ? $0.failedItem : nil }
-        let reportError = report.flatMap { $0.hasError ? $0.error : nil }
+        let failedItem = report.flatMap { $0.optionalFailedItem }
+        let reportError = report.flatMap { $0.optionalError }
         let fresh =
             current(vm) && agentOnline && vm.guestAgentObservation?.reachable != false
             && vm.status == .running && vm.desiredStatus == .running
@@ -182,7 +182,7 @@ enum VMGuestConfigPresentation {
             let fact = report?.sysctls.values.first { $0.key == desired.key }
             rows.append(
                 item(
-                    "sysctls", desired.key, desired.value, fact.flatMap { $0.hasValue ? $0.value : nil },
+                    "sysctls", desired.key, desired.value, fact.flatMap { $0.optionalValue },
                     fact.flatMap { $0.hasValue ? sameBytes(whitespace($0.value), whitespace(desired.value)) : nil }))
         }
         return rows

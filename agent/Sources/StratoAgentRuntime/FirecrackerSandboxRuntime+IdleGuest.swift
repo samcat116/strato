@@ -98,7 +98,7 @@ extension FirecrackerSandboxRuntime {
                 observedAt: now, lastActiveAt: lastActive,
                 residentSince: residentSince,
                 activeUserStreams: 0,
-                pendingUserCommands: desired.hasIdlePendingCommandCount ? Int(desired.idlePendingCommandCount) : nil,
+                pendingUserCommands: desired.optionalIdlePendingCommandCount.map(Int.init),
                 guestAndNetworkActivityKnown: known))
         return SandboxIdleActivityReport(
             agentIncarnation: idleActivityIncarnation, connectionEpoch: connectionEpoch,
@@ -116,7 +116,7 @@ extension FirecrackerSandboxRuntime {
                     sample.quietMilliseconds,
                     UInt64(min(86_400, max(0, now.timeIntervalSince(idleLastActivity[id] ?? now))) * 1000)) : nil,
             policy: idlePolicy, hostPendingCommandCount: localPending,
-            controlPlaneActivityRevision: desired.hasIdleControlPlaneRevision ? desired.idleControlPlaneRevision : nil)
+            controlPlaneActivityRevision: desired.optionalIdleControlPlaneRevision)
     }
 }
 #endif

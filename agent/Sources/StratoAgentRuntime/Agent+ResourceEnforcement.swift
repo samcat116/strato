@@ -25,8 +25,8 @@ extension Agent {
             entry.spec.admittedReservation == target.spec.admittedReservation,
             entry.spec.memoryBytes == target.spec.memoryBytes, entry.spec.cpus == target.spec.cpus
         {
-            resourceClass = entry.spec.hasResourceClass ? entry.spec.resourceClass : nil
-            reservation = entry.spec.hasAdmittedReservation ? entry.spec.admittedReservation : nil
+            resourceClass = entry.spec.optionalResourceClass
+            reservation = entry.spec.optionalAdmittedReservation
             guestBytes = entry.spec.memoryBytes
             cpuCount = Int(entry.spec.cpus)
             backend = .qemuVM
@@ -36,8 +36,8 @@ extension Agent {
             spec.admittedReservation == target.spec.admittedReservation,
             spec.memoryBytes == target.spec.memoryBytes, spec.cpus == target.spec.cpus
         {
-            resourceClass = spec.hasResourceClass ? spec.resourceClass : nil
-            reservation = spec.hasAdmittedReservation ? spec.admittedReservation : nil
+            resourceClass = spec.optionalResourceClass
+            reservation = spec.optionalAdmittedReservation
             guestBytes = spec.memoryBytes
             cpuCount = Int(spec.cpus)
             backend = .jailedFirecrackerSandbox

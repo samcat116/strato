@@ -575,7 +575,7 @@ struct ObservedStateApplier {
                     case .unspecified, .UNRECOGNIZED:
                         throw Abort(.unprocessableEntity, reason: "Unknown load balancer status")
                     }
-                loadBalancer.lastError = observed.hasLastError ? observed.lastError : nil
+                loadBalancer.lastError = observed.optionalLastError
                 try await loadBalancer.save(on: tx)
 
                 for backendObservation in observed.backends.values {
@@ -597,7 +597,7 @@ struct ObservedStateApplier {
                         .set(\.$healthStatus, to: health)
                         .set(
                             \.$lastHealthCheckAt,
-                            to: (backendObservation.hasLastCheckedAt ? backendObservation.lastCheckedAt.date : nil)
+                            to: backendObservation.optionalLastCheckedAt?.date
                         )
                         .update()
                 }
@@ -668,9 +668,9 @@ struct ObservedStateApplier {
                 applyFabricObservation(
                     observedGeneration: observed.observedGeneration,
                     status: observed.status,
-                    lastError: observed.hasLastError ? observed.lastError : nil,
-                    failedGeneration: observed.hasFailedGeneration ? observed.failedGeneration : nil,
-                    failureClassification: observed.hasFailureClassification ? observed.failureClassification : nil,
+                    lastError: observed.optionalLastError,
+                    failedGeneration: observed.optionalFailedGeneration,
+                    failureClassification: observed.optionalFailureClassification,
                     at: instant,
                     to: network)
                 try await network.save(on: tx)
@@ -812,7 +812,7 @@ struct ObservedStateApplier {
         on nic: VMNetworkInterface
     ) {
         nic.securityGroupStatus = observed.status.protocolValue
-        nic.securityGroupLastError = observed.hasLastError ? observed.lastError : nil
+        nic.securityGroupLastError = observed.optionalLastError
         nic.securityGroupLastErrorAt = !observed.hasLastError ? nil : instant.date
     }
 
@@ -822,7 +822,7 @@ struct ObservedStateApplier {
         on nic: SandboxNetworkInterface
     ) {
         nic.securityGroupStatus = observed.status.protocolValue
-        nic.securityGroupLastError = observed.hasLastError ? observed.lastError : nil
+        nic.securityGroupLastError = observed.optionalLastError
         nic.securityGroupLastErrorAt = !observed.hasLastError ? nil : instant.date
     }
 
@@ -1125,7 +1125,7 @@ struct ObservedStateApplier {
                     tombstoneGeneration: tombstoneGeneration,
                     reason: reason,
                     observedGeneration: entry.observedGeneration,
-                    observedStatus: entry.hasStatus ? entry.status : nil
+                    observedStatus: entry.optionalStatus
                 ))
             return
         }
@@ -1134,13 +1134,13 @@ struct ObservedStateApplier {
                 || claim.tombstoneGeneration != tombstoneGeneration
                 || claim.reason != reason
                 || claim.observedGeneration != entry.observedGeneration
-                || claim.observedStatus != (entry.hasStatus ? entry.status : nil)
+                || claim.observedStatus != entry.optionalStatus
         else { return }  // unchanged: don't churn the row on every report
         claim.disposition = disposition
         claim.tombstoneGeneration = tombstoneGeneration
         claim.reason = reason
         claim.observedGeneration = entry.observedGeneration
-        claim.observedStatus = entry.hasStatus ? entry.status : nil
+        claim.observedStatus = entry.optionalStatus
         try await claim.save(on: db)
     }
 

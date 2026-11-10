@@ -14,26 +14,6 @@ import SwiftProtobuf
 /// policy later.
 public typealias VMMemoryStats = Strato_Agent_V1_VMMemoryStats
 extension Strato_Agent_V1_VMMemoryStats: Codable {
-    /// Total memory visible to the guest OS (`stat-total-memory`). This can be
-    /// less than the VM spec's memory grant: firmware reservations come out of
-    /// it, and an inflated balloon shrinks it further.
-
-    /// Memory the guest considers available for new allocations without
-    /// swapping (`stat-available-memory`) — free pages plus reclaimable caches.
-    /// The interesting number: `totalBytes - availableBytes` is what the guest
-    /// is actually using.
-
-    /// Memory the balloon currently leaves to the guest (`query-balloon`'s
-    /// `actual`), in bytes — the host-side view of an operator's balloon
-    /// target (issue #567 phase 2). Equal to the VM's memory grant on a VM
-    /// with no target set, and it converges *toward* a newly set target as
-    /// the guest's driver hands pages back, so a value above the target
-    /// mid-inflation is expected, not a fault.
-    ///
-    /// Unlike the `stat-*` fields this comes from QEMU, not the guest, so it
-    /// is reported even for a guest whose driver never loaded. Nil only when
-    /// the VM has no balloon device (created before issue #567) or the query
-    /// failed.
 
     public init(
         totalBytes: Int64,
@@ -64,16 +44,4 @@ extension Strato_Agent_V1_VMMemoryStats: Codable {
         try container.encodeIfPresent(_jsonBalloonActualBytes, forKey: .balloonActualBytes)
     }
 
-    var _jsonTotalBytes: Int64 {
-        get { totalBytes }
-        set { let value = newValue; totalBytes = value }
-    }
-    var _jsonAvailableBytes: Int64 {
-        get { availableBytes }
-        set { let value = newValue; availableBytes = value }
-    }
-    var _jsonBalloonActualBytes: Int64? {
-        get { hasBalloonActualBytes ? (balloonActualBytes) : nil }
-        set { if let value = newValue { balloonActualBytes = value } else { clearBalloonActualBytes() } }
-    }
 }

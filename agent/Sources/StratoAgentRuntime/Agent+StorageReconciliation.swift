@@ -101,7 +101,7 @@ extension Agent {
                 }
             }
             let backend = try await requireStorageBackend(
-                volumeId: parentId, volumeStorage: desired.hasVolumeStorage ? desired.volumeStorage : nil)
+                volumeId: parentId, volumeStorage: desired.optionalVolumeStorage)
             guard let disk = try await backend.inspectVolume(volumeId: parentId) else {
                 // The volume may be mid-create in this very sync; a dependency
                 // wait burns no attempt and retries on the next one.
@@ -110,7 +110,7 @@ extension Agent {
             }
             let parentDesired = desiredVolumeStates[parentId]
             let snapshotStorage = VolumeSnapshotStorageRouting.resolve(
-                desiredStorage: desired.hasVolumeStorage ? desired.volumeStorage : nil,
+                desiredStorage: desired.optionalVolumeStorage,
                 recordedStorage: nil,
                 currentParentStorage: parentDesired?.storage)
             reservedDiskBytes =
@@ -227,7 +227,7 @@ extension Agent {
             let backend = try await requireStorageBackend(
                 volumeId: parentId.uuidString,
                 volumeStorage: VolumeSnapshotStorageRouting.resolve(
-                    desiredStorage: item.desiredSnapshot.flatMap { $0.hasVolumeStorage ? $0.volumeStorage : nil },
+                    desiredStorage: item.desiredSnapshot.flatMap { $0.optionalVolumeStorage },
                     recordedStorage: snapshotRecords[snapshotId]?.volumeStorage,
                     currentParentStorage: desiredVolumeStates[parentId.uuidString]?.storage))
             try await backend.deleteSnapshot(
@@ -707,8 +707,8 @@ extension Agent {
             deviceName: try VolumeDeviceName(validating: attachment.deviceName),
             attachment: disk,
             readonly: attachment.readonly,
-            bootOrder: attachment.hasBootOrder ? Int(attachment.bootOrder) : nil,
-            ioLimits: desired.hasIoLimits ? desired.ioLimits : nil,
+            bootOrder: attachment.optionalBootOrder.map(Int.init),
+            ioLimits: desired.optionalIoLimits,
             blockMode: desired.blockMode,
             appliedBlockPolicy: blockPolicy)
         // Persist the attachment before calling libvirt so a crash cannot
@@ -735,7 +735,7 @@ extension Agent {
             vmId: vmId, volumeId: item.id, attachment: disk,
             deviceName: attachment.deviceName, readonly: attachment.readonly,
             blockPolicy: blockPolicy, orderedBootVolumeIds: orderedBootVolumeIds,
-            ioLimits: desired.hasIoLimits ? desired.ioLimits : nil)
+            ioLimits: desired.optionalIoLimits)
 
         // Read the installed attributes, since an idempotent retry may have
         // selected a different fallback than the disk already in libvirt.
@@ -785,12 +785,12 @@ extension Agent {
             deviceName: try VolumeDeviceName(validating: desiredAttachment.deviceName),
             attachment: disk,
             readonly: desiredAttachment.readonly,
-            bootOrder: desiredAttachment.hasBootOrder ? Int(desiredAttachment.bootOrder) : nil,
-            ioLimits: desired.hasIoLimits ? desired.ioLimits : nil,
+            bootOrder: desiredAttachment.optionalBootOrder.map(Int.init),
+            ioLimits: desired.optionalIoLimits,
             blockMode: desired.blockMode,
             appliedBlockPolicy: entry.spec.volumes.values.first {
                 $0.volumeID == desired.volumeID
-            }.flatMap { $0.hasAppliedBlockPolicy ? $0.appliedBlockPolicy : nil })
+            }.flatMap { $0.optionalAppliedBlockPolicy })
         _ = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
         guard let service = getHypervisorServiceForVM(vmId: vmId),
@@ -800,7 +800,7 @@ extension Agent {
                 "VM \(vmId) has no libvirt domain to apply volume \(item.id)'s I/O limits to")
         }
         try await service.setDiskIOLimits(
-            vmId: vmId, volumeId: item.id, limits: desired.hasIoLimits ? desired.ioLimits : nil)
+            vmId: vmId, volumeId: item.id, limits: desired.optionalIoLimits)
     }
 
     func detachVolumeFromVM(volumeId: String, vmId: String, deviceName: String) async throws {
@@ -1037,7 +1037,7 @@ extension Agent {
         }
         do {
             try await service.createVM(
-                vmId: item.id, spec: realizedSpec, imageInfo: desired.hasImageInfo ? desired.imageInfo : nil,
+                vmId: item.id, spec: realizedSpec, imageInfo: desired.optionalImageInfo,
                 networkAttachments: attachments,
                 metadata: creationMetadata,
                 vsockCID: lease.cid)
@@ -1092,7 +1092,7 @@ extension Agent {
         _ desired: DesiredVMState
     ) async -> InstanceMetadata? {
         guard desired.hypervisorType == .firecracker else {
-            return desired.hasMetadata ? desired.metadata : nil
+            return desired.optionalMetadata
         }
         guard configuration.metadataServiceEnabled else { return nil }
         guard let vmID = UUID(uuidString: desired.vmID) else { return nil }
@@ -1285,7 +1285,7 @@ extension Agent {
         }
 
         try await service.reconfigureMetadataInterfaces(
-            vmId: item.id, spec: realizedSpec, imageInfo: desired.hasImageInfo ? desired.imageInfo : nil,
+            vmId: item.id, spec: realizedSpec, imageInfo: desired.optionalImageInfo,
             networkAttachments: attachments, metadata: metadata)
         return (
             realizedSpec,

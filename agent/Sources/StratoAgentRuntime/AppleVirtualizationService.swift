@@ -50,8 +50,8 @@ actor AppleVirtualizationService: HypervisorService {
         try ManagedStatePermissions.prepareVMDirectory(at: directory)
         let iso = VMDirectoryLayout.cloudInitISO(vmDirectory: directory)
         _ = try await provisioner.makeNoCloudISO(
-            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.hasHostname ? $0.hostname : nil },
-            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.hasUserData ? spec.userData : nil,
+            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.optionalHostname },
+            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.optionalUserData,
             networkAttachments: networkAttachments)
         try await host.create(id: vmId, plan: plan, directory: directory, seed: iso)
         specs[vmId] = spec
@@ -73,8 +73,8 @@ actor AppleVirtualizationService: HypervisorService {
             throw HypervisorServiceError.notSupported("reconfiguring a running Apple VM")
         }
         _ = try await provisioner.makeNoCloudISO(
-            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.hasHostname ? $0.hostname : nil },
-            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.hasUserData ? spec.userData : nil,
+            at: iso, vmId: vmId, hostname: metadata.flatMap { $0.optionalHostname },
+            sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.optionalUserData,
             networkAttachments: networkAttachments)
         try await host.replace(id: vmId, plan: plan, directory: directory, seed: iso)
         specs[vmId] = spec

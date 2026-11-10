@@ -79,14 +79,6 @@ extension Strato_Agent_V1_ResourceTelemetryValue: Codable {
         try container.encodeIfPresent(_jsonValue, forKey: .value)
     }
 
-    var _jsonAvailability: ResourceTelemetryAvailability {
-        get { availability }
-        set { let value = newValue; availability = value }
-    }
-    var _jsonValue: Int64? {
-        get { hasValue ? (value) : nil }
-        set { if let value = newValue { self.value = value } else { clearValue() } }
-    }
 }
 
 /// A boolean capability or state with explicit availability.
@@ -121,21 +113,11 @@ extension Strato_Agent_V1_ResourceTelemetryFlag: Codable {
         try container.encodeIfPresent(_jsonValue, forKey: .value)
     }
 
-    var _jsonAvailability: ResourceTelemetryAvailability {
-        get { availability }
-        set { let value = newValue; availability = value }
-    }
-    var _jsonValue: Bool? {
-        get { hasValue ? (value) : nil }
-        set { if let value = newValue { self.value = value } else { clearValue() } }
-    }
 }
 
 /// One Linux PSI `some` or `full` line.
 public typealias PressureStallSample = Strato_Agent_V1_PressureStallSample
 extension Strato_Agent_V1_PressureStallSample: Codable {
-    /// Percentage of wall time stalled over the last 10, 60, and 300 seconds.
-    /// Cumulative stalled time since boot/cgroup creation, in microseconds.
 
     public init(
         average10: Double,
@@ -172,22 +154,6 @@ extension Strato_Agent_V1_PressureStallSample: Codable {
         try container.encode(_jsonTotalMicroseconds, forKey: .totalMicroseconds)
     }
 
-    var _jsonAverage10: Double {
-        get { average10 }
-        set { let value = newValue; average10 = value }
-    }
-    var _jsonAverage60: Double {
-        get { average60 }
-        set { let value = newValue; average60 = value }
-    }
-    var _jsonAverage300: Double {
-        get { average300 }
-        set { let value = newValue; average300 = value }
-    }
-    var _jsonTotalMicroseconds: Int64 {
-        get { totalMicroseconds }
-        set { let value = newValue; totalMicroseconds = value }
-    }
 }
 
 /// One PSI resource file. `full` is independently optional because CPU PSI
@@ -233,18 +199,6 @@ extension Strato_Agent_V1_PressureStallTelemetry: Codable {
         try container.encodeIfPresent(_jsonFull, forKey: .full)
     }
 
-    var _jsonAvailability: ResourceTelemetryAvailability {
-        get { availability }
-        set { let value = newValue; availability = value }
-    }
-    var _jsonSome: PressureStallSample? {
-        get { hasSome ? (some) : nil }
-        set { if let value = newValue { some = value } else { clearSome() } }
-    }
-    var _jsonFull: PressureStallSample? {
-        get { hasFull ? (full) : nil }
-        set { if let value = newValue { full = value } else { clearFull() } }
-    }
 }
 
 /// Operator-facing pressure summary. Raw signals remain the alert authority;
@@ -293,11 +247,6 @@ extension Strato_Agent_V1_ResourcePressureHealth: Codable {
 /// Host-wide pressure, reclaim, swap, and OOM observations.
 public typealias HostResourceTelemetry = Strato_Agent_V1_HostResourceTelemetry
 extension Strato_Agent_V1_HostResourceTelemetry: Codable {
-    /// Bytes of original pages currently represented in zswap.
-    /// Bytes currently consumed by zswap's compressed pool.
-    /// Sum of `mem_used_total` across the host's zram block devices.
-    /// Available false means the kernel exposes MGLRU but it is disabled;
-    /// unavailable means this kernel exposes no MGLRU control at all.
 
     public init(
         sampledAt: Date,
@@ -416,100 +365,6 @@ extension Strato_Agent_V1_HostResourceTelemetry: Codable {
         try container.encodeIfPresent(_jsonMemoryWarnings, forKey: .memoryWarnings)
     }
 
-    var _jsonSampledAt: Date {
-        get { sampledAt.date }
-        set { let value = newValue; sampledAt = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonHealth: ResourcePressureHealth {
-        get { health }
-        set { let value = newValue; health = value }
-    }
-    var _jsonCpuPressure: PressureStallTelemetry {
-        get { cpuPressure }
-        set { let value = newValue; cpuPressure = value }
-    }
-    var _jsonMemoryPressure: PressureStallTelemetry {
-        get { memoryPressure }
-        set { let value = newValue; memoryPressure = value }
-    }
-    var _jsonIoPressure: PressureStallTelemetry {
-        get { ioPressure }
-        set { let value = newValue; ioPressure = value }
-    }
-    var _jsonSwapTotalBytes: ResourceTelemetryValue {
-        get { swapTotalBytes }
-        set { let value = newValue; swapTotalBytes = value }
-    }
-    var _jsonSwapUsedBytes: ResourceTelemetryValue {
-        get { swapUsedBytes }
-        set { let value = newValue; swapUsedBytes = value }
-    }
-    var _jsonZswapStoredBytes: ResourceTelemetryValue {
-        get { zswapStoredBytes }
-        set { let value = newValue; zswapStoredBytes = value }
-    }
-    var _jsonZswapPoolBytes: ResourceTelemetryValue {
-        get { zswapPoolBytes }
-        set { let value = newValue; zswapPoolBytes = value }
-    }
-    var _jsonZramUsedBytes: ResourceTelemetryValue {
-        get { zramUsedBytes }
-        set { let value = newValue; zramUsedBytes = value }
-    }
-    var _jsonMajorFaultsTotal: ResourceTelemetryValue {
-        get { majorFaultsTotal }
-        set { let value = newValue; majorFaultsTotal = value }
-    }
-    var _jsonReclaimScannedPagesTotal: ResourceTelemetryValue {
-        get { reclaimScannedPagesTotal }
-        set { let value = newValue; reclaimScannedPagesTotal = value }
-    }
-    var _jsonReclaimReclaimedPagesTotal: ResourceTelemetryValue {
-        get { reclaimReclaimedPagesTotal }
-        set { let value = newValue; reclaimReclaimedPagesTotal = value }
-    }
-    var _jsonOomKillsTotal: ResourceTelemetryValue {
-        get { oomKillsTotal }
-        set { let value = newValue; oomKillsTotal = value }
-    }
-    var _jsonMglruEnabled: ResourceTelemetryFlag {
-        get { mglruEnabled }
-        set { let value = newValue; mglruEnabled = value }
-    }
-    var _jsonMemoryProfile: HostMemoryProfileObservation? {
-        get { hasMemoryProfile ? (memoryProfile) : nil }
-        set { if let value = newValue { memoryProfile = value } else { clearMemoryProfile() } }
-    }
-    var _jsonSwapInPagesTotal: ResourceTelemetryValue? {
-        get { hasSwapInPagesTotal ? (swapInPagesTotal) : nil }
-        set { if let value = newValue { swapInPagesTotal = value } else { clearSwapInPagesTotal() } }
-    }
-    var _jsonSwapOutPagesTotal: ResourceTelemetryValue? {
-        get { hasSwapOutPagesTotal ? (swapOutPagesTotal) : nil }
-        set { if let value = newValue { swapOutPagesTotal = value } else { clearSwapOutPagesTotal() } }
-    }
-    var _jsonZramOriginalBytes: ResourceTelemetryValue? {
-        get { hasZramOriginalBytes ? (zramOriginalBytes) : nil }
-        set { if let value = newValue { zramOriginalBytes = value } else { clearZramOriginalBytes() } }
-    }
-    var _jsonSwapInPagesPerSecond: Double? {
-        get { hasSwapInPagesPerSecond ? (swapInPagesPerSecond) : nil }
-        set { if let value = newValue { swapInPagesPerSecond = value } else { clearSwapInPagesPerSecond() } }
-    }
-    var _jsonSwapOutPagesPerSecond: Double? {
-        get { hasSwapOutPagesPerSecond ? (swapOutPagesPerSecond) : nil }
-        set { if let value = newValue { swapOutPagesPerSecond = value } else { clearSwapOutPagesPerSecond() } }
-    }
-    var _jsonMemoryWarnings: [String]? {
-        get { hasMemoryWarnings ? (memoryWarnings.values) : nil }
-        set {
-            if let value = newValue {
-                memoryWarnings = Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSection.with { $0.values = value }
-            } else {
-                clearMemoryWarnings()
-            }
-        }
-    }
 }
 
 /// Monotonic counters from cgroup v2 `memory.events`.
@@ -565,34 +420,6 @@ extension Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Codable {
         try container.encodeIfPresent(_jsonOomGroupKill, forKey: .oomGroupKill)
     }
 
-    var _jsonAvailability: ResourceTelemetryAvailability {
-        get { availability }
-        set { let value = newValue; availability = value }
-    }
-    var _jsonLow: Int64? {
-        get { hasLow ? (low) : nil }
-        set { if let value = newValue { low = value } else { clearLow() } }
-    }
-    var _jsonHigh: Int64? {
-        get { hasHigh ? (high) : nil }
-        set { if let value = newValue { high = value } else { clearHigh() } }
-    }
-    var _jsonMax: Int64? {
-        get { hasMax ? (max) : nil }
-        set { if let value = newValue { max = value } else { clearMax() } }
-    }
-    var _jsonOom: Int64? {
-        get { hasOom ? (oom) : nil }
-        set { if let value = newValue { oom = value } else { clearOom() } }
-    }
-    var _jsonOomKill: Int64? {
-        get { hasOomKill ? (oomKill) : nil }
-        set { if let value = newValue { oomKill = value } else { clearOomKill() } }
-    }
-    var _jsonOomGroupKill: Int64? {
-        get { hasOomGroupKill ? (oomGroupKill) : nil }
-        set { if let value = newValue { oomGroupKill = value } else { clearOomGroupKill() } }
-    }
 }
 
 /// Per-VM or per-sandbox contention observations. Every label needed to
@@ -601,9 +428,6 @@ extension Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Codable {
 /// the telemetry cardinality surface.
 public typealias WorkloadResourceTelemetry = Strato_Agent_V1_WorkloadResourceTelemetry
 extension Strato_Agent_V1_WorkloadResourceTelemetry: Codable {
-    /// Guest-reported cumulative steal time. It remains explicitly unavailable
-    /// until a guest metrics source supplies a value; host CPU time is never
-    /// substituted for it.
 
     public init(
         sampledAt: Date,
@@ -678,52 +502,4 @@ extension Strato_Agent_V1_WorkloadResourceTelemetry: Codable {
         try container.encode(_jsonGuestStealMicroseconds, forKey: .guestStealMicroseconds)
     }
 
-    var _jsonSampledAt: Date {
-        get { sampledAt.date }
-        set { let value = newValue; sampledAt = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonHealth: ResourcePressureHealth {
-        get { health }
-        set { let value = newValue; health = value }
-    }
-    var _jsonCgroupV2: ResourceTelemetryAvailability {
-        get { cgroupV2 }
-        set { let value = newValue; cgroupV2 = value }
-    }
-    var _jsonMemoryCurrentBytes: ResourceTelemetryValue {
-        get { memoryCurrentBytes }
-        set { let value = newValue; memoryCurrentBytes = value }
-    }
-    var _jsonMemoryEvents: WorkloadMemoryEventsTelemetry {
-        get { memoryEvents }
-        set { let value = newValue; memoryEvents = value }
-    }
-    var _jsonMemoryPressure: PressureStallTelemetry {
-        get { memoryPressure }
-        set { let value = newValue; memoryPressure = value }
-    }
-    var _jsonCpuPressure: PressureStallTelemetry {
-        get { cpuPressure }
-        set { let value = newValue; cpuPressure = value }
-    }
-    var _jsonIoPressure: PressureStallTelemetry {
-        get { ioPressure }
-        set { let value = newValue; ioPressure = value }
-    }
-    var _jsonCpuUsageMicroseconds: ResourceTelemetryValue {
-        get { cpuUsageMicroseconds }
-        set { let value = newValue; cpuUsageMicroseconds = value }
-    }
-    var _jsonCpuThrottledMicroseconds: ResourceTelemetryValue {
-        get { cpuThrottledMicroseconds }
-        set { let value = newValue; cpuThrottledMicroseconds = value }
-    }
-    var _jsonCpuThrottledPeriodsTotal: ResourceTelemetryValue {
-        get { cpuThrottledPeriodsTotal }
-        set { let value = newValue; cpuThrottledPeriodsTotal = value }
-    }
-    var _jsonGuestStealMicroseconds: ResourceTelemetryValue {
-        get { guestStealMicroseconds }
-        set { let value = newValue; guestStealMicroseconds = value }
-    }
 }

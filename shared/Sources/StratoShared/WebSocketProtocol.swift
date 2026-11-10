@@ -51,70 +51,6 @@ public protocol WebSocketMessage: SwiftProtobuf.Message, Codable {
 public typealias AgentRegisterMessage = Strato_Agent_V1_AgentRegisterMessage
 extension Strato_Agent_V1_AgentRegisterMessage: WebSocketMessage {
     public var type: MessageType { .agentRegister }
-    /// Host CPU architecture.
-    /// Every hypervisor on this host with probed availability and capabilities.
-    /// Networking capability of this host. Nil means networking is disabled or
-    /// its host probe could not establish a usable mode.
-    /// Registration offers the stable protocol major and supported capabilities.
-    /// Peers agree on required features before accepting workload messages.
-    /// Whether this agent runs sandbox workloads (OCI-image Firecracker
-    /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
-    /// and reports them back in `ObservedStateReport.sandboxes`. The scheduler
-    /// keys placement on this explicit signal because the
-    /// separately installed runtime, not the wire version, determines support.
-    /// Whether this agent can realize a **sandbox NIC** (STR-103), as opposed
-    /// to merely running sandboxes.
-    ///
-    /// A second signal on top of `sandboxCapable`, and for a sharper version of
-    /// the same reason: the pieces a sandbox NIC needs are installed
-    /// independently of the agent binary, so no version and no other capability
-    /// implies them. It takes OVN/OVS networking (the veth + in-namespace TAP
-    /// recipe has no user-mode equivalent), the jailer barrier (the NIC lives in
-    /// the jail's network namespace, and an unjailed sandbox has none), and a
-    /// **guest image** whose init understands the config drive's `network`
-    /// block — and the guest image is a separately distributed artifact at
-    /// `sandbox_guest_image_path`, so an up-to-date agent can be paired with a
-    /// guest that would refuse the document.
-    ///
-    /// The control plane uses it twice: the scheduler refuses to place a
-    /// sandbox that has a NIC on a host without it, and desired-state assembly
-    /// withholds `SandboxSpec.network` from such a host — so an agent that
-    /// cannot realize a NIC is never handed one.
-    /// Whether this host can give a guest an emulated TPM 2.0 — it has a
-    /// usable `swtpm` binary (issue #565). Like `sandboxCapable`, speaking the
-    /// wire version is deliberately not sufficient: the protocol carries
-    /// `MachineProfile.tpm`, but only a host with swtpm installed can realize
-    /// it, and a VM whose vTPM is silently dropped fails Windows setup with no
-    /// explanation.
-    /// Host operating system, reported so the control plane can resolve the
-    /// right release artifact for an agent self-update (assets are published
-    /// per OS/arch pair).
-    /// Descriptive hardware/platform/OS details for operators (CPU model,
-    /// kernel version, distribution, physical core count, boot time, ...).
-    /// Purely informational and entirely best-effort; any individual field the
-    /// agent could not probe is absent.
-    /// Whether this host can actually run the per-network DNS resolver
-    /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
-    ///
-    /// Like `sandboxCapable` and `tpmCapable`, speaking the wire version is
-    /// deliberately not sufficient — a v37 build understands `resolverEnabled`,
-    /// but only a host with CoreDNS installed can answer on the resolver
-    /// address, and a guest pointed at an address nothing listens on loses
-    /// external name resolution entirely.
-    ///
-    /// The control plane combines this **across the whole site** before
-    /// enabling a network's resolver, because the DHCP option is authored once
-    /// per network by the topology authority while the listener is per
-    /// chassis: one incapable host would otherwise give a network DNS that
-    /// works until a VM lands somewhere else.
-    /// Whether this host initialized the guest-facing instance metadata
-    /// service. This is independent of overlay networking: an OVN host may
-    /// disable the service in its agent configuration or lack a host tool the
-    /// listener supervisor needs.
-    /// Periodic, feature-scoped software dependency health. This is also sent
-    /// at registration so a newly connected agent is not placement-eligible in
-    /// the window before its first heartbeat.
-    /// Nil/empty advertises no burstable support. STR272 must supply verified backend evidence.
 
     public init(
         requestId: String = UUID().uuidString,
@@ -216,105 +152,11 @@ extension Strato_Agent_V1_AgentRegisterMessage: WebSocketMessage {
         try container.encode(_jsonDependencyObservations, forKey: .dependencyObservations)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonAgentId: String {
-        get { agentID }
-        set { let value = newValue; agentID = value }
-    }
-    var _jsonHostname: String {
-        get { hostname }
-        set { let value = newValue; hostname = value }
-    }
-    var _jsonVersion: String {
-        get { version }
-        set { let value = newValue; version = value }
-    }
-    var _jsonResources: AgentResources {
-        get { resources }
-        set { let value = newValue; resources = value }
-    }
-    var _jsonArchitecture: CPUArchitecture {
-        get { architecture }
-        set { let value = newValue; architecture = value }
-    }
-    var _jsonHypervisors: [HypervisorSupport] {
-        get { hypervisors.values }
-        set {
-            let value = newValue;
-            hypervisors = Strato_Agent_V1_AgentRegisterMessageHypervisorsSection.with { $0.values = value }
-        }
-    }
-    var _jsonNetworkCapability: NetworkCapability? {
-        get { hasNetworkCapability ? (networkCapability) : nil }
-        set { if let value = newValue { networkCapability = value } else { clearNetworkCapability() } }
-    }
-    var _jsonProtocolOffer: Strato_Agent_V1_ProtocolOffer {
-        get { protocolOffer }
-        set { let value = newValue; protocolOffer = value }
-    }
-    var _jsonSandboxCapable: Bool {
-        get { sandboxCapable }
-        set { let value = newValue; sandboxCapable = value }
-    }
-    var _jsonSandboxNetworkingCapable: Bool {
-        get { sandboxNetworkingCapable }
-        set { let value = newValue; sandboxNetworkingCapable = value }
-    }
-    var _jsonTpmCapable: Bool {
-        get { tpmCapable }
-        set { let value = newValue; tpmCapable = value }
-    }
-    var _jsonOperatingSystem: OperatingSystem {
-        get { operatingSystem }
-        set { let value = newValue; operatingSystem = value }
-    }
-    var _jsonHostInfo: HostInfo? {
-        get { hasHostInfo ? (hostInfo) : nil }
-        set { if let value = newValue { hostInfo = value } else { clearHostInfo() } }
-    }
-    var _jsonResolverCapable: Bool {
-        get { resolverCapable }
-        set { let value = newValue; resolverCapable = value }
-    }
-    var _jsonMetadataServiceCapable: Bool {
-        get { metadataServiceCapable }
-        set { let value = newValue; metadataServiceCapable = value }
-    }
-    var _jsonResourceClassEnforcement: [WorkloadResourceClassEnforcement]? {
-        get { hasResourceClassEnforcement ? (resourceClassEnforcement.values) : nil }
-        set {
-            if let value = newValue {
-                resourceClassEnforcement = Strato_Agent_V1_AgentRegisterMessageResourceClassEnforcementSection.with {
-                    $0.values = value
-                }
-            } else {
-                clearResourceClassEnforcement()
-            }
-        }
-    }
-    var _jsonDependencyObservations: [NodeDependencyObservation] {
-        get { dependencyObservations.values }
-        set {
-            let value = newValue;
-            dependencyObservations = Strato_Agent_V1_AgentRegisterMessageDependencyObservationsSection.with {
-                $0.values = value
-            }
-        }
-    }
 }
 
 public typealias AgentHeartbeatMessage = Strato_Agent_V1_AgentHeartbeatMessage
 extension Strato_Agent_V1_AgentHeartbeatMessage: WebSocketMessage {
     public var type: MessageType { .agentHeartbeat }
-    /// Last host-resource sample gathered independently of this heartbeat.
-    /// Nil only before the first sampling pass or from a pre-v59 sender.
 
     public init(
         requestId: String = UUID().uuidString,
@@ -362,35 +204,6 @@ extension Strato_Agent_V1_AgentHeartbeatMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonHostResourceTelemetry, forKey: .hostResourceTelemetry)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonAgentId: String {
-        get { agentID }
-        set { let value = newValue; agentID = value }
-    }
-    var _jsonResources: AgentResources {
-        get { resources }
-        set { let value = newValue; resources = value }
-    }
-    var _jsonDependencyObservations: [NodeDependencyObservation] {
-        get { dependencyObservations.values }
-        set {
-            let value = newValue;
-            dependencyObservations = Strato_Agent_V1_AgentHeartbeatMessageDependencyObservationsSection.with {
-                $0.values = value
-            }
-        }
-    }
-    var _jsonHostResourceTelemetry: HostResourceTelemetry? {
-        get { hasHostResourceTelemetry ? (hostResourceTelemetry) : nil }
-        set { if let value = newValue { hostResourceTelemetry = value } else { clearHostResourceTelemetry() } }
-    }
 }
 
 public typealias AgentUnregisterMessage = Strato_Agent_V1_AgentUnregisterMessage
@@ -426,28 +239,11 @@ extension Strato_Agent_V1_AgentUnregisterMessage: WebSocketMessage {
         try container.encode(_jsonAgentId, forKey: .agentId)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonAgentId: String {
-        get { agentID }
-        set { let value = newValue; agentID = value }
-    }
 }
 
 /// Shape of the artifact a `DesiredAgentUpdate` points at.
 public typealias AgentUpdateArtifactKind = Strato_Agent_V1_AgentUpdateArtifactKind
 extension Strato_Agent_V1_AgentUpdateArtifactKind: Codable {
-    /// A gzipped tarball containing the agent binary as a member
-    /// (`DesiredAgentUpdate.tarballMember`) — the shape of the published
-    /// release assets, which bundle control plane and agent together.
-
-    /// A bare executable: the downloaded file *is* the new agent binary.
 
     public var protocolValue: String {
         switch self {
@@ -486,9 +282,6 @@ extension Strato_Agent_V1_AgentUpdateArtifactKind: Codable {
 public typealias AgentRegisterResponseMessage = Strato_Agent_V1_AgentRegisterResponseMessage
 extension Strato_Agent_V1_AgentRegisterResponseMessage: WebSocketMessage {
     public var type: MessageType { .agentRegisterResponse }
-
-    /// The negotiated stable major and capabilities for this connection.
-    /// The agent validates the agreement against its registration offer.
 
     public init(
         requestId: String,
@@ -529,26 +322,6 @@ extension Strato_Agent_V1_AgentRegisterResponseMessage: WebSocketMessage {
         try container.encode(_jsonAgreement, forKey: .agreement)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonAgentId: String {
-        get { agentID }
-        set { let value = newValue; agentID = value }
-    }
-    var _jsonName: String {
-        get { name }
-        set { let value = newValue; name = value }
-    }
-    var _jsonAgreement: Strato_Agent_V1_ProtocolAgreement {
-        get { agreement }
-        set { let value = newValue; agreement = value }
-    }
 }
 
 public typealias AgentResources = Strato_Agent_V1_AgentResources
@@ -563,9 +336,6 @@ extension Strato_Agent_V1_AgentResources: Codable {
         case physicalFreeDisk
         case memoryAccounting, availableCPUMicroUnits
     }
-
-    /// Provisioned local-disk bytes still available for new commitments.
-    /// Bytes physically free on the filesystem backing local volumes.
 
     public init(
         totalCPU: Int,
@@ -620,42 +390,6 @@ extension Strato_Agent_V1_AgentResources: Codable {
         try container.encode(_jsonPhysicalFreeDisk, forKey: .physicalFreeDisk)
     }
 
-    var _jsonAvailableCPUMicroUnits: Int64? {
-        get { hasAvailableCpuMicroUnits ? (availableCpuMicroUnits) : nil }
-        set { if let value = newValue { availableCpuMicroUnits = value } else { clearAvailableCpuMicroUnits() } }
-    }
-    var _jsonMemoryAccounting: HostMemoryAccounting? {
-        get { hasMemoryAccounting ? (memoryAccounting) : nil }
-        set { if let value = newValue { memoryAccounting = value } else { clearMemoryAccounting() } }
-    }
-    var _jsonTotalCPU: Int {
-        get { Int(totalCpu) }
-        set { let value = newValue; totalCpu = Int64(value) }
-    }
-    var _jsonAvailableCPU: Int {
-        get { Int(availableCpu) }
-        set { let value = newValue; availableCpu = Int64(value) }
-    }
-    var _jsonTotalMemory: Int64 {
-        get { totalMemory }
-        set { let value = newValue; totalMemory = value }
-    }
-    var _jsonAvailableMemory: Int64 {
-        get { availableMemory }
-        set { let value = newValue; availableMemory = value }
-    }
-    var _jsonTotalDisk: Int64 {
-        get { totalDisk }
-        set { let value = newValue; totalDisk = value }
-    }
-    var _jsonAvailableDisk: Int64 {
-        get { availableDisk }
-        set { let value = newValue; availableDisk = value }
-    }
-    var _jsonPhysicalFreeDisk: Int64 {
-        get { physicalFreeDisk }
-        set { let value = newValue; physicalFreeDisk = value }
-    }
 }
 
 // MARK: - Image Information
@@ -707,26 +441,6 @@ extension Strato_Agent_V1_ArtifactInfo: Codable {
         try container.encode(_jsonDownloadURL, forKey: .downloadURL)
     }
 
-    var _jsonKind: ArtifactKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonFilename: String {
-        get { filename }
-        set { let value = newValue; filename = value }
-    }
-    var _jsonChecksum: String {
-        get { checksum }
-        set { let value = newValue; checksum = value }
-    }
-    var _jsonSize: Int64 {
-        get { size }
-        set { let value = newValue; size = value }
-    }
-    var _jsonDownloadURL: String {
-        get { downloadURL }
-        set { let value = newValue; downloadURL = value }
-    }
 }
 
 /// Contains information for the agent to download and cache an image.
@@ -774,22 +488,6 @@ extension Strato_Agent_V1_ImageInfo: Codable {
         try container.encode(_jsonArtifacts, forKey: .artifacts)
     }
 
-    var _jsonImageId: UUID {
-        get { UUID(uuidString: imageID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; imageID = value.uuidString }
-    }
-    var _jsonProjectId: UUID {
-        get { UUID(uuidString: projectID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; projectID = value.uuidString }
-    }
-    var _jsonArchitecture: CPUArchitecture {
-        get { architecture }
-        set { let value = newValue; architecture = value }
-    }
-    var _jsonArtifacts: [ArtifactInfo] {
-        get { artifacts.values }
-        set { let value = newValue; artifacts = Strato_Agent_V1_ImageInfoArtifactsSection.with { $0.values = value } }
-    }
 }
 
 // MARK: - Response Messages
@@ -829,26 +527,11 @@ extension Strato_Agent_V1_SuccessMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonMessage, forKey: .message)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonMessage: String? {
-        get { hasMessage ? (message) : nil }
-        set { if let value = newValue { message = value } else { clearMessage() } }
-    }
 }
 
 public typealias ErrorMessage = Strato_Agent_V1_ErrorMessage
 extension Strato_Agent_V1_ErrorMessage: WebSocketMessage {
     public var type: MessageType { .error }
-    /// Machine-readable error classification (see `ErrorCode`). Optional so
-    /// peers that predate it decode fine; absent means unclassified, which
-    /// receivers must treat as potentially transient (safe to retry).
 
     /// Well-known values for `code`.
     public enum ErrorCode {
@@ -903,26 +586,6 @@ extension Strato_Agent_V1_ErrorMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonCode, forKey: .code)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonError: String {
-        get { error }
-        set { let value = newValue; error = value }
-    }
-    var _jsonDetails: String? {
-        get { hasDetails ? (details) : nil }
-        set { if let value = newValue { details = value } else { clearDetails() } }
-    }
-    var _jsonCode: String? {
-        get { hasCode ? (code) : nil }
-        set { if let value = newValue { code = value } else { clearCode() } }
-    }
 }
 
 /// A version-tolerant JSON tree for data whose complete schema is not owned by
@@ -1018,9 +681,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
 /// `console_data` and `console_disconnect` stay stream-agnostic.
 public typealias ConsoleStream = Strato_Agent_V1_ConsoleStream
 extension Strato_Agent_V1_ConsoleStream: Codable {
-    /// The text console: the serial socket, falling back to virtio-console.
-
-    /// The framebuffer: the VM's VNC socket, relayed as opaque RFB bytes.
 
     public var protocolValue: String {
         switch self {
@@ -1059,7 +719,6 @@ extension Strato_Agent_V1_ConsoleStream: Codable {
 public typealias ConsoleConnectMessage = Strato_Agent_V1_ConsoleConnectMessage
 extension Strato_Agent_V1_ConsoleConnectMessage: WebSocketMessage {
     public var type: MessageType { .consoleConnect }
-    /// Which console to attach.
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1100,26 +759,6 @@ extension Strato_Agent_V1_ConsoleConnectMessage: WebSocketMessage {
         try container.encode(_jsonStream, forKey: .stream)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonSessionId: String {
-        get { sessionID }
-        set { let value = newValue; sessionID = value }
-    }
-    var _jsonStream: ConsoleStream {
-        get { stream }
-        set { let value = newValue; stream = value }
-    }
 }
 
 public typealias ConsoleDisconnectMessage = Strato_Agent_V1_ConsoleDisconnectMessage
@@ -1159,22 +798,6 @@ extension Strato_Agent_V1_ConsoleDisconnectMessage: WebSocketMessage {
         try container.encode(_jsonSessionId, forKey: .sessionId)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonSessionId: String {
-        get { sessionID }
-        set { let value = newValue; sessionID = value }
-    }
 }
 
 public typealias ConsoleDataMessage = Strato_Agent_V1_ConsoleDataMessage
@@ -1237,26 +860,6 @@ extension Strato_Agent_V1_ConsoleDataMessage: WebSocketMessage {
         try container.encode(_jsonData, forKey: .data)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonSessionId: String {
-        get { sessionID }
-        set { let value = newValue; sessionID = value }
-    }
-    var _jsonData: String {
-        get { data.base64EncodedString() }
-        set { let value = newValue; if let bytes = Data(base64Encoded: value) { data = bytes } else { clearData() } }
-    }
 }
 
 public typealias ConsoleConnectedMessage = Strato_Agent_V1_ConsoleConnectedMessage
@@ -1296,22 +899,6 @@ extension Strato_Agent_V1_ConsoleConnectedMessage: WebSocketMessage {
         try container.encode(_jsonSessionId, forKey: .sessionId)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonSessionId: String {
-        get { sessionID }
-        set { let value = newValue; sessionID = value }
-    }
 }
 
 public typealias ConsoleDisconnectedMessage = Strato_Agent_V1_ConsoleDisconnectedMessage
@@ -1357,26 +944,6 @@ extension Strato_Agent_V1_ConsoleDisconnectedMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonReason, forKey: .reason)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonSessionId: String {
-        get { sessionID }
-        set { let value = newValue; sessionID = value }
-    }
-    var _jsonReason: String? {
-        get { hasReason ? (reason) : nil }
-        set { if let value = newValue { reason = value } else { clearReason() } }
-    }
 }
 
 // MARK: - Message Envelope
@@ -1571,36 +1138,4 @@ extension Strato_Agent_V1_VMLogMessage: WebSocketMessage {
         try container.encodeIfPresent(_jsonOperation, forKey: .operation)
     }
 
-    var _jsonRequestId: String {
-        get { requestID }
-        set { let value = newValue; requestID = value }
-    }
-    var _jsonTimestamp: Date {
-        get { timestamp.date }
-        set { let value = newValue; timestamp = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonVmId: String {
-        get { vmID }
-        set { let value = newValue; vmID = value }
-    }
-    var _jsonLevel: VMLogLevel {
-        get { level }
-        set { let value = newValue; level = value }
-    }
-    var _jsonSource: VMLogSource {
-        get { source }
-        set { let value = newValue; source = value }
-    }
-    var _jsonEventType: VMEventType {
-        get { eventType }
-        set { let value = newValue; eventType = value }
-    }
-    var _jsonMessage: String {
-        get { message }
-        set { let value = newValue; message = value }
-    }
-    var _jsonOperation: String? {
-        get { hasOperation ? (operation) : nil }
-        set { if let value = newValue { operation = value } else { clearOperation() } }
-    }
 }

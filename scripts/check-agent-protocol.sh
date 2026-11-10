@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 bash -n scripts/agent-protocol.sh scripts/check-agent-protocol.sh scripts/install-agent-protocol-tools.sh
 swift format lint --strict --recursive tests/agent-protocol-peers/Package.swift tests/agent-protocol-peers/Sources
+python3 scripts/tests/test_agent_protocol_accessors.py
 bash scripts/agent-protocol.sh check
 if [[ $# -gt 0 ]]; then
     base="$1"

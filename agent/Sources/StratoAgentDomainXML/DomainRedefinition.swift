@@ -130,8 +130,8 @@ public enum DomainRedefinition {
                                     driver.removeAttribute(name)
                                 }
                             }
-                            setOptional("cache", policy.hasCacheMode ? policy.cacheMode.protocolValue : nil)
-                            setOptional("io", policy.hasIoMode ? policy.ioMode.protocolValue : nil)
+                            setOptional("cache", policy.optionalCacheMode?.protocolValue)
+                            setOptional("io", policy.optionalIoMode?.protocolValue)
                             setOptional("discard", policy.discard ? "unmap" : nil)
                             setOptional("detect_zeroes", policy.discard ? "unmap" : nil)
                             setOptional("queues", policy.hasQueueCount ? String(policy.queueCount) : nil)

@@ -25,10 +25,17 @@ fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobu
   typealias Version = _2
 }
 
+/// Shape of the artifact a `DesiredAgentUpdate` points at.
 public nonisolated enum Strato_Agent_V1_AgentUpdateArtifactKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// A gzipped tarball containing the agent binary as a member
+  /// (`DesiredAgentUpdate.tarball_member`) — the shape of the published
+  /// release assets, which bundle control plane and agent together.
   case tarball // = 1
+
+  /// A bare executable: the downloaded file *is* the new agent binary.
   case binary // = 2
   case UNRECOGNIZED(Int)
 
@@ -63,12 +70,30 @@ public nonisolated enum Strato_Agent_V1_AgentUpdateArtifactKind: SwiftProtobuf.E
 
 }
 
+/// The role a single stored file plays inside an image's artifact set.
+///
+/// A QEMU workload boots from a single `diskImage`. A Firecracker workload is a
+/// `kernel` + `rootfs` pair (with an optional `initramfs`) — there is no single
+/// disk. Modeling artifacts by kind lets the agent fetch exactly the files a
+/// given hypervisor driver needs and lets the control plane compute
+/// per-hypervisor compatibility from the set of kinds present.
 public nonisolated enum Strato_Agent_V1_ArtifactKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// A bootable disk image (qcow2/raw). Consumed by QEMU; can also be attached
+  /// as a Firecracker root drive.
   case diskImage // = 1
+
+  /// An uncompressed kernel image for direct kernel boot (Firecracker, or QEMU
+  /// `-kernel`). Opaque blob, no disk format.
   case kernel // = 2
+
+  /// An optional initial ramdisk paired with a `kernel`. Opaque blob.
   case initramfs // = 3
+
+  /// A root filesystem image attached as the boot drive under direct-kernel
+  /// boot. Carries a disk format (raw/qcow2).
   case rootfs // = 4
   case UNRECOGNIZED(Int)
 
@@ -109,6 +134,7 @@ public nonisolated enum Strato_Agent_V1_ArtifactKind: SwiftProtobuf.Enum, Swift.
 
 }
 
+/// A QEMU cache value that an agent has actually selected.
 public nonisolated enum Strato_Agent_V1_BlockDeviceCacheMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -147,6 +173,7 @@ public nonisolated enum Strato_Agent_V1_BlockDeviceCacheMode: SwiftProtobuf.Enum
 
 }
 
+/// A QEMU asynchronous-I/O engine that an agent has actually selected.
 public nonisolated enum Strato_Agent_V1_BlockDeviceIOMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -181,6 +208,11 @@ public nonisolated enum Strato_Agent_V1_BlockDeviceIOMode: SwiftProtobuf.Enum, S
 
 }
 
+/// CPU architecture of a hypervisor host or a guest image.
+///
+/// KVM and HVF acceleration are same-architecture only, so the scheduler must
+/// match guest architecture to host architecture; a mismatch would silently
+/// degrade to TCG emulation.
 public nonisolated enum Strato_Agent_V1_CPUArchitecture: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -219,6 +251,12 @@ public nonisolated enum Strato_Agent_V1_CPUArchitecture: SwiftProtobuf.Enum, Swi
 
 }
 
+/// The Ceph messenger policy Strato permits for volume traffic.
+///
+/// Volume I/O crosses the site underlay rather than the agent's SPIFFE-authenticated
+/// control channel. Keeping this as a closed enum, with no plaintext case, makes
+/// the secure transport requirement part of the desired-state contract instead
+/// of an agent-local default that different hosts could interpret differently.
 public nonisolated enum Strato_Agent_V1_CephMessengerMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -253,10 +291,19 @@ public nonisolated enum Strato_Agent_V1_CephMessengerMode: SwiftProtobuf.Enum, S
 
 }
 
+/// Which of a VM's consoles a session attaches to (issue #566).
+///
+/// Only `console_connect` carries this — once a session exists both sides key
+/// it by `session_id`, and the bytes in either direction are opaque, so
+/// `console_data` and `console_disconnect` stay stream-agnostic.
 public nonisolated enum Strato_Agent_V1_ConsoleStream: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// The text console: the serial socket, falling back to virtio-console.
   case serial // = 1
+
+  /// The framebuffer: the VM's VNC socket, relayed as opaque RFB bytes.
   case vnc // = 2
   case UNRECOGNIZED(Int)
 
@@ -329,12 +376,24 @@ public nonisolated enum Strato_Agent_V1_SandboxGuestIdleCoverage: SwiftProtobuf.
 
 }
 
+/// The state the control plane wants a sandbox to be in. Same contract as
+/// `DesiredVMStatus`: a goal, never a report, so no transitional or diagnostic
+/// cases — and deliberately strict decoding, because misinterpreting a desired
+/// status could stop or delete a running workload. An unknown value fails the
+/// whole sync and the agent keeps its current state; adding a case therefore
+/// requires a negotiated capability before the sender may use it.
 public nonisolated enum Strato_Agent_V1_DesiredSandboxStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
   case running // = 1
   case stopped // = 2
+
+  /// Durable, verified checkpoint exists and the original VMM is gone.
   case suspended // = 3
+
+  /// The sandbox should not exist on the agent at all (deletion in
+  /// progress). Rows are removed from the control-plane database only after
+  /// an agent confirms absence, exactly like VM deletes.
   case absent // = 4
   case UNRECOGNIZED(Int)
 
@@ -375,10 +434,20 @@ public nonisolated enum Strato_Agent_V1_DesiredSandboxStatus: SwiftProtobuf.Enum
 
 }
 
+/// The state the control plane wants one snapshot artifact's bytes to be in.
+///
+/// Two cases, like `DesiredVolumeStatus`: an artifact is frozen by
+/// construction, so there is no run state to want and nothing between "exists"
+/// and "gone". Decoded strictly for the volume reason, sharpened: misreading
+/// this destroys the only copy of a point in time a user chose to keep.
 public nonisolated enum Strato_Agent_V1_DesiredSnapshotStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
   case present // = 1
+
+  /// The artifact should not exist on the agent at all (deletion in
+  /// progress). The control-plane row is removed only after an agent confirms
+  /// absence by omitting the snapshot from its observed report.
   case absent // = 2
   case UNRECOGNIZED(Int)
 
@@ -413,12 +482,24 @@ public nonisolated enum Strato_Agent_V1_DesiredSnapshotStatus: SwiftProtobuf.Enu
 
 }
 
+/// The state the control plane wants a VM to be in. Distinct from `VMStatus`,
+/// which is purely *observed*: desired state is a goal ("be running"), never a
+/// report ("is starting"), so it has no transitional or diagnostic cases.
+///
+/// Binary decoding is deliberately strict:
+/// misinterpreting a desired status could stop or delete a running VM, so an
+/// unknown value fails the whole sync and the agent keeps its current state.
+/// Adding an actionable case requires a negotiated capability before use.
 public nonisolated enum Strato_Agent_V1_DesiredVMStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
   case running // = 1
   case shutdown // = 2
   case paused // = 3
+
+  /// The VM should not exist on the agent at all (deletion in progress).
+  /// Rows are removed from the control-plane database only after an agent
+  /// confirms absence, so deletes survive restarts on both sides.
   case absent // = 4
   case UNRECOGNIZED(Int)
 
@@ -459,10 +540,26 @@ public nonisolated enum Strato_Agent_V1_DesiredVMStatus: SwiftProtobuf.Enum, Swi
 
 }
 
+/// The state the control plane wants a volume's *data* to be in.
+///
+/// Two cases, deliberately: a volume has no run state, so attachment is a
+/// *field* of the entry rather than a status. Modelling attach as a status
+/// would make "present, but the attach failed" unrepresentable, and it would
+/// collide with size, which moves independently of where the volume is
+/// plugged in.
+///
+/// Decoded strictly, like `DesiredVMStatus` and for a sharper version of the
+/// same reason: misreading a desired volume status destroys the only copy of
+/// user data. An unknown value fails the whole sync and the agent keeps what
+/// it has.
 public nonisolated enum Strato_Agent_V1_DesiredVolumeStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
   case present // = 1
+
+  /// The volume should not exist on the agent at all (deletion in progress).
+  /// Rows are removed from the control-plane database only after an agent
+  /// confirms absence by omitting the volume from its observed report.
   case absent // = 2
   case UNRECOGNIZED(Int)
 
@@ -497,6 +594,11 @@ public nonisolated enum Strato_Agent_V1_DesiredVolumeStatus: SwiftProtobuf.Enum,
 
 }
 
+/// On-disk image formats a file-backed storage layer can produce.
+///
+/// This is part of the wire contract only for `.file` attachments. Block
+/// devices and native network storage do not acquire a file format merely
+/// because a hypervisor needs to choose a driver for them.
 public nonisolated enum Strato_Agent_V1_DiskFormat: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -535,10 +637,27 @@ public nonisolated enum Strato_Agent_V1_DiskFormat: SwiftProtobuf.Enum, Swift.Ca
 
 }
 
+/// Whether the guest gets a framebuffer, and over which protocol (issue #566).
+///
+/// A graphics console does not replace the serial/virtio-console pair; it joins
+/// them as a separate axis.
+///
+/// Decoding is strict for the same reason `DesiredVMStatus` is: a value this
+/// build does not recognize must not silently degrade to "no display" on a VM
+/// the API describes as having one. A future protocol (SPICE) arrives with its
+/// own negotiated capability gate, not by being tolerated here.
 public nonisolated enum Strato_Agent_V1_GraphicsMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// Headless: no display device or framebuffer server. The legacy JSON
+  /// codec spells this value "None"; field absence remains distinct.
   case headless // = 1
+
+  /// A VNC server on a Unix socket in the VM's directory, relayed to the
+  /// browser by the agent. There is no RFB password: the socket's file mode
+  /// and the control plane's `view_console` authorization are the security
+  /// boundary, exactly as for the QMP and serial sockets beside it.
   case vnc // = 2
   case UNRECOGNIZED(Int)
 
@@ -573,6 +692,7 @@ public nonisolated enum Strato_Agent_V1_GraphicsMode: SwiftProtobuf.Enum, Swift.
 
 }
 
+/// The agent's current state for a recorded exec session.
 public nonisolated enum Strato_Agent_V1_GuestExecRecordedStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -615,6 +735,8 @@ public nonisolated enum Strato_Agent_V1_GuestExecRecordedStatus: SwiftProtobuf.E
 
 }
 
+/// Whether an exec session is tied to a live frontend or records a durable
+/// command result for later retrieval.
 public nonisolated enum Strato_Agent_V1_GuestExecSessionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -691,6 +813,7 @@ public nonisolated enum Strato_Agent_V1_GuestPackageState: SwiftProtobuf.Enum, S
 
 }
 
+/// A resource whose guest control channel can host an exec session.
 public nonisolated enum Strato_Agent_V1_GuestResourceKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -729,11 +852,21 @@ public nonisolated enum Strato_Agent_V1_GuestResourceKind: SwiftProtobuf.Enum, S
 
 }
 
+/// Identity of a VM backend *driver*, not of the accelerator behind it.
+///
+/// QEMU and Firecracker are Linux drivers. Apple Virtualization is a native
+/// macOS driver; acceleration is reported separately from driver identity.
 public nonisolated enum Strato_Agent_V1_HypervisorType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// QEMU through libvirt (Linux)
   case qemu // = 1
+
+  /// Amazon Firecracker microVM (Linux only)
   case firecracker // = 2
+
+  /// Apple Virtualization.framework (macOS only)
   case appleVirtualization // = 3
   case UNRECOGNIZED(Int)
 
@@ -771,6 +904,9 @@ public nonisolated enum Strato_Agent_V1_HypervisorType: SwiftProtobuf.Enum, Swif
 
 }
 
+/// Address family discriminator, stored alongside addresses in the database
+/// and used to split mixed lists (e.g. DNS servers) when programming
+/// family-specific config.
 public nonisolated enum Strato_Agent_V1_IPFamily: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -809,6 +945,12 @@ public nonisolated enum Strato_Agent_V1_IPFamily: SwiftProtobuf.Enum, Swift.Case
 
 }
 
+/// Where a VM reads its first-boot guest configuration.
+///
+/// The ISO path is the compatibility fallback: the seed carries the complete
+/// NoCloud payload. The IMDS path keeps only the addressing bootstrap on the
+/// ISO, then follows a NoCloud `seedfrom` URL to the agent's link-local
+/// metadata service for mutable meta-data and user-data.
 public nonisolated enum Strato_Agent_V1_MetadataSource: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -847,10 +989,17 @@ public nonisolated enum Strato_Agent_V1_MetadataSource: SwiftProtobuf.Enum, Swif
 
 }
 
+/// Networking capability of an agent host, as reported at registration.
 public nonisolated enum Strato_Agent_V1_NetworkCapability: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// Software-defined overlay networking (OVN/OVS): inter-VM traffic,
+  /// tenant isolation, and inbound connections are supported.
   case overlay // = 1
+
+  /// Outbound NAT (QEMU SLIRP or Apple NAT), without managed VM-to-VM guarantees,
+  /// inbound routing, or logical-network isolation.
   case userMode // = 2
   case UNRECOGNIZED(Int)
 
@@ -885,6 +1034,7 @@ public nonisolated enum Strato_Agent_V1_NetworkCapability: SwiftProtobuf.Enum, S
 
 }
 
+/// Feature-scoped placement and serving promises a dependency can withdraw.
 public nonisolated enum Strato_Agent_V1_NodeCapability: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1155,6 +1305,10 @@ public nonisolated enum Strato_Agent_V1_NodeDependencyFunctionalState: SwiftProt
 
 }
 
+/// Stable identities for software the agent depends on to serve a feature.
+///
+/// The registry is compiled with the agent. Configuration can select a desired
+/// state for one of these modules, but cannot name an executable or load code.
 public nonisolated enum Strato_Agent_V1_NodeDependencyID: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1213,11 +1367,18 @@ public nonisolated enum Strato_Agent_V1_NodeDependencyID: SwiftProtobuf.Enum, Sw
 
 }
 
+/// Who may change a dependency's host state.
 public nonisolated enum Strato_Agent_V1_NodeDependencyOwnership: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// An operator or external orchestrator owns it. Strato only observes.
   case observeOnly // = 1
+
+  /// Strato may enable/start/restart the low-level supervisor, within policy.
   case ensureRunning // = 2
+
+  /// Strato owns both desired configuration and lifecycle.
   case reconcile // = 3
   case UNRECOGNIZED(Int)
 
@@ -1363,6 +1524,12 @@ public nonisolated enum Strato_Agent_V1_NodeDependencySupervisorState: SwiftProt
 
 }
 
+/// How the agent will treat a reported convergence failure on later syncs.
+///
+/// Optional on observed resource entries for wire compatibility: an older
+/// agent does not send it, and the control plane must keep its historical
+/// terminal-failure behavior in that case. `waitingOnDependency` never reaches
+/// an observed error at all, so it has no wire case.
 public nonisolated enum Strato_Agent_V1_ObservedFailureClassification: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1493,6 +1660,10 @@ public nonisolated enum Strato_Agent_V1_ObservedLoadBalancerStatus: SwiftProtobu
 
 }
 
+/// Whether one desired network-fabric object was realized by the reporting
+/// agent. Reports are statements about the agent's own OVSDB writes, not packet
+/// probes: `.active` means the requested writes and the verification read
+/// completed, while `.error` preserves a failed attempt for the control plane.
 public nonisolated enum Strato_Agent_V1_ObservedNetworkFabricStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1531,6 +1702,13 @@ public nonisolated enum Strato_Agent_V1_ObservedNetworkFabricStatus: SwiftProtob
 
 }
 
+/// Operating system of a hypervisor host.
+///
+/// Reported at agent registration (alongside `CPUArchitecture`) so the control
+/// plane can resolve the right release artifact for an agent self-update —
+/// release tarballs are published per OS/arch pair (`strato-<os>-<arch>.tar.gz`).
+/// The raw values match the asset-name components `deploy/agent/install.sh`
+/// derives from `uname -s`.
 public nonisolated enum Strato_Agent_V1_OperatingSystem: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1569,6 +1747,8 @@ public nonisolated enum Strato_Agent_V1_OperatingSystem: SwiftProtobuf.Enum, Swi
 
 }
 
+/// Operator-facing pressure summary. Raw signals remain the alert authority;
+/// this bounded state is the compact field later placement policy can consume.
 public nonisolated enum Strato_Agent_V1_ResourcePressureHealth: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1615,6 +1795,11 @@ public nonisolated enum Strato_Agent_V1_ResourcePressureHealth: SwiftProtobuf.En
 
 }
 
+/// Whether a resource signal was measured in the latest sampling pass.
+///
+/// Availability is part of every scalar signal so an unsupported kernel,
+/// backend, or guest source cannot be mistaken for a measured zero. A failed
+/// read is also unavailable: the next independent sampling pass retries it.
 public nonisolated enum Strato_Agent_V1_ResourceTelemetryAvailability: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1653,6 +1838,9 @@ public nonisolated enum Strato_Agent_V1_ResourceTelemetryAvailability: SwiftProt
 
 }
 
+/// The artifacts that make up one checkpoint archive. Raw values are stable
+/// wire/object-key identifiers; `filename` is the canonical name inside a
+/// snapshot directory and under an exported object prefix.
 public nonisolated enum Strato_Agent_V1_SandboxSnapshotArtifactKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1699,10 +1887,18 @@ public nonisolated enum Strato_Agent_V1_SandboxSnapshotArtifactKind: SwiftProtob
 
 }
 
+/// How the sandbox proceeds once its checkpoint is captured.
 public nonisolated enum Strato_Agent_V1_SandboxSnapshotMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// Resume the guest after the snapshot: the sandbox keeps running and
+  /// the snapshot is a point-in-time checkpoint it can later be restored to.
   case resume // = 1
+
+  /// Leave the guest stopped after the snapshot (checkpoint-and-stop): the
+  /// sandbox converges to `stopped` and can later resume from the
+  /// checkpoint via restore.
   case stop // = 2
   case UNRECOGNIZED(Int)
 
@@ -1737,12 +1933,24 @@ public nonisolated enum Strato_Agent_V1_SandboxSnapshotMode: SwiftProtobuf.Enum,
 
 }
 
+/// A sandbox's *observed* runtime state, as reported by an agent. Mirrors
+/// `VMStatus`, with one sandbox-specific case:
+/// `.exited`, because a sandbox's workload can finish on its own — something a
+/// VM never does from the control plane's point of view.
 public nonisolated enum Strato_Agent_V1_SandboxStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// Exists agent-side (rootfs materialized) but not running.
   case stopped // = 1
+
+  /// Durable, verified checkpoint exists and the original VMM is gone.
   case suspended // = 2
   case running // = 3
+
+  /// The workload ran and ended on its own; `ObservedSandboxState.exit_code`
+  /// carries the result. Terminal: distinct from `.stopped` (a control-plane
+  /// initiated stop) so one-shot workloads are not restarted.
   case exited // = 4
   case starting // = 5
   case stopping // = 6
@@ -1799,6 +2007,8 @@ public nonisolated enum Strato_Agent_V1_SandboxStatus: SwiftProtobuf.Enum, Swift
 
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated enum Strato_Agent_V1_GuestConfigObservationSection: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1845,11 +2055,27 @@ public nonisolated enum Strato_Agent_V1_GuestConfigObservationSection: SwiftProt
 
 }
 
+/// Which artifact family a snapshot entry belongs to, and therefore which
+/// backend on the agent captures and deletes it.
+///
+/// Decoded strictly, like `DesiredVMStatus` and for the same reason a volume's
+/// status is: an unknown kind must fail rather than route an artifact to the
+/// wrong backend, where "delete" would find nothing and quietly succeed.
 public nonisolated enum Strato_Agent_V1_SnapshotArtifactKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
+
+  /// A disk-only point-in-time copy of one volume — an external qcow2 overlay
+  /// written by the agent's storage backend. Parent: a volume.
   case volumeSnapshot // = 1
+
+  /// Guest RAM + device state + disk contents at one instant, written by
+  /// QEMU's `snapshot-save` job as an *internal* snapshot of the VM's own
+  /// qcow2 disks. Parent: a VM.
   case vmCheckpoint // = 2
+
+  /// Firecracker guest memory + vmstate + a rootfs copy, in an agent-owned
+  /// directory. Parent: a sandbox.
   case sandboxSnapshot // = 3
   case UNRECOGNIZED(Int)
 
@@ -2143,6 +2369,7 @@ public nonisolated enum Strato_Agent_V1_HostMemoryTier: SwiftProtobuf.Enum, Swif
 
 }
 
+/// Type of VM event
 public nonisolated enum Strato_Agent_V1_VMEventType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2193,6 +2420,7 @@ public nonisolated enum Strato_Agent_V1_VMEventType: SwiftProtobuf.Enum, Swift.C
 
 }
 
+/// Log level for VM log messages
 public nonisolated enum Strato_Agent_V1_VMLogLevel: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2243,6 +2471,7 @@ public nonisolated enum Strato_Agent_V1_VMLogLevel: SwiftProtobuf.Enum, Swift.Ca
 
 }
 
+/// Source of the log message
 public nonisolated enum Strato_Agent_V1_VMLogSource: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2281,6 +2510,9 @@ public nonisolated enum Strato_Agent_V1_VMLogSource: SwiftProtobuf.Enum, Swift.C
 
 }
 
+/// Observed VM lifecycle state. UNKNOWN is an explicit observation; it differs
+/// from an unrecognized enum number, which fails binary validation. Legacy JSON
+/// decoding retains its historical fallback to UNKNOWN.
 public nonisolated enum Strato_Agent_V1_VMStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2343,6 +2575,13 @@ public nonisolated enum Strato_Agent_V1_VMStatus: SwiftProtobuf.Enum, Swift.Case
 
 }
 
+/// The host-cache policy requested for a QEMU volume attachment.
+///
+/// Neither optimized mode is the default until representative benchmarks have
+/// compared them. `conservative` preserves the historical libvirt/QEMU
+/// defaults; `direct` asks the agent to use direct I/O only when its live
+/// capability probe succeeds; and `cachedShared` explicitly retains the host
+/// page cache for read-mostly images whose backing pages can be shared.
 public nonisolated enum Strato_Agent_V1_VolumeBlockMode: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2419,14 +2658,44 @@ public nonisolated enum Strato_Agent_V1_WorkloadHardLimitPolicy: SwiftProtobuf.E
 
 }
 
+/// Which kind of workload a reconcile work item, manifest entry, or wire-level
+/// teardown record refers to (issue #417). The reconciler engine — diff,
+/// per-key serial lanes, generation guard, attempt cap, failure classification
+/// — is shared across kinds; only the actuation differs: VM items route to
+/// hypervisor drivers, sandbox items to the sandbox runtime.
+///
+/// Lives in the shared package because it is also a wire discriminator
+/// (STR-98): `DesiredWorkloadTombstone` and `UnrecognizedWorkload` are
+/// kind-tagged, so the control plane names the same kinds the agent does
+/// rather than mapping between two vocabularies.
+///
+/// `Codable` because the on-disk workload manifest tags each entry with its
+/// kind; manifests written before sandboxes existed have no kind and decode
+/// as `.vm`.
 public nonisolated enum Strato_Agent_V1_WorkloadKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
   case vm // = 1
   case sandbox // = 2
+
+  /// A managed volume (STR-148). Unlike the first two kinds, nothing is ever
+  /// written to `VMManifestStore` under this kind: a volume's durable record
+  /// on the agent is its directory in the storage backend, which is also what
+  /// the reconciler enumerates as its presence set. Attachment, the one piece
+  /// of volume state the filesystem cannot answer, rides the *VM's* manifest
+  /// entry (`VMSpec.volumes`), because that is what the spawn path reads.
   case volume // = 3
+
+  /// A point-in-time copy of one volume's data — an external qcow2 overlay
+  /// (ADR 0001 stage 8, STR-150).
   case volumeSnapshot // = 4
+
+  /// A full-VM checkpoint: guest RAM and device state inside the VM's own
+  /// qcow2 disks (STR-150).
   case vmCheckpoint // = 5
+
+  /// A sandbox checkpoint: Firecracker memory + vmstate + rootfs copy in an
+  /// agent-owned directory (STR-150).
   case sandboxSnapshot // = 6
   case UNRECOGNIZED(Int)
 
@@ -2473,6 +2742,8 @@ public nonisolated enum Strato_Agent_V1_WorkloadKind: SwiftProtobuf.Enum, Swift.
 
 }
 
+/// Each backend must prove the whole contract before it can be used for burstable work.
+/// Ordinary unjailed Firecracker VMs have no corresponding eligible backend case.
 public nonisolated enum Strato_Agent_V1_WorkloadResourceClassBackend: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2549,11 +2820,14 @@ public nonisolated enum Strato_Agent_V1_WorkloadResourceClassKind: SwiftProtobuf
 
 }
 
+/// One typed workload message plus its required negotiated capabilities.
 public nonisolated struct Strato_Agent_V1_AgentEnvelope: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Capabilities required to interpret this entire message. Reject the envelope before applying any of it
+  /// when the negotiated session lacks one.
   public var requiredCapabilities: [String] = []
 
   public var body: Strato_Agent_V1_AgentEnvelope.OneOf_Body? = nil
@@ -2797,7 +3071,8 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_storage._requestID ?? String()}
     set {_uniqueStorage()._requestID = newValue}
@@ -2807,7 +3082,8 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {_uniqueStorage()._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._timestamp = newValue}
@@ -2817,7 +3093,7 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {_uniqueStorage()._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var agentID: String {
     get {_storage._agentID ?? String()}
     set {_uniqueStorage()._agentID = newValue}
@@ -2827,7 +3103,7 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   /// Clears the value of `agentID`. Subsequent reads from it will return its default value.
   public mutating func clearAgentID() {_uniqueStorage()._agentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resources: Strato_Agent_V1_AgentResources {
     get {_storage._resources ?? Strato_Agent_V1_AgentResources()}
     set {_uniqueStorage()._resources = newValue}
@@ -2837,7 +3113,7 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   /// Clears the value of `resources`. Subsequent reads from it will return its default value.
   public mutating func clearResources() {_uniqueStorage()._resources = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var dependencyObservations: Strato_Agent_V1_AgentHeartbeatMessageDependencyObservationsSection {
     get {_storage._dependencyObservations ?? Strato_Agent_V1_AgentHeartbeatMessageDependencyObservationsSection()}
     set {_uniqueStorage()._dependencyObservations = newValue}
@@ -2847,7 +3123,9 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessage: @unchecked Send
   /// Clears the value of `dependencyObservations`. Subsequent reads from it will return its default value.
   public mutating func clearDependencyObservations() {_uniqueStorage()._dependencyObservations = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Last host-resource sample gathered independently of this heartbeat.
+  /// Absent before the first successful sampling pass; absence is not a zero-valued sample.
+  /// Optional:
   public var hostResourceTelemetry: Strato_Agent_V1_HostResourceTelemetry {
     get {_storage._hostResourceTelemetry ?? Strato_Agent_V1_HostResourceTelemetry()}
     set {_uniqueStorage()._hostResourceTelemetry = newValue}
@@ -2869,7 +3147,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_storage._requestID ?? String()}
     set {_uniqueStorage()._requestID = newValue}
@@ -2879,7 +3158,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {_uniqueStorage()._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._timestamp = newValue}
@@ -2889,7 +3169,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {_uniqueStorage()._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var agentID: String {
     get {_storage._agentID ?? String()}
     set {_uniqueStorage()._agentID = newValue}
@@ -2899,7 +3179,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `agentID`. Subsequent reads from it will return its default value.
   public mutating func clearAgentID() {_uniqueStorage()._agentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var hostname: String {
     get {_storage._hostname ?? String()}
     set {_uniqueStorage()._hostname = newValue}
@@ -2909,7 +3189,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `hostname`. Subsequent reads from it will return its default value.
   public mutating func clearHostname() {_uniqueStorage()._hostname = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var version: String {
     get {_storage._version ?? String()}
     set {_uniqueStorage()._version = newValue}
@@ -2919,7 +3199,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `version`. Subsequent reads from it will return its default value.
   public mutating func clearVersion() {_uniqueStorage()._version = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resources: Strato_Agent_V1_AgentResources {
     get {_storage._resources ?? Strato_Agent_V1_AgentResources()}
     set {_uniqueStorage()._resources = newValue}
@@ -2929,7 +3209,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `resources`. Subsequent reads from it will return its default value.
   public mutating func clearResources() {_uniqueStorage()._resources = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Host CPU architecture.
+  /// Required:
   public var architecture: Strato_Agent_V1_CPUArchitecture {
     get {_storage._architecture ?? .unspecified}
     set {_uniqueStorage()._architecture = newValue}
@@ -2939,7 +3220,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {_uniqueStorage()._architecture = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Every hypervisor on this host with probed availability and capabilities.
+  /// Required:
   public var hypervisors: Strato_Agent_V1_AgentRegisterMessageHypervisorsSection {
     get {_storage._hypervisors ?? Strato_Agent_V1_AgentRegisterMessageHypervisorsSection()}
     set {_uniqueStorage()._hypervisors = newValue}
@@ -2949,7 +3231,9 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `hypervisors`. Subsequent reads from it will return its default value.
   public mutating func clearHypervisors() {_uniqueStorage()._hypervisors = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Networking capability of this host. Absence means networking is disabled or
+  /// its host probe could not establish a usable mode.
+  /// Optional:
   public var networkCapability: Strato_Agent_V1_NetworkCapability {
     get {_storage._networkCapability ?? .unspecified}
     set {_uniqueStorage()._networkCapability = newValue}
@@ -2959,7 +3243,9 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `networkCapability`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkCapability() {_uniqueStorage()._networkCapability = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Stable protocol major and the capabilities this agent understands. Registration negotiates the agreement
+  /// for this connection; additive fields do not require a major bump.
+  /// Required:
   public var protocolOffer: Strato_Agent_V1_ProtocolOffer {
     get {_storage._protocolOffer ?? Strato_Agent_V1_ProtocolOffer()}
     set {_uniqueStorage()._protocolOffer = newValue}
@@ -2969,7 +3255,12 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `protocolOffer`. Subsequent reads from it will return its default value.
   public mutating func clearProtocolOffer() {_uniqueStorage()._protocolOffer = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this agent runs sandbox workloads (OCI-image Firecracker
+  /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
+  /// and reports them back in `ObservedStateReport.sandboxes`. The scheduler
+  /// keys placement on this explicit signal because the
+  /// separately installed runtime, not the wire version, determines support.
+  /// Required:
   public var sandboxCapable: Bool {
     get {_storage._sandboxCapable ?? false}
     set {_uniqueStorage()._sandboxCapable = newValue}
@@ -2979,7 +3270,25 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `sandboxCapable`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxCapable() {_uniqueStorage()._sandboxCapable = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this agent can realize a **sandbox NIC** (STR-103), as opposed
+  /// to merely running sandboxes.
+  ///
+  /// A second signal on top of `sandbox_capable`, and for a sharper version of
+  /// the same reason: the pieces a sandbox NIC needs are installed
+  /// independently of the agent binary, so no version and no other capability
+  /// implies them. It takes OVN/OVS networking (the veth + in-namespace TAP
+  /// recipe has no user-mode equivalent), the jailer barrier (the NIC lives in
+  /// the jail's network namespace, and an unjailed sandbox has none), and a
+  /// **guest image** whose init understands the config drive's `network`
+  /// block — and the guest image is a separately distributed artifact at
+  /// `sandbox_guest_image_path`, so an up-to-date agent can be paired with a
+  /// guest that would refuse the document.
+  ///
+  /// The control plane uses it twice: the scheduler refuses to place a
+  /// sandbox that has a NIC on a host without it, and desired-state assembly
+  /// withholds `SandboxSpec.network` from such a host — so an agent that
+  /// cannot realize a NIC is never handed one.
+  /// Required:
   public var sandboxNetworkingCapable: Bool {
     get {_storage._sandboxNetworkingCapable ?? false}
     set {_uniqueStorage()._sandboxNetworkingCapable = newValue}
@@ -2989,7 +3298,13 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `sandboxNetworkingCapable`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxNetworkingCapable() {_uniqueStorage()._sandboxNetworkingCapable = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this host can give a guest an emulated TPM 2.0 — it has a
+  /// usable `swtpm` binary (issue #565). Like `sandbox_capable`, speaking the
+  /// protocol compatibility is deliberately not sufficient: the protocol carries
+  /// `MachineProfile.tpm`, but only a host with swtpm installed can realize
+  /// it, and a VM whose vTPM is silently dropped fails Windows setup with no
+  /// explanation.
+  /// Required:
   public var tpmCapable: Bool {
     get {_storage._tpmCapable ?? false}
     set {_uniqueStorage()._tpmCapable = newValue}
@@ -2999,7 +3314,10 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `tpmCapable`. Subsequent reads from it will return its default value.
   public mutating func clearTpmCapable() {_uniqueStorage()._tpmCapable = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Host operating system, reported so the control plane can resolve the
+  /// right release artifact for an agent self-update (assets are published
+  /// per OS/arch pair).
+  /// Required:
   public var operatingSystem: Strato_Agent_V1_OperatingSystem {
     get {_storage._operatingSystem ?? .unspecified}
     set {_uniqueStorage()._operatingSystem = newValue}
@@ -3009,7 +3327,11 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `operatingSystem`. Subsequent reads from it will return its default value.
   public mutating func clearOperatingSystem() {_uniqueStorage()._operatingSystem = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Descriptive hardware/platform/OS details for operators (CPU model,
+  /// kernel version, distribution, physical core count, boot time, ...).
+  /// Purely informational and entirely best-effort; any individual field the
+  /// agent could not probe is absent.
+  /// Optional:
   public var hostInfo: Strato_Agent_V1_HostInfo {
     get {_storage._hostInfo ?? Strato_Agent_V1_HostInfo()}
     set {_uniqueStorage()._hostInfo = newValue}
@@ -3019,7 +3341,21 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `hostInfo`. Subsequent reads from it will return its default value.
   public mutating func clearHostInfo() {_uniqueStorage()._hostInfo = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this host can actually run the per-network DNS resolver
+  /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
+  ///
+  /// Like `sandbox_capable` and `tpm_capable`, understanding `resolver_enabled`
+  /// is not sufficient for realization,
+  /// but only a host with CoreDNS installed can answer on the resolver
+  /// address, and a guest pointed at an address nothing listens on loses
+  /// external name resolution entirely.
+  ///
+  /// The control plane combines this **across the whole site** before
+  /// enabling a network's resolver, because the DHCP option is authored once
+  /// per network by the topology authority while the listener is per
+  /// chassis: one incapable host would otherwise give a network DNS that
+  /// works until a VM lands somewhere else.
+  /// Required:
   public var resolverCapable: Bool {
     get {_storage._resolverCapable ?? false}
     set {_uniqueStorage()._resolverCapable = newValue}
@@ -3029,7 +3365,11 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `resolverCapable`. Subsequent reads from it will return its default value.
   public mutating func clearResolverCapable() {_uniqueStorage()._resolverCapable = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this host initialized the guest-facing instance metadata
+  /// service. This is independent of overlay networking: an OVN host may
+  /// disable the service in its agent configuration or lack a host tool the
+  /// listener supervisor needs.
+  /// Required:
   public var metadataServiceCapable: Bool {
     get {_storage._metadataServiceCapable ?? false}
     set {_uniqueStorage()._metadataServiceCapable = newValue}
@@ -3039,7 +3379,11 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `metadataServiceCapable`. Subsequent reads from it will return its default value.
   public mutating func clearMetadataServiceCapable() {_uniqueStorage()._metadataServiceCapable = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Periodic, feature-scoped software dependency health. This is also sent
+  /// at registration so a newly connected agent is not placement-eligible in
+  /// the window before its first heartbeat.
+  /// Absence/empty advertises no burstable support. STR272 must supply verified backend evidence.
+  /// Optional:
   public var resourceClassEnforcement: Strato_Agent_V1_AgentRegisterMessageResourceClassEnforcementSection {
     get {_storage._resourceClassEnforcement ?? Strato_Agent_V1_AgentRegisterMessageResourceClassEnforcementSection()}
     set {_uniqueStorage()._resourceClassEnforcement = newValue}
@@ -3049,7 +3393,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessage: @unchecked Senda
   /// Clears the value of `resourceClassEnforcement`. Subsequent reads from it will return its default value.
   public mutating func clearResourceClassEnforcement() {_uniqueStorage()._resourceClassEnforcement = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var dependencyObservations: Strato_Agent_V1_AgentRegisterMessageDependencyObservationsSection {
     get {_storage._dependencyObservations ?? Strato_Agent_V1_AgentRegisterMessageDependencyObservationsSection()}
     set {_uniqueStorage()._dependencyObservations = newValue}
@@ -3071,7 +3415,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterResponseMessage: Sendable
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3081,7 +3426,8 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterResponseMessage: Sendable
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3091,7 +3437,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterResponseMessage: Sendable
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var agentID: String {
     get {_agentID ?? String()}
     set {_agentID = newValue}
@@ -3101,7 +3447,7 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterResponseMessage: Sendable
   /// Clears the value of `agentID`. Subsequent reads from it will return its default value.
   public mutating func clearAgentID() {self._agentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -3111,7 +3457,9 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterResponseMessage: Sendable
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Protocol major, capabilities and session identifier negotiated for this registration. Subsequent workload
+  /// traffic must use this agreement.
+  /// Required:
   public var agreement: Strato_Agent_V1_ProtocolAgreement {
     get {_agreement ?? Strato_Agent_V1_ProtocolAgreement()}
     set {_agreement = newValue}
@@ -3137,7 +3485,9 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Allocatable CPU capacity in millionths of one logical CPU. Absence means precise accounting is
+  /// unavailable.
+  /// Optional:
   public var availableCpuMicroUnits: Int64 {
     get {_availableCpuMicroUnits ?? 0}
     set {_availableCpuMicroUnits = newValue}
@@ -3147,7 +3497,9 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `availableCpuMicroUnits`. Subsequent reads from it will return its default value.
   public mutating func clearAvailableCpuMicroUnits() {self._availableCpuMicroUnits = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Physical, reserved and workload memory ledger. Absence means the detailed accounting is
+  /// unavailable.
+  /// Optional:
   public var memoryAccounting: Strato_Agent_V1_HostMemoryAccounting {
     get {_memoryAccounting ?? Strato_Agent_V1_HostMemoryAccounting()}
     set {_memoryAccounting = newValue}
@@ -3157,7 +3509,8 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `memoryAccounting`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryAccounting() {self._memoryAccounting = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Total host logical CPU count.
+  /// Required:
   public var totalCpu: Int64 {
     get {_totalCpu ?? 0}
     set {_totalCpu = newValue}
@@ -3167,7 +3520,9 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `totalCpu`. Subsequent reads from it will return its default value.
   public mutating func clearTotalCpu() {self._totalCpu = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whole logical CPUs available for placement; the coarse projection of available_cpu_micro_units
+  /// when supplied.
+  /// Required:
   public var availableCpu: Int64 {
     get {_availableCpu ?? 0}
     set {_availableCpu = newValue}
@@ -3177,7 +3532,8 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `availableCpu`. Subsequent reads from it will return its default value.
   public mutating func clearAvailableCpu() {self._availableCpu = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Physical host memory in bytes.
+  /// Required:
   public var totalMemory: Int64 {
     get {_totalMemory ?? 0}
     set {_totalMemory = newValue}
@@ -3187,7 +3543,9 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `totalMemory`. Subsequent reads from it will return its default value.
   public mutating func clearTotalMemory() {self._totalMemory = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Memory in bytes available for new workload commitments after host and existing workload
+  /// reservations.
+  /// Required:
   public var availableMemory: Int64 {
     get {_availableMemory ?? 0}
     set {_availableMemory = newValue}
@@ -3197,7 +3555,8 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `availableMemory`. Subsequent reads from it will return its default value.
   public mutating func clearAvailableMemory() {self._availableMemory = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Total local storage capacity in bytes.
+  /// Required:
   public var totalDisk: Int64 {
     get {_totalDisk ?? 0}
     set {_totalDisk = newValue}
@@ -3207,7 +3566,8 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `totalDisk`. Subsequent reads from it will return its default value.
   public mutating func clearTotalDisk() {self._totalDisk = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Provisioned local-disk bytes still available for new commitments.
+  /// Required:
   public var availableDisk: Int64 {
     get {_availableDisk ?? 0}
     set {_availableDisk = newValue}
@@ -3217,7 +3577,8 @@ public nonisolated struct Strato_Agent_V1_AgentResources: Sendable {
   /// Clears the value of `availableDisk`. Subsequent reads from it will return its default value.
   public mutating func clearAvailableDisk() {self._availableDisk = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Bytes physically free on the filesystem backing local volumes.
+  /// Required:
   public var physicalFreeDisk: Int64 {
     get {_physicalFreeDisk ?? 0}
     set {_physicalFreeDisk = newValue}
@@ -3247,7 +3608,8 @@ public nonisolated struct Strato_Agent_V1_AgentUnregisterMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3257,7 +3619,8 @@ public nonisolated struct Strato_Agent_V1_AgentUnregisterMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3267,7 +3630,7 @@ public nonisolated struct Strato_Agent_V1_AgentUnregisterMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var agentID: String {
     get {_agentID ?? String()}
     set {_agentID = newValue}
@@ -3286,12 +3649,18 @@ public nonisolated struct Strato_Agent_V1_AgentUnregisterMessage: Sendable {
   fileprivate var _agentID: String? = nil
 }
 
+/// The complete block-device policy an agent selected for one attachment.
+///
+/// This is applied state, not a capability claim. Optional driver values mean
+/// the corresponding libvirt XML attribute was deliberately omitted. An
+/// inactive value is the explicit current-agent report for a detached volume;
+/// absence of the whole structure means an older agent did not report policy.
 public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var active: Bool {
     get {_active ?? false}
     set {_active = newValue}
@@ -3301,7 +3670,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `active`. Subsequent reads from it will return its default value.
   public mutating func clearActive() {self._active = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var requestedMode: Strato_Agent_V1_VolumeBlockMode {
     get {_requestedMode ?? .unspecified}
     set {_requestedMode = newValue}
@@ -3311,7 +3680,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `requestedMode`. Subsequent reads from it will return its default value.
   public mutating func clearRequestedMode() {self._requestedMode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var cacheMode: Strato_Agent_V1_BlockDeviceCacheMode {
     get {_cacheMode ?? .unspecified}
     set {_cacheMode = newValue}
@@ -3321,7 +3690,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `cacheMode`. Subsequent reads from it will return its default value.
   public mutating func clearCacheMode() {self._cacheMode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var ioMode: Strato_Agent_V1_BlockDeviceIOMode {
     get {_ioMode ?? .unspecified}
     set {_ioMode = newValue}
@@ -3331,7 +3700,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `ioMode`. Subsequent reads from it will return its default value.
   public mutating func clearIoMode() {self._ioMode = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var discard: Bool {
     get {_discard ?? false}
     set {_discard = newValue}
@@ -3341,7 +3710,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `discard`. Subsequent reads from it will return its default value.
   public mutating func clearDiscard() {self._discard = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var nonRotational: Bool {
     get {_nonRotational ?? false}
     set {_nonRotational = newValue}
@@ -3351,7 +3720,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `nonRotational`. Subsequent reads from it will return its default value.
   public mutating func clearNonRotational() {self._nonRotational = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var queueCount: Int64 {
     get {_queueCount ?? 0}
     set {_queueCount = newValue}
@@ -3361,7 +3730,7 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   /// Clears the value of `queueCount`. Subsequent reads from it will return its default value.
   public mutating func clearQueueCount() {self._queueCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var fallbackReason: String {
     get {_fallbackReason ?? String()}
     set {_fallbackReason = newValue}
@@ -3385,12 +3754,19 @@ public nonisolated struct Strato_Agent_V1_AppliedBlockDevicePolicy: Sendable {
   fileprivate var _fallbackReason: String? = nil
 }
 
+/// Download information for a single typed artifact within an image's set.
+///
+/// The `download_url` is a control-plane-relative path
+/// (`/api/projects/{p}/images/{i}/download?artifact={kind}`). The agent
+/// resolves it against the control-plane base URL it already dials and
+/// authenticates the fetch with its SPIFFE SVID over mTLS — there is no
+/// credential in the URL itself (issue #493).
 public nonisolated struct Strato_Agent_V1_ArtifactInfo: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_ArtifactKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -3400,7 +3776,7 @@ public nonisolated struct Strato_Agent_V1_ArtifactInfo: Sendable {
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var filename: String {
     get {_filename ?? String()}
     set {_filename = newValue}
@@ -3410,7 +3786,7 @@ public nonisolated struct Strato_Agent_V1_ArtifactInfo: Sendable {
   /// Clears the value of `filename`. Subsequent reads from it will return its default value.
   public mutating func clearFilename() {self._filename = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var checksum: String {
     get {_checksum ?? String()}
     set {_checksum = newValue}
@@ -3420,7 +3796,7 @@ public nonisolated struct Strato_Agent_V1_ArtifactInfo: Sendable {
   /// Clears the value of `checksum`. Subsequent reads from it will return its default value.
   public mutating func clearChecksum() {self._checksum = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var size: Int64 {
     get {_size ?? 0}
     set {_size = newValue}
@@ -3430,7 +3806,7 @@ public nonisolated struct Strato_Agent_V1_ArtifactInfo: Sendable {
   /// Clears the value of `size`. Subsequent reads from it will return its default value.
   public mutating func clearSize() {self._size = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var downloadURL: String {
     get {_downloadURL ?? String()}
     set {_downloadURL = newValue}
@@ -3456,7 +3832,8 @@ public nonisolated struct Strato_Agent_V1_BootSourceDisk: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Host firmware path. Absence uses the backend default firmware.
+  /// Optional:
   public var firmware: String {
     get {_firmware ?? String()}
     set {_firmware = newValue}
@@ -3478,7 +3855,8 @@ public nonisolated struct Strato_Agent_V1_BootSourceDirectKernel: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Host kernel path used for direct kernel boot.
+  /// Required:
   public var kernel: String {
     get {_kernel ?? String()}
     set {_kernel = newValue}
@@ -3488,7 +3866,8 @@ public nonisolated struct Strato_Agent_V1_BootSourceDirectKernel: Sendable {
   /// Clears the value of `kernel`. Subsequent reads from it will return its default value.
   public mutating func clearKernel() {self._kernel = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Host initramfs path; absent when direct kernel boot does not require one.
+  /// Optional:
   public var initramfs: String {
     get {_initramfs ?? String()}
     set {_initramfs = newValue}
@@ -3498,7 +3877,8 @@ public nonisolated struct Strato_Agent_V1_BootSourceDirectKernel: Sendable {
   /// Clears the value of `initramfs`. Subsequent reads from it will return its default value.
   public mutating func clearInitramfs() {self._initramfs = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Kernel command line; absence leaves it unset.
+  /// Optional:
   public var cmdline: String {
     get {_cmdline ?? String()}
     set {_cmdline = newValue}
@@ -3517,6 +3897,7 @@ public nonisolated struct Strato_Agent_V1_BootSourceDirectKernel: Sendable {
   fileprivate var _cmdline: String? = nil
 }
 
+/// How a VM boots. Neutral between firmware (disk image) boot and direct kernel boot.
 public nonisolated struct Strato_Agent_V1_BootSource: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -3551,12 +3932,19 @@ public nonisolated struct Strato_Agent_V1_BootSource: Sendable {
   public init() {}
 }
 
+/// Everything an agent needs to act as a client of one Ceph-backed volume.
+///
+/// `credential_id` is the stable identity of the scoped cephx credential. The
+/// secret material itself is carried separately as `keyring`; agents use the
+/// identity to replace that material atomically and to derive durable local and
+/// libvirt references without treating the secret contents as an identifier.
 public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Strato's stable identity for the external or managed Ceph cluster.
+  /// Required:
   /// Format: uuid.
   public var clusterID: String {
     get {_clusterID ?? String()}
@@ -3567,7 +3955,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `clusterID`. Subsequent reads from it will return its default value.
   public mutating func clearClusterID() {self._clusterID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Ceph's own cluster identity, written into the generated `ceph.conf`.
+  /// Required:
   public var fsid: String {
     get {_fsid ?? String()}
     set {_fsid = newValue}
@@ -3577,7 +3966,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `fsid`. Subsequent reads from it will return its default value.
   public mutating func clearFsid() {self._fsid = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// RBD pool containing the image.
+  /// Required:
   public var pool: String {
     get {_pool ?? String()}
     set {_pool = newValue}
@@ -3587,7 +3977,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `pool`. Subsequent reads from it will return its default value.
   public mutating func clearPool() {self._pool = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Project-scoped RBD namespace. This is never shared across projects.
+  /// Required:
   public var namespace: String {
     get {_namespace ?? String()}
     set {_namespace = newValue}
@@ -3597,7 +3988,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `namespace`. Subsequent reads from it will return its default value.
   public mutating func clearNamespace() {self._namespace = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Scoped cephx identity, including its `client.` prefix.
+  /// Required:
   public var clientName: String {
     get {_clientName ?? String()}
     set {_clientName = newValue}
@@ -3607,7 +3999,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `clientName`. Subsequent reads from it will return its default value.
   public mutating func clearClientName() {self._clientName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monitor endpoints in the form accepted by Ceph clients.
+  /// Required:
   public var monEndpoints: Strato_Agent_V1_CephVolumeStorageMonEndpointsSection {
     get {_monEndpoints ?? Strato_Agent_V1_CephVolumeStorageMonEndpointsSection()}
     set {_monEndpoints = newValue}
@@ -3617,7 +4010,10 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `monEndpoints`. Subsequent reads from it will return its default value.
   public mutating func clearMonEndpoints() {self._monEndpoints = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Opaque version identity for this credential and its libvirt secret.
+  /// Rotation mints a new id and permanently revokes the old one; callers
+  /// must not assume this equals a project-access identity.
+  /// Required:
   /// Format: uuid.
   public var credentialID: String {
     get {_credentialID ?? String()}
@@ -3628,7 +4024,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `credentialID`. Subsequent reads from it will return its default value.
   public mutating func clearCredentialID() {self._credentialID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete cephx keyring contents. This is secret material and must not be logged.
+  /// Required:
   public var keyring: String {
     get {_keyring ?? String()}
     set {_keyring = newValue}
@@ -3638,7 +4035,8 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorage: Sendable {
   /// Clears the value of `keyring`. Subsequent reads from it will return its default value.
   public mutating func clearKeyring() {self._keyring = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Messenger policy agents must write into their generated configuration.
+  /// Required:
   public var messengerMode: Strato_Agent_V1_CephMessengerMode {
     get {_messengerMode ?? .unspecified}
     set {_messengerMode = newValue}
@@ -3668,7 +4066,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3678,7 +4077,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3688,7 +4088,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -3698,7 +4098,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -3708,7 +4108,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Which console to attach.
+  /// Required:
   public var stream: Strato_Agent_V1_ConsoleStream {
     get {_stream ?? .unspecified}
     set {_stream = newValue}
@@ -3734,7 +4135,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectedMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3744,7 +4146,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectedMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3754,7 +4157,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectedMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -3764,7 +4167,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleConnectedMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -3789,7 +4192,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDataMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3799,7 +4203,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDataMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3809,7 +4214,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDataMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -3819,7 +4224,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDataMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -3829,7 +4234,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDataMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Raw console stream bytes. Encoding is binary Protobuf, without base64 wrapping.
+  /// Required:
   public var data: Data {
     get {_data ?? Data()}
     set {_data = newValue}
@@ -3855,7 +4261,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3865,7 +4272,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3875,7 +4283,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -3885,7 +4293,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -3910,7 +4318,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -3920,7 +4329,8 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -3930,7 +4340,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -3940,7 +4350,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -3950,7 +4360,7 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -3971,12 +4381,16 @@ public nonisolated struct Strato_Agent_V1_ConsoleDisconnectedMessage: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// Console preference for the VM. Drivers decide how (and whether) to realize it.
 public nonisolated struct Strato_Agent_V1_ConsoleSpec: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether the guest also gets a framebuffer, and over which protocol
+  /// (issue #566). Absence from callers that want today's headless behavior;
+  /// consumers read absence through `effectiveGraphics`.
+  /// Optional:
   public var graphics: Strato_Agent_V1_GraphicsMode {
     get {_graphics ?? .unspecified}
     set {_graphics = newValue}
@@ -3993,12 +4407,28 @@ public nonisolated struct Strato_Agent_V1_ConsoleSpec: Sendable {
   fileprivate var _graphics: Strato_Agent_V1_GraphicsMode? = nil
 }
 
+/// The agent build the control plane wants this agent to be running, carried
+/// on the desired-state sync. This is the only way an
+/// agent is updated: the imperative `agent_update` message is gone and the
+/// operator's "update now" assigns this field too (ADR 0001 stage 6). Artifact
+/// URL and checksum are resolved fresh at sync assembly, so a long-desired
+/// update never carries a stale link.
+///
+/// Level-triggered and idempotent: an agent already running `target_version`
+/// diffs this to nothing, and absence of the field means "no opinion" — never
+/// "downgrade". The agent converges through download/verify/swap/restart, but
+/// only when its local preconditions hold (not containerized, no in-flight
+/// reconcile work); otherwise it reports why via
+/// `ObservedStateReport.agent_update_status` and retries on later syncs.
 public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The version the agent should be running. Informational to the updater
+  /// (the artifact decides what is installed) but the agent uses it to
+  /// no-op when already converged and to label its status reports.
+  /// Required:
   public var targetVersion: String {
     get {_targetVersion ?? String()}
     set {_targetVersion = newValue}
@@ -4008,7 +4438,9 @@ public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   /// Clears the value of `targetVersion`. Subsequent reads from it will return its default value.
   public mutating func clearTargetVersion() {self._targetVersion = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Where to download the artifact. May be presigned — treat the query
+  /// string as a credential (see `redactURL`).
+  /// Required:
   public var artifactURL: String {
     get {_artifactURL ?? String()}
     set {_artifactURL = newValue}
@@ -4018,7 +4450,8 @@ public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   /// Clears the value of `artifactURL`. Subsequent reads from it will return its default value.
   public mutating func clearArtifactURL() {self._artifactURL = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Hex SHA-256 the downloaded artifact must match.
+  /// Required:
   public var sha256: String {
     get {_sha256 ?? String()}
     set {_sha256 = newValue}
@@ -4028,7 +4461,8 @@ public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   /// Clears the value of `sha256`. Subsequent reads from it will return its default value.
   public mutating func clearSha256() {self._sha256 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Shape of the artifact (tarball to extract vs. bare binary).
+  /// Required:
   public var artifactKind: Strato_Agent_V1_AgentUpdateArtifactKind {
     get {_artifactKind ?? .unspecified}
     set {_artifactKind = newValue}
@@ -4038,7 +4472,8 @@ public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   /// Clears the value of `artifactKind`. Subsequent reads from it will return its default value.
   public mutating func clearArtifactKind() {self._artifactKind = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Member to extract when `artifact_kind == .tarball`.
+  /// Optional:
   public var tarballMember: String {
     get {_tarballMember ?? String()}
     set {_tarballMember = newValue}
@@ -4059,12 +4494,16 @@ public nonisolated struct Strato_Agent_V1_DesiredAgentUpdate: Sendable {
   fileprivate var _tarballMember: String? = nil
 }
 
+/// A permanent instruction to remove one retired Ceph runtime credential from
+/// an agent. It is append-only and intentionally has no generation or expiry:
+/// current, re-enrolled, and future clients in the cluster's site all receive
+/// the same tombstone, making cleanup idempotent across outages and reinstalls.
 public nonisolated struct Strato_Agent_V1_DesiredCephCredentialRevocation: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var clusterID: String {
     get {_clusterID ?? String()}
@@ -4075,7 +4514,7 @@ public nonisolated struct Strato_Agent_V1_DesiredCephCredentialRevocation: Senda
   /// Clears the value of `clusterID`. Subsequent reads from it will return its default value.
   public mutating func clearClusterID() {self._clusterID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var credentialID: String {
     get {_credentialID ?? String()}
@@ -4094,12 +4533,27 @@ public nonisolated struct Strato_Agent_V1_DesiredCephCredentialRevocation: Senda
   fileprivate var _credentialID: String? = nil
 }
 
+/// One resource record set inside a zone: an owner name, a type, and every
+/// value published at that name for that type (STR-39).
+///
+/// Typed rather than pre-flattened into the `name → addresses` map OVN's `DNS`
+/// table takes, for two reasons. Realization is meant to be a swappable driver
+/// — the OVN writer joins a name's A and AAAA values into one space-separated
+/// string, while a zone file keeps them apart — and only the *receiver* can say
+/// which types its backend can express, which is what lets the agent report the
+/// ones it had to skip instead of the control plane silently dropping them.
+///
+/// `type` is a string, not an enum, on the `DesiredSecurityGroupRule.direction`
+/// precedent: a record type from a newer control plane must decode into an
+/// entry this agent ignores, never fail the whole sync.
 public nonisolated struct Strato_Agent_V1_DesiredDNSRecord: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Fully-qualified owner name, lowercased and without a trailing dot. For
+  /// a `PTR` this is the `in-addr.arpa` / `ip6.arpa` name.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -4109,7 +4563,9 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSRecord: Sendable {
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// `A`, `AAAA`, `PTR`, `CNAME`, `TXT`, `SRV` — uppercase, as zone files
+  /// spell them.
+  /// Required:
   public var type: String {
     get {_type ?? String()}
     set {_type = newValue}
@@ -4119,7 +4575,9 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSRecord: Sendable {
   /// Clears the value of `type`. Subsequent reads from it will return its default value.
   public mutating func clearType() {self._type = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The RRset's values, deduplicated and sorted by the control plane so two
+  /// assemblies of the same data compare (and hash) equal.
+  /// Required:
   public var values: Strato_Agent_V1_DesiredDNSRecordValuesSection {
     get {_values ?? Strato_Agent_V1_DesiredDNSRecordValuesSection()}
     set {_values = newValue}
@@ -4129,7 +4587,13 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSRecord: Sendable {
   /// Clears the value of `values`. Subsequent reads from it will return its default value.
   public mutating func clearValues() {self._values = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The RRset's TTL in seconds. OVN DNS rows cannot express a TTL, but a zone
+  /// file writes one per RRset, so
+  /// the control plane enforces a single TTL across an RRset (RFC 2181 §5.2)
+  /// rather than storing it per value.
+  ///
+  /// Defaults to the conventional zone TTL for convenient construction.
+  /// Required:
   public var ttl: Int64 {
     get {_ttl ?? 0}
     set {_ttl = newValue}
@@ -4149,12 +4613,40 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSRecord: Sendable {
   fileprivate var _ttl: Int64? = nil
 }
 
+/// A DNS zone the receiving agent should realize (STR-39, roadmap #769).
+///
+/// This rides the **network-level carrier, not `NetworkSpec`**: DNS and DHCP
+/// edits deliberately don't bump VM generations, so a converged VM never
+/// re-realizes its NICs and would never see a record change. The
+/// level-triggered network reconcile is what converges these rows, exactly as
+/// it does `DHCP_Options`.
+///
+/// A zone's contents span every VM on every attached network across *all*
+/// agents, so `records` is assembled from the whole fleet rather than from the
+/// receiving agent's own workloads. This is what
+/// makes the two realizations below able to share one payload.
+///
+/// ## Two backends, two audiences
+///
+/// The **OVN `DNS` table** is switch-scoped topology written into the
+/// shared northbound database, so only the site's topology authority may write
+/// it — two level-triggered writers would fight over one row. `network_ids`
+/// carries the networks that agent authors.
+///
+/// The **per-network resolver** is not topology: a CoreDNS runs
+/// in the host namespace of every host with a local NIC on the network, serving
+/// the zones attached to that network from a server block bound to its own
+/// address pair (ADR 0008). A zone is sent
+/// to any agent that either authors an attached network *or* runs a workload
+/// on one, and `network_ids` is the union of both. An agent realizes the OVN
+/// half only for the networks it actually authors, which it already knows from
+/// `DesiredStateMessage.networks_authoritative`.
 public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var zoneID: String {
     get {_zoneID ?? String()}
@@ -4165,7 +4657,10 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   /// Clears the value of `zoneID`. Subsequent reads from it will return its default value.
   public mutating func clearZoneID() {self._zoneID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The zone's fully-qualified name, lowercased with no trailing dot. Not
+  /// an identifier — zone names are unique only within a project — and used
+  /// only as a human label on the realized row.
+  /// Required:
   public var zoneName: String {
     get {_zoneName ?? String()}
     set {_zoneName = newValue}
@@ -4175,7 +4670,13 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   /// Clears the value of `zoneName`. Subsequent reads from it will return its default value.
   public mutating func clearZoneName() {self._zoneName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The networks that should answer from this zone, restricted to the ones
+  /// this agent has something to do with — those it authors topology for,
+  /// plus those it runs a local NIC on. The agent derives switch
+  /// and namespace names from the ids (`OVNNaming.switchName`,
+  /// `ChassisServicePlan.netnsName`), so user-chosen names never enter the
+  /// OVN or host namespace.
+  /// Required:
   /// Format: uuid.
   public var networkIds: Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection {
     get {_networkIds ?? Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection()}
@@ -4186,7 +4687,8 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   /// Clears the value of `networkIds`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkIds() {self._networkIds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The zone's effective contents, derived ∪ authored, in a stable order.
+  /// Required:
   public var records: Strato_Agent_V1_DesiredDNSZoneRecordsSection {
     get {_records ?? Strato_Agent_V1_DesiredDNSZoneRecordsSection()}
     set {_records = newValue}
@@ -4196,7 +4698,19 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   /// Clears the value of `records`. Subsequent reads from it will return its default value.
   public mutating func clearRecords() {self._records = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// A digest of the `records` carried here — which is the zone minus its
+  /// `.external`-view entries, since those are for publication elsewhere and
+  /// never reach an agent. Computed by the control plane. The agent stamps it
+  /// on the realized row's `external_ids` and compares it on the next sync,
+  /// so an unchanged zone costs no OVSDB transaction: records are
+  /// O(VMs on the network) and ship on every sync, and rewriting the whole
+  /// map every cycle is what level-triggering must not degenerate into.
+  ///
+  /// Never load-bearing for correctness — a stamp that disagrees with the
+  /// row's actual contents (a hand-edited row, an agent whose realization
+  /// changed across an upgrade) still heals, because the agent also compares
+  /// the records it would write against the ones the row carries.
+  /// Required:
   public var recordsHash: String {
     get {_recordsHash ?? String()}
     set {_recordsHash = newValue}
@@ -4217,12 +4731,24 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZone: Sendable {
   fileprivate var _recordsHash: String? = nil
 }
 
+/// One floating IP the agent should realize as a `dnat_and_snat` NAT rule on
+/// the network's logical router (issue #344): traffic to `external_ip` is
+/// DNAT'd to the VM's fixed `logical_ip`, and the VM's outbound traffic is
+/// SNAT'd to `external_ip` (overriding the router's subnet-wide SNAT).
+///
+/// `vm_id`/`nic_index` identify the NIC's logical switch port so the agent can
+/// program *distributed* NAT (`logical_port` + `external_mac`): the FIP is
+/// then handled on the chassis hosting the VM rather than hairpinning through
+/// the gateway chassis. The port name is derived agent-side (`OVNNaming`), not
+/// carried on the wire, so naming stays a single-owner concern.
 public nonisolated struct Strato_Agent_V1_DesiredFloatingIP: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The floating (external) IPv4 address, from a control-plane floating IP
+  /// pool. Used as the NAT rule's `external_ip`.
+  /// Required:
   public var externalIp: String {
     get {_externalIp ?? String()}
     set {_externalIp = newValue}
@@ -4232,7 +4758,9 @@ public nonisolated struct Strato_Agent_V1_DesiredFloatingIP: Sendable {
   /// Clears the value of `externalIp`. Subsequent reads from it will return its default value.
   public mutating func clearExternalIp() {self._externalIp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The attached NIC's fixed IPv4 address on the tenant network. Used as
+  /// the NAT rule's `logical_ip`.
+  /// Required:
   public var logicalIp: String {
     get {_logicalIp ?? String()}
     set {_logicalIp = newValue}
@@ -4242,7 +4770,8 @@ public nonisolated struct Strato_Agent_V1_DesiredFloatingIP: Sendable {
   /// Clears the value of `logicalIp`. Subsequent reads from it will return its default value.
   public mutating func clearLogicalIp() {self._logicalIp = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The VM owning the attached NIC.
+  /// Optional:
   /// Format: uuid.
   public var vmID: String {
     get {_vmID ?? String()}
@@ -4253,7 +4782,9 @@ public nonisolated struct Strato_Agent_V1_DesiredFloatingIP: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The NIC's position in the VM's interface list (orderIndex), matching
+  /// the index the agent used when naming the NIC's logical switch port.
+  /// Optional:
   public var nicIndex: Int64 {
     get {_nicIndex ?? 0}
     set {_nicIndex = newValue}
@@ -4273,12 +4804,15 @@ public nonisolated struct Strato_Agent_V1_DesiredFloatingIP: Sendable {
   fileprivate var _nicIndex: Int64? = nil
 }
 
+/// A first-class Strato L4 load balancer, keyed by its resource UUID rather
+/// than its mutable display name. Omission from an authoritative network sync
+/// means the owner-tagged OVN row must be removed.
 public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -4289,7 +4823,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -4299,7 +4833,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vip: String {
     get {_vip ?? String()}
     set {_vip = newValue}
@@ -4309,7 +4843,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `vip`. Subsequent reads from it will return its default value.
   public mutating func clearVip() {self._vip = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var protocolName: String {
     get {_protocolName ?? String()}
     set {_protocolName = newValue}
@@ -4319,7 +4853,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `protocolName`. Subsequent reads from it will return its default value.
   public mutating func clearProtocolName() {self._protocolName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -4329,7 +4863,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var healthCheck: Strato_Agent_V1_DesiredLoadBalancerHealthCheck {
     get {_healthCheck ?? Strato_Agent_V1_DesiredLoadBalancerHealthCheck()}
     set {_healthCheck = newValue}
@@ -4339,7 +4873,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `healthCheck`. Subsequent reads from it will return its default value.
   public mutating func clearHealthCheck() {self._healthCheck = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var listeners: Strato_Agent_V1_DesiredLoadBalancerListenersSection {
     get {_listeners ?? Strato_Agent_V1_DesiredLoadBalancerListenersSection()}
     set {_listeners = newValue}
@@ -4349,7 +4883,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   /// Clears the value of `listeners`. Subsequent reads from it will return its default value.
   public mutating func clearListeners() {self._listeners = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backends: Strato_Agent_V1_DesiredLoadBalancerBackendsSection {
     get {_backends ?? Strato_Agent_V1_DesiredLoadBalancerBackendsSection()}
     set {_backends = newValue}
@@ -4373,12 +4907,16 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancer: Sendable {
   fileprivate var _backends: Strato_Agent_V1_DesiredLoadBalancerBackendsSection? = nil
 }
 
+/// One backend address for a desired load balancer. VM identity is carried
+/// only for on-platform NICs, allowing the agent to derive the stable OVN LSP
+/// name used by health-check `ip_port_mappings`. Off-platform targets have an
+/// address but no VM, NIC, or member switch.
 public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -4389,7 +4927,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ipAddress: String {
     get {_ipAddress ?? String()}
     set {_ipAddress = newValue}
@@ -4399,7 +4937,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {self._ipAddress = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   /// Format: uuid.
   public var vmID: String {
     get {_vmID ?? String()}
@@ -4410,7 +4948,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var nicIndex: Int64 {
     get {_nicIndex ?? 0}
     set {_nicIndex = newValue}
@@ -4420,7 +4958,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   /// Clears the value of `nicIndex`. Subsequent reads from it will return its default value.
   public mutating func clearNicIndex() {self._nicIndex = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   /// Format: uuid.
   public var networkID: String {
     get {_networkID ?? String()}
@@ -4431,7 +4969,9 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackend: Sendable {
   /// Clears the value of `networkID`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkID() {self._networkID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Router-port address on the backend's subnet, used as OVN's probe source
+  /// in `ip_port_mappings`. Absence for off-platform targets.
+  /// Optional:
   public var healthCheckSourceIp: String {
     get {_healthCheckSourceIp ?? String()}
     set {_healthCheckSourceIp = newValue}
@@ -4458,7 +4998,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var enabled: Bool {
     get {_enabled ?? false}
     set {_enabled = newValue}
@@ -4468,7 +5008,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   /// Clears the value of `enabled`. Subsequent reads from it will return its default value.
   public mutating func clearEnabled() {self._enabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var intervalSeconds: Int64 {
     get {_intervalSeconds ?? 0}
     set {_intervalSeconds = newValue}
@@ -4478,7 +5018,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   /// Clears the value of `intervalSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearIntervalSeconds() {self._intervalSeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var timeoutSeconds: Int64 {
     get {_timeoutSeconds ?? 0}
     set {_timeoutSeconds = newValue}
@@ -4488,7 +5028,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   /// Clears the value of `timeoutSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearTimeoutSeconds() {self._timeoutSeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var successThreshold: Int64 {
     get {_successThreshold ?? 0}
     set {_successThreshold = newValue}
@@ -4498,7 +5038,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   /// Clears the value of `successThreshold`. Subsequent reads from it will return its default value.
   public mutating func clearSuccessThreshold() {self._successThreshold = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var failureThreshold: Int64 {
     get {_failureThreshold ?? 0}
     set {_failureThreshold = newValue}
@@ -4519,12 +5059,15 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Sendab
   fileprivate var _failureThreshold: Int64? = nil
 }
 
+/// One listener on an OVN-native L4 load balancer (STR-28). The control plane
+/// keeps listeners separate so high-churn backend membership never requires a
+/// read-modify-write of this stable port mapping.
 public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListener: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -4535,7 +5078,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListener: Sendable 
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var port: Int64 {
     get {_port ?? 0}
     set {_port = newValue}
@@ -4545,7 +5088,7 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListener: Sendable 
   /// Clears the value of `port`. Subsequent reads from it will return its default value.
   public mutating func clearPort() {self._port = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backendPort: Int64 {
     get {_backendPort ?? 0}
     set {_backendPort = newValue}
@@ -4564,12 +5107,17 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListener: Sendable 
   fileprivate var _backendPort: Int64? = nil
 }
 
+/// The one network ACL attached to a logical network.
+///
+/// The control plane bumps `generation` for every rule mutation. The agent
+/// realizes the whole ordered rule set as one fail-closed replacement, never as
+/// an imperative per-rule edit.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkACL: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -4580,7 +5128,7 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACL: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -4590,7 +5138,7 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACL: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var rules: Strato_Agent_V1_DesiredNetworkACLRulesSection {
     get {_rules ?? Strato_Agent_V1_DesiredNetworkACLRulesSection()}
     set {_rules = newValue}
@@ -4609,12 +5157,18 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACL: Sendable {
   fileprivate var _rules: Strato_Agent_V1_DesiredNetworkACLRulesSection? = nil
 }
 
+/// One ordered, stateless rule in a network-level ACL (STR-33).
+///
+/// Rules are evaluated independently for ingress and egress in ascending
+/// `rule_number` order. The topology-authority agent owns the mapping from that
+/// stable API ordering to OVN tiers and priorities; the wire deliberately does
+/// not expose backend-specific priority values.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -4625,7 +5179,7 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ruleNumber: Int64 {
     get {_ruleNumber ?? 0}
     set {_ruleNumber = newValue}
@@ -4635,7 +5189,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `ruleNumber`. Subsequent reads from it will return its default value.
   public mutating func clearRuleNumber() {self._ruleNumber = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "ingress" (`to-lport`) or "egress" (`from-lport`).
+  /// Required:
   public var direction: String {
     get {_direction ?? String()}
     set {_direction = newValue}
@@ -4645,7 +5200,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `direction`. Subsequent reads from it will return its default value.
   public mutating func clearDirection() {self._direction = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "ipv4" or "ipv6".
+  /// Required:
   public var ethertype: String {
     get {_ethertype ?? String()}
     set {_ethertype = newValue}
@@ -4655,7 +5211,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `ethertype`. Subsequent reads from it will return its default value.
   public mutating func clearEthertype() {self._ethertype = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "allow" or "deny". These are policy verdicts, not raw OVN actions.
+  /// Required:
   public var action: String {
     get {_action ?? String()}
     set {_action = newValue}
@@ -4665,7 +5222,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `action`. Subsequent reads from it will return its default value.
   public mutating func clearAction() {self._action = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// "tcp", "udp", or "icmp"; absence matches any IP protocol.
+  /// Optional:
   public var protocolName: String {
     get {_protocolName ?? String()}
     set {_protocolName = newValue}
@@ -4675,7 +5233,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `protocolName`. Subsequent reads from it will return its default value.
   public mutating func clearProtocolName() {self._protocolName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Destination ports for TCP/UDP, or ICMP type/code.
+  /// Optional:
   public var portRangeMin: Int64 {
     get {_portRangeMin ?? 0}
     set {_portRangeMin = newValue}
@@ -4685,7 +5244,7 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `portRangeMin`. Subsequent reads from it will return its default value.
   public mutating func clearPortRangeMin() {self._portRangeMin = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var portRangeMax: Int64 {
     get {_portRangeMax ?? 0}
     set {_portRangeMax = newValue}
@@ -4695,7 +5254,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   /// Clears the value of `portRangeMax`. Subsequent reads from it will return its default value.
   public mutating func clearPortRangeMax() {self._portRangeMax = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Source CIDR for ingress, destination CIDR for egress.
+  /// Required:
   public var remoteCidr: String {
     get {_remoteCidr ?? String()}
     set {_remoteCidr = newValue}
@@ -4720,12 +5280,24 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRule: Sendable {
   fileprivate var _remoteCidr: String? = nil
 }
 
+/// The state the control plane wants a logical network to be in on an agent.
+///
+/// Networking used to reach the agent only as a side effect of `VMSpec.networks`
+/// during VM create, so routers/NAT had nowhere to live. This makes the network
+/// (and its L3 router + uplink) a first-class entry in the desired-state sync,
+/// reconciled level-triggered just like VMs: a network omitted from the list
+/// should not exist on the agent.
+///
+/// Router scope is per-project: every network in the same project shares one
+/// logical router (giving cross-switch east-west), keyed by `router_key`. Two
+/// projects never share a router, which is what makes it safe for them to use
+/// the same subnet (issue #765).
 public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var networkID: String {
     get {_storage._networkID ?? String()}
@@ -4736,7 +5308,11 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `networkID`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkID() {_uniqueStorage()._networkID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Human label for logs and external-ids. **Not** the OVN switch name — the
+  /// agent derives that from `network_id` (issue #342) — and not unique:
+  /// names are scoped per project, so two entries in one sync may share one
+  /// (issue #765).
+  /// Required:
   public var name: String {
     get {_storage._name ?? String()}
     set {_uniqueStorage()._name = newValue}
@@ -4746,7 +5322,9 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {_uniqueStorage()._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network's subnet in CIDR form, e.g. `192.168.1.0/24`. Used as the
+  /// SNAT `logical_ip` and to size the router port's address.
+  /// Required:
   public var subnet: String {
     get {_storage._subnet ?? String()}
     set {_uniqueStorage()._subnet = newValue}
@@ -4756,7 +5334,10 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `subnet`. Subsequent reads from it will return its default value.
   public mutating func clearSubnet() {_uniqueStorage()._subnet = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The L3 gateway address the router presents on this network (the router
+  /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
+  /// host address. Absence disables L3 for the network (switch only).
+  /// Optional:
   public var gateway: String {
     get {_storage._gateway ?? String()}
     set {_uniqueStorage()._gateway = newValue}
@@ -4766,7 +5347,10 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `gateway`. Subsequent reads from it will return its default value.
   public mutating func clearGateway() {_uniqueStorage()._gateway = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The network's IPv6 subnet in CIDR form (a /64, e.g.
+  /// `fd12:3456:789a::/64`), when the network is dual-stack. Absence on
+  /// v4-only networks.
+  /// Optional:
   public var subnet6: String {
     get {_storage._subnet6 ?? String()}
     set {_uniqueStorage()._subnet6 = newValue}
@@ -4776,7 +5360,11 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `subnet6`. Subsequent reads from it will return its default value.
   public mutating func clearSubnet6() {_uniqueStorage()._subnet6 = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The IPv6 gateway (router-port address) inside `subnet6`, when
+  /// dual-stack. The agent adds it to the router port and announces it via
+  /// Router Advertisements (dhcpv6_stateful mode) — DHCPv6 itself cannot
+  /// convey a default route.
+  /// Optional:
   public var gateway6: String {
     get {_storage._gateway6 ?? String()}
     set {_uniqueStorage()._gateway6 = newValue}
@@ -4786,7 +5374,9 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `gateway6`. Subsequent reads from it will return its default value.
   public mutating func clearGateway6() {_uniqueStorage()._gateway6 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Identity of the logical router this network attaches to. Networks sharing
+  /// a `router_key` share one router. Opaque to the agent — do not parse it.
+  /// Required:
   public var routerKey: String {
     get {_storage._routerKey ?? String()}
     set {_uniqueStorage()._routerKey = newValue}
@@ -4796,7 +5386,10 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `routerKey`. Subsequent reads from it will return its default value.
   public mutating func clearRouterKey() {_uniqueStorage()._routerKey = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the agent should program outbound SNAT to the site uplink for
+  /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
+  /// IPv6 stays internal (no NAT66, no default route) in this phase.
+  /// Required:
   public var externalAccess: Bool {
     get {_storage._externalAccess ?? false}
     set {_uniqueStorage()._externalAccess = newValue}
@@ -4806,7 +5399,12 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `externalAccess`. Subsequent reads from it will return its default value.
   public mutating func clearExternalAccess() {_uniqueStorage()._externalAccess = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the network's guests are addressed by OVN's DHCP responder.
+  /// Carried here — not only on per-NIC specs — because DHCP edits don't
+  /// bump VM generations, so converged VMs never re-realize their NICs; the
+  /// level-triggered network reconcile is what converges the DHCP_Options
+  /// rows (including deleting them when DHCP is turned off).
+  /// Required:
   public var dhcpEnabled: Bool {
     get {_storage._dhcpEnabled ?? false}
     set {_uniqueStorage()._dhcpEnabled = newValue}
@@ -4816,7 +5414,18 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `dhcpEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearDhcpEnabled() {_uniqueStorage()._dhcpEnabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network's DNS resolvers; may be mixed-family (the agent splits per
+  /// DHCP family).
+  ///
+  /// **What this list is depends on `resolver_enabled`**.
+  /// With the resolver off it is what the guest is told over DHCP, which is
+  /// all it ever was. With the resolver on, the guest is told
+  /// `NetworkResolverEndpoint.address` instead and this becomes the
+  /// *upstream forwarders* the network's CoreDNS sends misses to. The field
+  /// did not change shape or validation, only its consumer — and the two
+  /// readings agree on the values that matter, because a resolver list was
+  /// already a list of recursive resolvers.
+  /// Required:
   public var dnsServers: Strato_Agent_V1_DesiredNetworkStateDnsServersSection {
     get {_storage._dnsServers ?? Strato_Agent_V1_DesiredNetworkStateDnsServersSection()}
     set {_uniqueStorage()._dnsServers = newValue}
@@ -4826,7 +5435,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `dnsServers`. Subsequent reads from it will return its default value.
   public mutating func clearDnsServers() {_uniqueStorage()._dnsServers = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// DNS search domain advertised over DHCP.
+  /// Optional:
   public var domainName: String {
     get {_storage._domainName ?? String()}
     set {_uniqueStorage()._domainName = newValue}
@@ -4836,7 +5446,8 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `domainName`. Subsequent reads from it will return its default value.
   public mutating func clearDomainName() {_uniqueStorage()._domainName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// DHCPv4 lease time in seconds; agents default it when absence.
+  /// Optional:
   public var leaseTime: Int64 {
     get {_storage._leaseTime ?? 0}
     set {_uniqueStorage()._leaseTime = newValue}
@@ -4846,7 +5457,21 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `leaseTime`. Subsequent reads from it will return its default value.
   public mutating func clearLeaseTime() {_uniqueStorage()._leaseTime = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this network's guests can reach the instance metadata service at
+  /// `InstanceMetadataEndpoint`. Realized as an OVN `localport` on the
+  /// network's logical switch — instantiated on every chassis, never
+  /// forwarded across tunnels — converged level-triggered by the network
+  /// reconcile, including deletion when turned off.
+  ///
+  /// Carried here rather than only on per-NIC specs for `dhcp_enabled`'s
+  /// reason: network-level metadata settings don't bump each attached VM's
+  /// generation, so a converged VM never re-realizes its NICs and the network
+  /// reconcile is the only path that reaches a live network whose setting
+  /// changed.
+  ///
+  /// `false` is authoritative and removes the managed metadata port; that is
+  /// what makes turning the feature off converge.
+  /// Required:
   public var metadataEnabled: Bool {
     get {_storage._metadataEnabled ?? false}
     set {_uniqueStorage()._metadataEnabled = newValue}
@@ -4856,7 +5481,26 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `metadataEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearMetadataEnabled() {_uniqueStorage()._metadataEnabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether this network's guests get a resolver at the addresses in
+  /// `resolver_addresses`: the host-wide CoreDNS each agent
+  /// runs in its *host* namespace, which serves the network's zones in full —
+  /// including the CNAME/TXT/SRV the OVN `DNS` table cannot express — and
+  /// forwards everything else to `dns_servers`.
+  ///
+  /// Realized on a **second** `localport` of its own, not the one
+  /// `metadata_enabled` authors, because the two services terminate in
+  /// different namespaces and one OVS interface claims one `iface-id` (ADR
+  /// 0008). It is still a second flag on one carrier rather than a second
+  /// carrier, because both are properties of the same network row.
+  ///
+  /// Absence means this sender has no resolver opinion and leaves managed rows in
+  /// place; `false` is authoritative and removes them. This flag also decides
+  /// what the DHCP `dns_server` option contains, so a network flipping it
+  /// changes what guests are told at their next lease.
+  ///
+  /// The control plane withholds `true` unless *every* agent in the site
+  /// reports `AgentRegisterMessage.resolver_capable`.
+  /// Optional:
   public var resolverEnabled: Bool {
     get {_storage._resolverEnabled ?? false}
     set {_uniqueStorage()._resolverEnabled = newValue}
@@ -4866,7 +5510,19 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `resolverEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearResolverEnabled() {_uniqueStorage()._resolverEnabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// This network's own resolver addresses, v4 first (STR-40).
+  ///
+  /// **Distinct per network**, which is what lets every resolver on a host
+  /// share one namespace — the host's — and so forward upstream through the
+  /// hypervisor's own egress. A single well-known address could not: the
+  /// listener would have no way to tell which network asked, and the host no
+  /// way to route a reply back to a `10.0.0.5` that exists on three switches.
+  ///
+  /// Non-absence exactly when `resolver_enabled` is true. Two fields rather than
+  /// one derived from an index on the wire, because the agent should realize
+  /// what it was told rather than re-derive an allocation scheme the control
+  /// plane owns.
+  /// Optional:
   public var resolverAddresses: Strato_Agent_V1_DesiredNetworkStateResolverAddressesSection {
     get {_storage._resolverAddresses ?? Strato_Agent_V1_DesiredNetworkStateResolverAddressesSection()}
     set {_uniqueStorage()._resolverAddresses = newValue}
@@ -4876,7 +5532,12 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `resolverAddresses`. Subsequent reads from it will return its default value.
   public mutating func clearResolverAddresses() {_uniqueStorage()._resolverAddresses = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-network counter, bumped by the control plane on any change
+  /// that alters realization (subnet, gateway, router membership, external
+  /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
+  /// edits deliberately don't bump it — the network reconcile is
+  /// level-triggered, so same-generation networks still converge DHCP.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -4886,7 +5547,10 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Floating IPs attached to this network's NICs, realized as
+  /// `dnat_and_snat` rules on the network's router (issue #344). Only
+  /// meaningful on `external_access` networks (the NAT needs the router's uplink).
+  /// Required:
   public var floatingIPs: Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection {
     get {_storage._floatingIPs ?? Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection()}
     set {_uniqueStorage()._floatingIPs = newValue}
@@ -4896,7 +5560,9 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `floatingIPs`. Subsequent reads from it will return its default value.
   public mutating func clearFloatingIPs() {_uniqueStorage()._floatingIPs = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Native OVN load balancers whose VIP belongs to this network. An empty
+  /// array is authoritative.
+  /// Required:
   public var loadBalancers: Strato_Agent_V1_DesiredNetworkStateLoadBalancersSection {
     get {_storage._loadBalancers ?? Strato_Agent_V1_DesiredNetworkStateLoadBalancersSection()}
     set {_uniqueStorage()._loadBalancers = newValue}
@@ -4906,7 +5572,11 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   /// Clears the value of `loadBalancers`. Subsequent reads from it will return its default value.
   public mutating func clearLoadBalancers() {_uniqueStorage()._loadBalancers = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The network-level ACL attached to this switch (STR-33). The schema
+  /// permits at most one entry, while the collection shape preserves the
+  /// desired-state distinction between no opinion (`absence`) and authoritative
+  /// absence (`[]`), which tells the agent to remove managed switch ACLs.
+  /// Optional:
   public var networkAcLs: Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection {
     get {_storage._networkAcLs ?? Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection()}
     set {_uniqueStorage()._networkAcLs = newValue}
@@ -4923,12 +5593,26 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkState: @unchecked Sendab
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// The restore the control plane wants a workload to have performed, carried on
+/// its desired entry as a monotonic nonce (ADR 0001 stage 9, STR-151).
+///
+/// A restore is an *edge*, not a state: "the VM should be at checkpoint C" is
+/// not something an agent can re-converge on, because the guest starts writing
+/// the moment it resumes. The `kubectl rollout restart` answer to that shape is
+/// to put **how many times it was asked** in the desired state — the edge
+/// becomes a state the moment it is counted. The agent keeps a durable record of
+/// the last nonce it applied per workload and acts only when this one outranks
+/// it, so a replayed or re-driven sync cannot rewind a live guest a second time.
+///
+/// Absent means "no restore has ever been asked for", never "undo one".
 public nonisolated struct Strato_Agent_V1_DesiredRestore: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-workload counter, bumped once per accepted restore request.
+  /// The agent acts when this exceeds the nonce it last applied and recorded.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -4938,7 +5622,10 @@ public nonisolated struct Strato_Agent_V1_DesiredRestore: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The artifact to load. Travels with the nonce rather than beside it so a
+  /// nonce can never be attributed to the wrong point in time: two restores of
+  /// different checkpoints are two different values of one field.
+  /// Required:
   /// Format: uuid.
   public var snapshotID: String {
     get {_snapshotID ?? String()}
@@ -4949,7 +5636,17 @@ public nonisolated struct Strato_Agent_V1_DesiredRestore: Sendable {
   /// Clears the value of `snapshotID`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshotID() {self._snapshotID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Download descriptors for an exported snapshot, present only when the
+  /// workload does not live on the agent that captured it (issue #428).
+  /// Resolved fresh at sync assembly, like `ImageInfo`, so a long-desired
+  /// restore never carries a stale locator.
+  ///
+  /// Sandbox-only: a VM checkpoint lives *inside* the VM's own disks, so it
+  /// cannot move between hosts and a VM restore never carries one. The field
+  /// is shared rather than forked for `DesiredSnapshotState`'s reason — the
+  /// nonce, the guard and the durable record are the same three times over,
+  /// and only the payload differs.
+  /// Optional:
   public var artifacts: Strato_Agent_V1_DesiredRestoreArtifactsSection {
     get {_artifacts ?? Strato_Agent_V1_DesiredRestoreArtifactsSection()}
     set {_artifacts = newValue}
@@ -4968,12 +5665,15 @@ public nonisolated struct Strato_Agent_V1_DesiredRestore: Sendable {
   fileprivate var _artifacts: Strato_Agent_V1_DesiredRestoreArtifactsSection? = nil
 }
 
+/// One sandbox's authoritative desired state, as assembled by the control
+/// plane. Mirrors `DesiredVMState` semantics exactly: level-triggered,
+/// generation-guarded, safe to drop or replay.
 public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var sandboxID: String {
     get {_storage._sandboxID ?? String()}
@@ -4984,7 +5684,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `sandboxID`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxID() {_uniqueStorage()._sandboxID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var spec: Strato_Agent_V1_SandboxSpec {
     get {_storage._spec ?? Strato_Agent_V1_SandboxSpec()}
     set {_uniqueStorage()._spec = newValue}
@@ -4994,7 +5694,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `spec`. Subsequent reads from it will return its default value.
   public mutating func clearSpec() {_uniqueStorage()._spec = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredStatus: Strato_Agent_V1_DesiredSandboxStatus {
     get {_storage._desiredStatus ?? .unspecified}
     set {_uniqueStorage()._desiredStatus = newValue}
@@ -5004,7 +5704,11 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `desiredStatus`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredStatus() {_uniqueStorage()._desiredStatus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-sandbox counter, bumped by the control plane on every
+  /// desired status or spec change. The agent records the generation it last
+  /// applied and rejects older ones, so replayed or reordered syncs cannot
+  /// roll a sandbox backward.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -5014,7 +5718,10 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Pull credential for the spec's image when it lives in a private
+  /// registry, minted fresh at sync assembly (see `RegistryCredential`).
+  /// Absence for public images — zero-configuration public pulls must work.
+  /// Optional:
   public var registryCredential: Strato_Agent_V1_RegistryCredential {
     get {_storage._registryCredential ?? Strato_Agent_V1_RegistryCredential()}
     set {_uniqueStorage()._registryCredential = newValue}
@@ -5024,7 +5731,12 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `registryCredential`. Subsequent reads from it will return its default value.
   public mutating func clearRegistryCredential() {_uniqueStorage()._registryCredential = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The snapshot this sandbox should have been restored **into itself** from,
+  /// as a nonce (ADR 0001 stage 9, STR-151).
+  ///
+  /// This is an edge applied to a sandbox that already exists — same id, same
+  /// addresses, rewound — and is consulted only while it is present.
+  /// Optional:
   public var restore: Strato_Agent_V1_DesiredRestore {
     get {_storage._restore ?? Strato_Agent_V1_DesiredRestore()}
     set {_uniqueStorage()._restore = newValue}
@@ -5034,7 +5746,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `restore`. Subsequent reads from it will return its default value.
   public mutating func clearRestore() {_uniqueStorage()._restore = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Total admitted internal checkpoint bytes, including the retained predecessor.
+  /// Optional:
   public var suspensionStorageBudgetBytes: Int64 {
     get {_storage._suspensionStorageBudgetBytes ?? 0}
     set {_uniqueStorage()._suspensionStorageBudgetBytes = newValue}
@@ -5044,7 +5757,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `suspensionStorageBudgetBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSuspensionStorageBudgetBytes() {_uniqueStorage()._suspensionStorageBudgetBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   /// Format: uuid.
   public var suspensionAfterSnapshotID: String {
     get {_storage._suspensionAfterSnapshotID ?? String()}
@@ -5055,7 +5768,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `suspensionAfterSnapshotID`. Subsequent reads from it will return its default value.
   public mutating func clearSuspensionAfterSnapshotID() {_uniqueStorage()._suspensionAfterSnapshotID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Existing durable guest state must never be replaced by a cold OCI create.
+  /// Optional:
   /// Format: uuid.
   public var suspensionCheckpointID: String {
     get {_storage._suspensionCheckpointID ?? String()}
@@ -5066,7 +5780,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `suspensionCheckpointID`. Subsequent reads from it will return its default value.
   public mutating func clearSuspensionCheckpointID() {_uniqueStorage()._suspensionCheckpointID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var automaticSuspensionFence: Strato_Agent_V1_SandboxAutomaticSuspensionFence {
     get {_storage._automaticSuspensionFence ?? Strato_Agent_V1_SandboxAutomaticSuspensionFence()}
     set {_uniqueStorage()._automaticSuspensionFence = newValue}
@@ -5076,7 +5790,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `automaticSuspensionFence`. Subsequent reads from it will return its default value.
   public mutating func clearAutomaticSuspensionFence() {_uniqueStorage()._automaticSuspensionFence = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var idleControlPlaneRevision: Int64 {
     get {_storage._idleControlPlaneRevision ?? 0}
     set {_uniqueStorage()._idleControlPlaneRevision = newValue}
@@ -5086,7 +5800,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   /// Clears the value of `idleControlPlaneRevision`. Subsequent reads from it will return its default value.
   public mutating func clearIdleControlPlaneRevision() {_uniqueStorage()._idleControlPlaneRevision = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var idlePendingCommandCount: Int64 {
     get {_storage._idlePendingCommandCount ?? 0}
     set {_uniqueStorage()._idlePendingCommandCount = newValue}
@@ -5103,12 +5817,17 @@ public nonisolated struct Strato_Agent_V1_DesiredSandboxState: @unchecked Sendab
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// The state the control plane wants one security group to be in: an OVN port
+/// group carrying one ACL per rule. `generation` is bumped on every rule
+/// mutation; the agent replaces the port group's ACL set only when the stored
+/// generation differs, so replayed or reordered syncs can never resurrect old
+/// rules (the `LogicalNetwork.generation` pattern).
 public nonisolated struct Strato_Agent_V1_DesiredSecurityGroup: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -5119,7 +5838,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroup: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -5129,7 +5848,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroup: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var rules: Strato_Agent_V1_DesiredSecurityGroupRulesSection {
     get {_rules ?? Strato_Agent_V1_DesiredSecurityGroupRulesSection()}
     set {_rules = newValue}
@@ -5148,12 +5867,22 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroup: Sendable {
   fileprivate var _rules: Strato_Agent_V1_DesiredSecurityGroupRulesSection? = nil
 }
 
+/// One rule of a security group, realized by the topology-authority agent as
+/// a single OVN ACL on the group's port group (issue: security groups).
+///
+/// The peer is at most one of `remote_cidr` / `remote_group_id`; both absence means
+/// "any". A group peer is carried as the group's id — the agent derives the
+/// port-group name (and thus the OVN-generated `$<pg>_ip4`/`_ip6` address-set
+/// reference) itself via `OVNNaming`, so naming stays a single-owner concern
+/// exactly like floating-IP port names.
 public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The control-plane rule row's id, stamped into the ACL's `external_ids`
+  /// so operators can trace an OVN ACL back to the rule that produced it.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -5164,7 +5893,9 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "ingress" (traffic to the VM, `to-lport`) or "egress" (traffic from
+  /// the VM, `from-lport`).
+  /// Required:
   public var direction: String {
     get {_direction ?? String()}
     set {_direction = newValue}
@@ -5174,7 +5905,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `direction`. Subsequent reads from it will return its default value.
   public mutating func clearDirection() {self._direction = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "ipv4" or "ipv6" — which address family the rule matches.
+  /// Required:
   public var ethertype: String {
     get {_ethertype ?? String()}
     set {_ethertype = newValue}
@@ -5184,7 +5916,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `ethertype`. Subsequent reads from it will return its default value.
   public mutating func clearEthertype() {self._ethertype = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// "tcp", "udp", or "icmp"; absence matches any protocol of the ethertype.
+  /// Optional:
   public var protocolName: String {
     get {_protocolName ?? String()}
     set {_protocolName = newValue}
@@ -5194,7 +5927,10 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `protocolName`. Subsequent reads from it will return its default value.
   public mutating func clearProtocolName() {self._protocolName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// For tcp/udp: the destination port range (min == max for one port).
+  /// For icmp: `port_range_min` is the ICMP type and `port_range_max` the code.
+  /// Absence means all ports/types.
+  /// Optional:
   public var portRangeMin: Int64 {
     get {_portRangeMin ?? 0}
     set {_portRangeMin = newValue}
@@ -5204,7 +5940,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `portRangeMin`. Subsequent reads from it will return its default value.
   public mutating func clearPortRangeMin() {self._portRangeMin = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var portRangeMax: Int64 {
     get {_portRangeMax ?? 0}
     set {_portRangeMax = newValue}
@@ -5214,7 +5950,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `portRangeMax`. Subsequent reads from it will return its default value.
   public mutating func clearPortRangeMax() {self._portRangeMax = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// CIDR peer (source for ingress, destination for egress).
+  /// Optional:
   public var remoteCidr: String {
     get {_remoteCidr ?? String()}
     set {_remoteCidr = newValue}
@@ -5224,7 +5961,9 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `remoteCidr`. Subsequent reads from it will return its default value.
   public mutating func clearRemoteCidr() {self._remoteCidr = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Security-group peer: matches the addresses of the referenced group's
+  /// member ports via its auto-generated address set.
+  /// Optional:
   /// Format: uuid.
   public var remoteGroupID: String {
     get {_remoteGroupID ?? String()}
@@ -5235,7 +5974,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   /// Clears the value of `remoteGroupID`. Subsequent reads from it will return its default value.
   public mutating func clearRemoteGroupID() {self._remoteGroupID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the ACL should log the packets it matches.
+  /// Required:
   public var log: Bool {
     get {_log ?? false}
     set {_log = newValue}
@@ -5260,12 +6000,30 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRule: Sendable {
   fileprivate var _log: Bool? = nil
 }
 
+/// How an artifact that does not exist yet gets captured: a create *strategy*,
+/// not an operation — `DesiredVolumeSource` applied to snapshots.
+///
+/// Consulted **only while the artifact is absent from the host**. An artifact
+/// that already exists ignores this field forever, which is what makes a
+/// replayed or re-driven sync unable to re-capture over a checkpoint the user
+/// is holding — and what makes "pause the guest to take it" safe to express
+/// declaratively at all.
 public nonisolated struct Strato_Agent_V1_DesiredSnapshotCapture: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Sandbox artifacts only: whether the guest resumes after the capture or
+  /// stays stopped (checkpoint-and-stop). Absence for the other kinds and from
+  /// senders that omit it, which reads as `.resume`.
+  ///
+  /// This is a capture parameter rather than a status because it describes
+  /// *how the bytes are taken*, not what the sandbox should be doing
+  /// afterwards. The sandbox's own `DesiredSandboxState.desired_status` still
+  /// carries that, written in the same transaction — so a sync replayed after
+  /// the artifact exists converges the sandbox from its own entry and never
+  /// re-reads this one.
+  /// Optional:
   public var sandboxMode: Strato_Agent_V1_SandboxSnapshotMode {
     get {_sandboxMode ?? .unspecified}
     set {_sandboxMode = newValue}
@@ -5275,7 +6033,10 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotCapture: Sendable {
   /// Clears the value of `sandboxMode`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxMode() {self._sandboxMode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Volume artifacts only: the VM the control plane believes holds the
+  /// volume, so the agent can refuse rather than write a snapshot that is not
+  /// point-in-time (issue #747). Absence for a detached volume.
+  /// Optional:
   /// Format: uuid.
   public var attachedVmID: String {
     get {_attachedVmID ?? String()}
@@ -5294,12 +6055,29 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotCapture: Sendable {
   fileprivate var _attachedVmID: String? = nil
 }
 
+/// "This artifact should also exist in the control plane's object store."
+///
+/// The placement half of snapshot mobility (issue #428), stated as a fact about
+/// where the snapshot exists rather than as an order to move bytes. The agent
+/// converges it by streaming each artifact to its upload slot and then reporting
+/// `ObservedSnapshotState.exported`; the transfer underneath stays a transport
+/// concern (`SnapshotArtifactTransfer`), exactly as console and exec streams do.
+///
+/// Idempotent by construction: each PUT replaces the object at its deterministic
+/// key, so a re-driven sync after a lost report converges on the same bytes
+/// instead of duplicating them. Absence means the control plane wants no exported
+/// copy — never "delete the one you made", which is the control plane's own
+/// object-store bookkeeping to undo.
 public nonisolated struct Strato_Agent_V1_DesiredSnapshotExport: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// One upload slot per artifact of the archive. Control-plane-relative
+  /// paths presented with the agent's SVID over mTLS, so — like image
+  /// downloads — nothing here expires and the entry is safe to sit
+  /// in a sync indefinitely.
+  /// Required:
   public var uploads: Strato_Agent_V1_DesiredSnapshotExportUploadsSection {
     get {_uploads ?? Strato_Agent_V1_DesiredSnapshotExportUploadsSection()}
     set {_uploads = newValue}
@@ -5316,12 +6094,19 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotExport: Sendable {
   fileprivate var _uploads: Strato_Agent_V1_DesiredSnapshotExportUploadsSection? = nil
 }
 
+/// One snapshot artifact's authoritative desired state (ADR 0001 stage 8,
+/// STR-150). Level-triggered, generation-guarded, safe to drop or replay —
+/// `DesiredVolumeState` semantics exactly.
+///
+/// There is deliberately no path and no size. The agent owns artifact layout
+/// and is the only party that can measure what it wrote, so both travel the
+/// other way, on the observed report.
 public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var snapshotID: String {
     get {_storage._snapshotID ?? String()}
@@ -5332,7 +6117,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `snapshotID`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshotID() {_uniqueStorage()._snapshotID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_SnapshotArtifactKind {
     get {_storage._kind ?? .unspecified}
     set {_uniqueStorage()._kind = newValue}
@@ -5342,7 +6127,12 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {_uniqueStorage()._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The resource the artifact was captured from — a volume, VM, or sandbox
+  /// id per `kind.parentKind`. Carried because the agent derives the
+  /// artifact's location from (parent, snapshot) exactly as it did at
+  /// capture: that is what lets a delete clean up a capture whose report was
+  /// lost, and it is why nothing here needs a path.
+  /// Required:
   /// Format: uuid.
   public var parentID: String {
     get {_storage._parentID ?? String()}
@@ -5353,7 +6143,7 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `parentID`. Subsequent reads from it will return its default value.
   public mutating func clearParentID() {_uniqueStorage()._parentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredStatus: Strato_Agent_V1_DesiredSnapshotStatus {
     get {_storage._desiredStatus ?? .unspecified}
     set {_uniqueStorage()._desiredStatus = newValue}
@@ -5363,7 +6153,10 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `desiredStatus`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredStatus() {_uniqueStorage()._desiredStatus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-artifact counter, bumped on every desired change. The
+  /// agent records the generation it last applied and rejects older ones, so
+  /// replayed or reordered syncs cannot roll an artifact backward.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -5373,7 +6166,9 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// How to capture the artifact if it is not here yet. Absence means the
+  /// defaults for `kind`.
+  /// Optional:
   public var capture: Strato_Agent_V1_DesiredSnapshotCapture {
     get {_storage._capture ?? Strato_Agent_V1_DesiredSnapshotCapture()}
     set {_uniqueStorage()._capture = newValue}
@@ -5383,7 +6178,11 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `capture`. Subsequent reads from it will return its default value.
   public mutating func clearCapture() {_uniqueStorage()._capture = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Volume artifacts only: the backend coordinates that own the snapshot.
+  /// This travels independently of the parent volume entry because a Ceph
+  /// snapshot remains deletable from any configured client agent after the
+  /// parent volume has moved off this host. Absent for VM/sandbox artifacts.
+  /// Optional:
   public var volumeStorage: Strato_Agent_V1_DesiredVolumeStorage {
     get {_storage._volumeStorage ?? Strato_Agent_V1_DesiredVolumeStorage()}
     set {_uniqueStorage()._volumeStorage = newValue}
@@ -5393,7 +6192,8 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   /// Clears the value of `volumeStorage`. Subsequent reads from it will return its default value.
   public mutating func clearVolumeStorage() {_uniqueStorage()._volumeStorage = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Where a copy of the artifact should also exist, if anywhere.
+  /// Optional:
   public var export: Strato_Agent_V1_DesiredSnapshotExport {
     get {_storage._export ?? Strato_Agent_V1_DesiredSnapshotExport()}
     set {_uniqueStorage()._export = newValue}
@@ -5410,12 +6210,28 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotState: @unchecked Senda
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Control plane → agent: the full authoritative set of VMs that should exist
+/// on the receiving agent.
+///
+/// Full-list semantics make the message level-triggered and idempotent:
+/// identical syncs diff to nothing, and the message is safe to drop, replay, or
+/// reorder (per-VM `generation` guards handle reordering). Fetched on agent
+/// registration, nudged on any desired-state change, and fetched
+/// unconditionally on an agent-owned interval as the correctness backstop.
+///
+/// Omission is **not** teardown (STR-98). A workload the agent holds that this
+/// message does not list is held, untouched, and reported back as an
+/// `UnrecognizedWorkload`; it is removed only once the control plane answers
+/// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
+/// that, the whole safety of a host's workloads rested on the assembler's
+/// `WHERE` clause returning a complete list.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_storage._requestID ?? String()}
     set {_uniqueStorage()._requestID = newValue}
@@ -5425,7 +6241,8 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {_uniqueStorage()._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._timestamp = newValue}
@@ -5435,7 +6252,8 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {_uniqueStorage()._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Correlation id for logging/tracing a sync end to end. No semantics.
+  /// Required:
   public var syncID: String {
     get {_storage._syncID ?? String()}
     set {_uniqueStorage()._syncID = newValue}
@@ -5445,7 +6263,10 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `syncID`. Subsequent reads from it will return its default value.
   public mutating func clearSyncID() {_uniqueStorage()._syncID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete desired VM inventory for this agent. Missing required inventory invalidates the
+  /// snapshot. An omitted local VM is held and reported as unrecognized; only explicit absent intent
+  /// or a tombstone authorizes removal.
+  /// Required:
   public var vms: Strato_Agent_V1_DesiredStateMessageVmsSection {
     get {_storage._vms ?? Strato_Agent_V1_DesiredStateMessageVmsSection()}
     set {_uniqueStorage()._vms = newValue}
@@ -5455,7 +6276,11 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `vms`. Subsequent reads from it will return its default value.
   public mutating func clearVms() {_uniqueStorage()._vms = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The full authoritative set of sandboxes that should exist on the
+  /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
+  /// here should not exist — and, like a VM, is held and reported rather
+  /// than destroyed until a tombstone says otherwise).
+  /// Required:
   public var sandboxes: Strato_Agent_V1_DesiredStateMessageSandboxesSection {
     get {_storage._sandboxes ?? Strato_Agent_V1_DesiredStateMessageSandboxesSection()}
     set {_uniqueStorage()._sandboxes = newValue}
@@ -5465,7 +6290,11 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `sandboxes`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxes() {_uniqueStorage()._sandboxes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The full authoritative set of logical networks that should exist on the
+  /// receiving agent (full-list, same semantics as `vms`: a network omitted
+  /// here should be torn down). An empty list authoritatively means this agent
+  /// should realize no logical-network topology.
+  /// Required:
   public var networks: Strato_Agent_V1_DesiredStateMessageNetworksSection {
     get {_storage._networks ?? Strato_Agent_V1_DesiredStateMessageNetworksSection()}
     set {_uniqueStorage()._networks = newValue}
@@ -5475,7 +6304,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `networks`. Subsequent reads from it will return its default value.
   public mutating func clearNetworks() {_uniqueStorage()._networks = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the receiving agent is the topology authority for its OVN
+  /// northbound database. The authority reconciles `networks` — creating and
+  /// tearing down switches, routers, and NAT. A non-authoritative agent shares
+  /// its site's NB with peers and must leave topology alone (it still binds
+  /// its own VMs' ports); exactly one agent per site is authoritative, so the
+  /// shared NB has a single topology writer. Site-less agents own their local
+  /// NB outright and are always authoritative.
+  /// Required:
   public var networksAuthoritative: Bool {
     get {_storage._networksAuthoritative ?? false}
     set {_uniqueStorage()._networksAuthoritative = newValue}
@@ -5485,7 +6321,12 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `networksAuthoritative`. Subsequent reads from it will return its default value.
   public mutating func clearNetworksAuthoritative() {_uniqueStorage()._networksAuthoritative = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The agent build this agent should be running (issue #434), with a
+  /// freshly resolved artifact. Absence means "no opinion" — deployments without
+  /// a meaningful target (dev builds), agents with auto-update off, and agents
+  /// the fleet rollout has not reached yet. Never an instruction to downgrade
+  /// or tear anything down, so absence is always safe.
+  /// Optional:
   public var desiredAgentUpdate: Strato_Agent_V1_DesiredAgentUpdate {
     get {_storage._desiredAgentUpdate ?? Strato_Agent_V1_DesiredAgentUpdate()}
     set {_uniqueStorage()._desiredAgentUpdate = newValue}
@@ -5495,7 +6336,15 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `desiredAgentUpdate`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredAgentUpdate() {_uniqueStorage()._desiredAgentUpdate = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The security groups the receiving agent needs realized as OVN port
+  /// groups + ACLs: every group attached to a NIC of a VM in this sync's
+  /// scope, plus the transitive closure of groups referenced by their rules
+  /// (so `$pg_…` address-set references always resolve). Only the topology
+  /// authority acts on this list; other agents consume just the per-NIC
+  /// `NetworkSpec.security_group_ids` for port membership. Absence means this agent
+  /// is not authoritative for security-group topology — never "tear down all
+  /// port groups": the agent skips security-group reconciliation entirely.
+  /// Optional:
   public var securityGroups: Strato_Agent_V1_DesiredStateMessageSecurityGroupsSection {
     get {_storage._securityGroups ?? Strato_Agent_V1_DesiredStateMessageSecurityGroupsSection()}
     set {_uniqueStorage()._securityGroups = newValue}
@@ -5505,7 +6354,13 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `securityGroups`. Subsequent reads from it will return its default value.
   public mutating func clearSecurityGroups() {_uniqueStorage()._securityGroups = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Workloads the receiving agent holds that the control plane has
+  /// confirmed have no row, and which it therefore authorizes the agent to
+  /// tear down (STR-98). Each entry is the answer to an
+  /// `UnrecognizedWorkload` the agent reported, so a tombstone is always the
+  /// second half of a round trip — never something the control plane
+  /// volunteers. An empty list means no teardown is authorized.
+  /// Required:
   public var tombstones: Strato_Agent_V1_DesiredStateMessageTombstonesSection {
     get {_storage._tombstones ?? Strato_Agent_V1_DesiredStateMessageTombstonesSection()}
     set {_uniqueStorage()._tombstones = newValue}
@@ -5515,7 +6370,11 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `tombstones`. Subsequent reads from it will return its default value.
   public mutating func clearTombstones() {_uniqueStorage()._tombstones = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The full authoritative set of volumes that should exist on the receiving
+  /// agent (ADR 0001 stage 5, STR-148), with the same full-list semantics as
+  /// `vms`. An empty list authoritatively means this host should hold no
+  /// volumes.
+  /// Required:
   public var volumes: Strato_Agent_V1_DesiredStateMessageVolumesSection {
     get {_storage._volumes ?? Strato_Agent_V1_DesiredStateMessageVolumesSection()}
     set {_uniqueStorage()._volumes = newValue}
@@ -5525,7 +6384,15 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `volumes`. Subsequent reads from it will return its default value.
   public mutating func clearVolumes() {_uniqueStorage()._volumes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The full authoritative set of snapshot artifacts — volume snapshots, VM
+  /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
+  /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
+  /// One list rather than three because the diff, the generation guard and
+  /// the absent-then-confirm dance are identical across the families; only
+  /// the backend that captures the bytes differs, and the entry's own `kind`
+  /// says which. An empty list authoritatively means this host should retain
+  /// no snapshot artifacts.
+  /// Required:
   public var snapshots: Strato_Agent_V1_DesiredStateMessageSnapshotsSection {
     get {_storage._snapshots ?? Strato_Agent_V1_DesiredStateMessageSnapshotsSection()}
     set {_uniqueStorage()._snapshots = newValue}
@@ -5535,7 +6402,11 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `snapshots`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshots() {_uniqueStorage()._snapshots = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Retired Ceph secret/config identities this site must never retain.
+  /// Unlike workload desired state this ledger is append-only: an empty list
+  /// means there are no recorded revocations for this site, never that an
+  /// agent should forget ones it already applied.
+  /// Required:
   public var cephCredentialRevocations: Strato_Agent_V1_DesiredStateMessageCephCredentialRevocationsSection {
     get {_storage._cephCredentialRevocations ?? Strato_Agent_V1_DesiredStateMessageCephCredentialRevocationsSection()}
     set {_uniqueStorage()._cephCredentialRevocations = newValue}
@@ -5545,7 +6416,17 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   /// Clears the value of `cephCredentialRevocations`. Subsequent reads from it will return its default value.
   public mutating func clearCephCredentialRevocations() {_uniqueStorage()._cephCredentialRevocations = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The DNS zones the receiving agent should realize into the OVN `DNS`
+  /// table (STR-39): every zone attached to a network whose topology this
+  /// agent authors, with the zone's full effective record set.
+  ///
+  /// Absence is "the sender has no opinion about DNS" and the agent leaves every
+  /// managed row alone — what a *non-authority* agent gets, since realizing
+  /// switch-scoped rows from two writers would have them fight over teardown.
+  /// `[]` is an opinion and means "no
+  /// zone reaches any network you author": managed rows are removed, which
+  /// is what makes detaching the last zone from a network take effect.
+  /// Optional:
   public var dnsZones: Strato_Agent_V1_DesiredStateMessageDnsZonesSection {
     get {_storage._dnsZones ?? Strato_Agent_V1_DesiredStateMessageDnsZonesSection()}
     set {_uniqueStorage()._dnsZones = newValue}
@@ -5562,12 +6443,13 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessage: @unchecked Sendab
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// One VM's authoritative desired state, as assembled by the control plane.
 public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var vmID: String {
     get {_storage._vmID ?? String()}
@@ -5578,7 +6460,8 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {_uniqueStorage()._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Which backend should realize this VM. Pinned at scheduling time.
+  /// Required:
   public var hypervisorType: Strato_Agent_V1_HypervisorType {
     get {_storage._hypervisorType ?? .unspecified}
     set {_uniqueStorage()._hypervisorType = newValue}
@@ -5588,7 +6471,7 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `hypervisorType`. Subsequent reads from it will return its default value.
   public mutating func clearHypervisorType() {_uniqueStorage()._hypervisorType = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var spec: Strato_Agent_V1_VMSpec {
     get {_storage._spec ?? Strato_Agent_V1_VMSpec()}
     set {_uniqueStorage()._spec = newValue}
@@ -5598,7 +6481,7 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `spec`. Subsequent reads from it will return its default value.
   public mutating func clearSpec() {_uniqueStorage()._spec = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredStatus: Strato_Agent_V1_DesiredVMStatus {
     get {_storage._desiredStatus ?? .unspecified}
     set {_uniqueStorage()._desiredStatus = newValue}
@@ -5608,7 +6491,11 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `desiredStatus`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredStatus() {_uniqueStorage()._desiredStatus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-VM counter, bumped by the control plane on every desired
+  /// status or spec change. The agent records the generation it last applied
+  /// and rejects older ones, so replayed or reordered syncs cannot roll a VM
+  /// backward.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -5618,7 +6505,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Download info for the VM's boot image, so an agent that does not yet
+  /// have the VM can materialize it. Download URLs are control-plane-relative
+  /// paths fetched over SVID mTLS — no signature, so nothing here expires.
+  /// Optional:
   public var imageInfo: Strato_Agent_V1_ImageInfo {
     get {_storage._imageInfo ?? Strato_Agent_V1_ImageInfo()}
     set {_uniqueStorage()._imageInfo = newValue}
@@ -5628,7 +6518,15 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `imageInfo`. Subsequent reads from it will return its default value.
   public mutating func clearImageInfo() {_uniqueStorage()._imageInfo = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// What the VM's link-local metadata service should tell the guest about
+  /// itself (STR-48). Riding the sync is what makes the metadata store
+  /// level-triggered, generation-guarded, and replay-safe without a second
+  /// control loop or transport: an operator's edit lands on the next sync
+  /// instead of requiring the guest to be rebuilt around a new seed ISO.
+  ///
+  /// Absence is authoritative: there is nothing to serve, and an agent holding
+  /// stale metadata must drop it.
+  /// Optional:
   public var metadata: Strato_Agent_V1_InstanceMetadata {
     get {_storage._metadata ?? Strato_Agent_V1_InstanceMetadata()}
     set {_uniqueStorage()._metadata = newValue}
@@ -5638,7 +6536,19 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `metadata`. Subsequent reads from it will return its default value.
   public mutating func clearMetadata() {_uniqueStorage()._metadata = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// How many times this VM has been asked to reboot (ADR 0001 stage 9,
+  /// STR-151) — the `kubectl rollout restart` nonce, applied to the one VM
+  /// verb that is an edge rather than a state.
+  ///
+  /// A reboot starts and ends `.running`, so `desired_status` cannot express
+  /// it and the old `vm_reboot` RPC was fire-and-forget: a socket dropped
+  /// mid-flight lost the reboot silently. Counting it makes it level-triggered
+  /// like everything else — the agent acts when this outranks the nonce it
+  /// durably recorded, and a lost sync costs latency rather than the reboot.
+  ///
+  /// Absence means no reboot has ever been requested and, being a count of
+  /// requests, is never an instruction to undo one.
+  /// Optional:
   public var rebootGeneration: Int64 {
     get {_storage._rebootGeneration ?? 0}
     set {_uniqueStorage()._rebootGeneration = newValue}
@@ -5648,7 +6558,9 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `rebootGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearRebootGeneration() {_uniqueStorage()._rebootGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The checkpoint this VM should have been restored to, as a nonce
+  /// (STR-151). Absence means no restore has ever been requested.
+  /// Optional:
   public var restore: Strato_Agent_V1_DesiredRestore {
     get {_storage._restore ?? Strato_Agent_V1_DesiredRestore()}
     set {_uniqueStorage()._restore = newValue}
@@ -5658,7 +6570,9 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `restore`. Subsequent reads from it will return its default value.
   public mutating func clearRestore() {_uniqueStorage()._restore = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absence means no managed guest intent. Omission never reverses previous guest changes.
+  /// Changes share this VM's generation; no separate guest generation exists.
+  /// Optional:
   public var guestConfig: Strato_Agent_V1_GuestConfig {
     get {_storage._guestConfig ?? Strato_Agent_V1_GuestConfig()}
     set {_uniqueStorage()._guestConfig = newValue}
@@ -5668,7 +6582,8 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   /// Clears the value of `guestConfig`. Subsequent reads from it will return its default value.
   public mutating func clearGuestConfig() {_uniqueStorage()._guestConfig = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Durable control-plane verdict. A matching generation must never reissue guest work after restart.
+  /// Optional:
   public var guestConfigFailedGeneration: Int64 {
     get {_storage._guestConfigFailedGeneration ?? 0}
     set {_uniqueStorage()._guestConfigFailedGeneration = newValue}
@@ -5685,12 +6600,15 @@ public nonisolated struct Strato_Agent_V1_DesiredVMState: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Where a volume should be plugged in. Absence on the desired entry means
+/// "detached"; a value means the agent should have this volume presented to
+/// `vm_id` as `device_name`.
 public nonisolated struct Strato_Agent_V1_DesiredVolumeAttachment: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var vmID: String {
     get {_vmID ?? String()}
@@ -5701,7 +6619,12 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeAttachment: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The control-plane-assigned slot ("disk1", ...). Stable across power
+  /// cycles so a re-realized attachment lands where the guest's fstab
+  /// expects it, unique within its VM, and validated by its type — the slot
+  /// becomes a hypervisor object id, so a sync cannot carry one a hypervisor
+  /// would refuse (STR-129).
+  /// Required:
   /// Format: device-name.
   public var deviceName: String {
     get {_deviceName ?? String()}
@@ -5712,7 +6635,7 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeAttachment: Sendable {
   /// Clears the value of `deviceName`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceName() {self._deviceName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var readonly: Bool {
     get {_readonly ?? false}
     set {_readonly = newValue}
@@ -5722,7 +6645,9 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeAttachment: Sendable {
   /// Clears the value of `readonly`. Subsequent reads from it will return its default value.
   public mutating func clearReadonly() {self._readonly = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Explicit boot priority; informational to the agent, which receives
+  /// `VMSpec.volumes` pre-sorted.
+  /// Optional:
   public var bootOrder: Int64 {
     get {_bootOrder ?? 0}
     set {_bootOrder = newValue}
@@ -5742,12 +6667,23 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeAttachment: Sendable {
   fileprivate var _bootOrder: Int64? = nil
 }
 
+/// How a volume that does not yet exist on this host gets its initial bytes: a
+/// create *strategy*, not an operation — the `SandboxSpec.restore_from`
+/// pattern (issue #427) applied to what used to be `volume_clone`.
+///
+/// Consulted only when the volume is absent from the host. A volume that
+/// already exists ignores this field forever, which is what makes a replayed
+/// or re-driven sync unable to re-clone over live data.
+///
+/// A `String` discriminator rather than a Swift enum with associated values:
+/// an unrecognized `kind` must fail *this volume* — surfacing as its
+/// `last_error` — never the whole `DesiredStateMessage`.
 public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: String {
     get {_kind ?? String()}
     set {_kind = newValue}
@@ -5757,7 +6693,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Present for `image`. Download URLs are control-plane-relative paths
+  /// fetched over SVID mTLS — no signature, so nothing here expires and the
+  /// entry stays safe to sit in a sync indefinitely.
+  /// Optional:
   public var imageInfo: Strato_Agent_V1_ImageInfo {
     get {_imageInfo ?? Strato_Agent_V1_ImageInfo()}
     set {_imageInfo = newValue}
@@ -5767,7 +6706,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   /// Clears the value of `imageInfo`. Subsequent reads from it will return its default value.
   public mutating func clearImageInfo() {self._imageInfo = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The typed image artifact whose bytes initialize this volume. Required
+  /// for `image`: QEMU boot/data volumes use `.diskImage`, while a
+  /// Firecracker boot volume uses `.rootfs`.
+  /// Optional:
   public var artifactKind: Strato_Agent_V1_ArtifactKind {
     get {_artifactKind ?? .unspecified}
     set {_artifactKind = newValue}
@@ -5777,7 +6719,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   /// Clears the value of `artifactKind`. Subsequent reads from it will return its default value.
   public mutating func clearArtifactKind() {self._artifactKind = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Present for `clone`. The volume/VM co-location constraint guarantees the
+  /// source lives on this same agent, and the agent derives the source path
+  /// from its own layout — no path travels on the wire (STR-180).
+  /// Optional:
   /// Format: uuid.
   public var sourceVolumeID: String {
     get {_sourceVolumeID ?? String()}
@@ -5788,7 +6733,11 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   /// Clears the value of `sourceVolumeID`. Subsequent reads from it will return its default value.
   public mutating func clearSourceVolumeID() {self._sourceVolumeID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The VM that currently owns an attached clone source. The agent holds
+  /// this VM's reconciliation lane for the complete copy, so a later desired
+  /// state cannot start the source guest while its bytes are being read. Absence
+  /// for a detached clone source.
+  /// Optional:
   /// Format: uuid.
   public var sourceVmID: String {
     get {_sourceVmID ?? String()}
@@ -5799,7 +6748,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   /// Clears the value of `sourceVmID`. Subsequent reads from it will return its default value.
   public mutating func clearSourceVmID() {self._sourceVmID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The source volume's format, when known, so the agent can pick a copy
+  /// strategy without probing. Advisory: the backend detects rather than
+  /// assumes.
+  /// Optional:
   public var sourceFormat: String {
     get {_sourceFormat ?? String()}
     set {_sourceFormat = newValue}
@@ -5821,12 +6773,20 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeSource: Sendable {
   fileprivate var _sourceFormat: String? = nil
 }
 
+/// One volume's authoritative desired state (ADR 0001 stage 5, STR-148).
+/// Mirrors `DesiredVMState` semantics exactly: level-triggered,
+/// generation-guarded, safe to drop or replay.
+///
+/// There is no `poolId`: an agent consumes the typed `storage` configuration,
+/// not the control-plane pool row that produced it. There is no `storage_path`,
+/// because the selected backend owns realization; its attachment travels the
+/// other way on the observed report.
 public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var volumeID: String {
     get {_storage._volumeID ?? String()}
@@ -5837,7 +6797,7 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `volumeID`. Subsequent reads from it will return its default value.
   public mutating func clearVolumeID() {_uniqueStorage()._volumeID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredStatus: Strato_Agent_V1_DesiredVolumeStatus {
     get {_storage._desiredStatus ?? .unspecified}
     set {_uniqueStorage()._desiredStatus = newValue}
@@ -5847,7 +6807,11 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `desiredStatus`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredStatus() {_uniqueStorage()._desiredStatus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Monotonic per-volume counter, bumped by the control plane on every
+  /// desired change. The agent records the generation it last applied and
+  /// rejects older ones, so replayed or reordered syncs cannot roll a volume
+  /// backward.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -5857,7 +6821,10 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Desired virtual size in bytes. Growth plans a `.resize`; a *shrink* is a
+  /// permanent failure the agent refuses rather than a truncation it
+  /// performs.
+  /// Required:
   public var sizeBytes: Int64 {
     get {_storage._sizeBytes ?? 0}
     set {_uniqueStorage()._sizeBytes = newValue}
@@ -5867,7 +6834,12 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `sizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSizeBytes() {_uniqueStorage()._sizeBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "qcow2" or "raw", parsed by the agent with `DiskFormat(raw_value:)` and
+  /// rejected there. A `String` at the boundary for the same reason
+  /// `VolumeCreateMessage.format` was one: an unknown format must fail this
+  /// volume, not the sync. Immutable after create — a mismatch is a
+  /// permanent failure, never a silent conversion.
+  /// Required:
   public var format: String {
     get {_storage._format ?? String()}
     set {_uniqueStorage()._format = newValue}
@@ -5877,7 +6849,11 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `format`. Subsequent reads from it will return its default value.
   public mutating func clearFormat() {_uniqueStorage()._format = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Backend-specific realization configuration. Local volumes preserve the
+  /// historical agent-owned path layout; Ceph volumes carry a complete,
+  /// project-scoped client configuration so any eligible site agent can
+  /// converge the same RBD image.
+  /// Required:
   public var storage: Strato_Agent_V1_DesiredVolumeStorage {
     get {_storage._storage ?? Strato_Agent_V1_DesiredVolumeStorage()}
     set {_uniqueStorage()._storage = newValue}
@@ -5887,7 +6863,8 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `storage`. Subsequent reads from it will return its default value.
   public mutating func clearStorage() {_uniqueStorage()._storage = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// How to fill a volume that does not exist yet. Absence means blank.
+  /// Optional:
   public var source: Strato_Agent_V1_DesiredVolumeSource {
     get {_storage._source ?? Strato_Agent_V1_DesiredVolumeSource()}
     set {_uniqueStorage()._source = newValue}
@@ -5897,7 +6874,8 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `source`. Subsequent reads from it will return its default value.
   public mutating func clearSource() {_uniqueStorage()._source = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absence means the volume should be detached.
+  /// Optional:
   public var attachment: Strato_Agent_V1_DesiredVolumeAttachment {
     get {_storage._attachment ?? Strato_Agent_V1_DesiredVolumeAttachment()}
     set {_uniqueStorage()._attachment = newValue}
@@ -5907,7 +6885,15 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `attachment`. Subsequent reads from it will return its default value.
   public mutating func clearAttachment() {_uniqueStorage()._attachment = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absolute I/O ceilings for this volume (STR-19). Absence means uncapped, and
+  /// is what every volume created before this field existed means.
+  ///
+  /// Emitted whether or not the volume is attached: a ceiling is a property
+  /// of the volume, latent while it is detached and realized by the attach.
+  /// Always built through `VolumeIOLimits.normalized(iops_total:bps_total:)`,
+  /// so an all-absence pair travels as an absent field — see the type's note on
+  /// why the desired and observed sides normalize in opposite directions.
+  /// Optional:
   public var ioLimits: Strato_Agent_V1_VolumeIOLimits {
     get {_storage._ioLimits ?? Strato_Agent_V1_VolumeIOLimits()}
     set {_uniqueStorage()._ioLimits = newValue}
@@ -5917,7 +6903,9 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeState: @unchecked Sendabl
   /// Clears the value of `ioLimits`. Subsequent reads from it will return its default value.
   public mutating func clearIoLimits() {_uniqueStorage()._ioLimits = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Requested QEMU host-cache policy. Existing desired entries decode to
+  /// the conservative path so optimized caching never appears by upgrade.
+  /// Required:
   public var blockMode: Strato_Agent_V1_VolumeBlockMode {
     get {_storage._blockMode ?? .unspecified}
     set {_uniqueStorage()._blockMode = newValue}
@@ -5949,7 +6937,8 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeStorageCeph: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Ceph placement and credential references for this volume.
+  /// Required:
   public var configuration: Strato_Agent_V1_CephVolumeStorage {
     get {_configuration ?? Strato_Agent_V1_CephVolumeStorage()}
     set {_configuration = newValue}
@@ -5966,6 +6955,11 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeStorageCeph: Sendable {
   fileprivate var _configuration: Strato_Agent_V1_CephVolumeStorage? = nil
 }
 
+/// Backend-specific configuration for realizing a desired volume.
+///
+/// Local volumes intentionally carry no configuration: the receiving agent
+/// owns their filesystem layout. Ceph volumes carry the complete client
+/// configuration because any configured agent in the site may reconcile them.
 public nonisolated struct Strato_Agent_V1_DesiredVolumeStorage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -6000,12 +6994,25 @@ public nonisolated struct Strato_Agent_V1_DesiredVolumeStorage: Sendable {
   public init() {}
 }
 
+/// The control plane's explicit instruction to remove a workload an agent
+/// holds but no database row describes (STR-98).
+///
+/// Absence from a sync is deliberately *not* this. The agent holds anything it
+/// has that a sync omits and reports it back as an `UnrecognizedWorkload`; only
+/// after the control plane confirms no row exists does a tombstone authorize
+/// the teardown. That collapses the destructive path into the one that already
+/// exists — a `.absent` desired entry — and makes every teardown traceable to a
+/// control-plane decision rather than to a silence.
+///
+/// `generation` outranks whatever the agent last applied for the workload, so
+/// the reconciler's staleness guard admits it exactly like any other desired
+/// entry.
 public nonisolated struct Strato_Agent_V1_DesiredWorkloadTombstone: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_WorkloadKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -6015,7 +7022,7 @@ public nonisolated struct Strato_Agent_V1_DesiredWorkloadTombstone: Sendable {
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var workloadID: String {
     get {_workloadID ?? String()}
@@ -6026,7 +7033,7 @@ public nonisolated struct Strato_Agent_V1_DesiredWorkloadTombstone: Sendable {
   /// Clears the value of `workloadID`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadID() {self._workloadID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -6050,7 +7057,8 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentFile: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Host-local file path of the realized disk image.
+  /// Required:
   public var path: String {
     get {_path ?? String()}
     set {_path = newValue}
@@ -6060,7 +7068,8 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentFile: Sendable {
   /// Clears the value of `path`. Subsequent reads from it will return its default value.
   public mutating func clearPath() {self._path = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// On-disk image format; the backend must interpret this file accordingly.
+  /// Required:
   public var format: Strato_Agent_V1_DiskFormat {
     get {_format ?? .unspecified}
     set {_format = newValue}
@@ -6083,7 +7092,8 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentBlockDevice: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Host-local block-device path of the realized volume.
+  /// Required:
   public var path: String {
     get {_path ?? String()}
     set {_path = newValue}
@@ -6105,7 +7115,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var pool: String {
     get {_pool ?? String()}
     set {_pool = newValue}
@@ -6115,7 +7125,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `pool`. Subsequent reads from it will return its default value.
   public mutating func clearPool() {self._pool = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var image: String {
     get {_image ?? String()}
     set {_image = newValue}
@@ -6125,7 +7135,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `image`. Subsequent reads from it will return its default value.
   public mutating func clearImage() {self._image = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var namespace: String {
     get {_namespace ?? String()}
     set {_namespace = newValue}
@@ -6135,7 +7145,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `namespace`. Subsequent reads from it will return its default value.
   public mutating func clearNamespace() {self._namespace = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var user: String {
     get {_user ?? String()}
     set {_user = newValue}
@@ -6145,7 +7155,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `user`. Subsequent reads from it will return its default value.
   public mutating func clearUser() {self._user = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var monEndpoints: Strato_Agent_V1_DiskAttachmentRbdMonEndpointsSection {
     get {_monEndpoints ?? Strato_Agent_V1_DiskAttachmentRbdMonEndpointsSection()}
     set {_monEndpoints = newValue}
@@ -6155,7 +7165,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `monEndpoints`. Subsequent reads from it will return its default value.
   public mutating func clearMonEndpoints() {self._monEndpoints = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var clusterID: String {
     get {_clusterID ?? String()}
@@ -6166,7 +7176,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `clusterID`. Subsequent reads from it will return its default value.
   public mutating func clearClusterID() {self._clusterID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var credentialID: String {
     get {_credentialID ?? String()}
@@ -6177,7 +7187,7 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   /// Clears the value of `credentialID`. Subsequent reads from it will return its default value.
   public mutating func clearCredentialID() {self._credentialID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var configPath: String {
     get {_configPath ?? String()}
     set {_configPath = newValue}
@@ -6201,6 +7211,11 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbd: Sendable {
   fileprivate var _configPath: String? = nil
 }
 
+/// A storage-backend-owned disk reference that a hypervisor can realize.
+///
+/// The cases are intentionally exhaustive rather than a path plus optional
+/// network coordinates. A caller must choose the correct realization instead
+/// of interpreting one string differently according to pool configuration.
 public nonisolated struct Strato_Agent_V1_DiskAttachment: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -6249,7 +7264,8 @@ public nonisolated struct Strato_Agent_V1_ErrorMessage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6259,7 +7275,8 @@ public nonisolated struct Strato_Agent_V1_ErrorMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6269,7 +7286,7 @@ public nonisolated struct Strato_Agent_V1_ErrorMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var error: String {
     get {_error ?? String()}
     set {_error = newValue}
@@ -6279,7 +7296,7 @@ public nonisolated struct Strato_Agent_V1_ErrorMessage: Sendable {
   /// Clears the value of `error`. Subsequent reads from it will return its default value.
   public mutating func clearError() {self._error = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var details: String {
     get {_details ?? String()}
     set {_details = newValue}
@@ -6289,7 +7306,10 @@ public nonisolated struct Strato_Agent_V1_ErrorMessage: Sendable {
   /// Clears the value of `details`. Subsequent reads from it will return its default value.
   public mutating func clearDetails() {self._details = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Machine-readable error classification (see `ErrorCode`). Optional so
+  /// peers that predate it decode fine; absent means unclassified, which
+  /// receivers must treat as potentially transient (safe to retry).
+  /// Optional:
   public var code: String {
     get {_code ?? String()}
     set {_code = newValue}
@@ -6315,7 +7335,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigFileObservation: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var path: String {
     get {_path ?? String()}
     set {_path = newValue}
@@ -6325,7 +7345,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigFileObservation: Sendable {
   /// Clears the value of `path`. Subsequent reads from it will return its default value.
   public mutating func clearPath() {self._path = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var sha256: String {
     get {_sha256 ?? String()}
     set {_sha256 = newValue}
@@ -6335,7 +7355,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigFileObservation: Sendable {
   /// Clears the value of `sha256`. Subsequent reads from it will return its default value.
   public mutating func clearSha256() {self._sha256 = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var mode: String {
     get {_mode ?? String()}
     set {_mode = newValue}
@@ -6354,12 +7374,13 @@ public nonisolated struct Strato_Agent_V1_GuestConfigFileObservation: Sendable {
   fileprivate var _mode: String? = nil
 }
 
+/// A read-only Strato vsock ping, independent of desired opt-in and QEMU's qga.
 public nonisolated struct Strato_Agent_V1_GuestAgentObservation: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var reachable: Bool {
     get {_reachable ?? false}
     set {_reachable = newValue}
@@ -6369,7 +7390,7 @@ public nonisolated struct Strato_Agent_V1_GuestAgentObservation: Sendable {
   /// Clears the value of `reachable`. Subsequent reads from it will return its default value.
   public mutating func clearReachable() {self._reachable = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var checkedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_checkedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_checkedAt = newValue}
@@ -6387,12 +7408,17 @@ public nonisolated struct Strato_Agent_V1_GuestAgentObservation: Sendable {
   fileprivate var _checkedAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
 }
 
+/// Small, level-triggered guest intent (STR-90), guarded by DesiredVMState.generation.
+/// Omission withdraws management; it never deletes files, removes packages, or resets settings.
+/// Consumers must validate before acting and must never log this value or file contents.
 public nonisolated struct Strato_Agent_V1_GuestConfig: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete set of packages under management. Removing an item withdraws management without
+  /// uninstalling it.
+  /// Required:
   public var packages: Strato_Agent_V1_GuestConfigPackagesSection {
     get {_packages ?? Strato_Agent_V1_GuestConfigPackagesSection()}
     set {_packages = newValue}
@@ -6402,7 +7428,9 @@ public nonisolated struct Strato_Agent_V1_GuestConfig: Sendable {
   /// Clears the value of `packages`. Subsequent reads from it will return its default value.
   public mutating func clearPackages() {self._packages = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete set of files under management. Removing an item withdraws management without deleting
+  /// the file.
+  /// Required:
   public var files: Strato_Agent_V1_GuestConfigFilesSection {
     get {_files ?? Strato_Agent_V1_GuestConfigFilesSection()}
     set {_files = newValue}
@@ -6412,7 +7440,9 @@ public nonisolated struct Strato_Agent_V1_GuestConfig: Sendable {
   /// Clears the value of `files`. Subsequent reads from it will return its default value.
   public mutating func clearFiles() {self._files = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete set of services under management. Removing an item withdraws management without
+  /// changing its current state.
+  /// Required:
   public var services: Strato_Agent_V1_GuestConfigServicesSection {
     get {_services ?? Strato_Agent_V1_GuestConfigServicesSection()}
     set {_services = newValue}
@@ -6422,7 +7452,9 @@ public nonisolated struct Strato_Agent_V1_GuestConfig: Sendable {
   /// Clears the value of `services`. Subsequent reads from it will return its default value.
   public mutating func clearServices() {self._services = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete set of sysctls under management. Removing an item withdraws management without
+  /// resetting its value.
+  /// Required:
   public var sysctls: Strato_Agent_V1_GuestConfigSysctlsSection {
     get {_sysctls ?? Strato_Agent_V1_GuestConfigSysctlsSection()}
     set {_sysctls = newValue}
@@ -6442,12 +7474,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfig: Sendable {
   fileprivate var _sysctls: Strato_Agent_V1_GuestConfigSysctlsSection? = nil
 }
 
+/// Guest facts for only the currently managed STR-90 identities. Null facts
+/// mean unavailable/absent; file contents and command output are never returned.
 public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -6457,7 +7491,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_GuestConfigObservationStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -6467,7 +7501,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var error: String {
     get {_error ?? String()}
     set {_error = newValue}
@@ -6477,7 +7511,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `error`. Subsequent reads from it will return its default value.
   public mutating func clearError() {self._error = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failedItem: Strato_Agent_V1_GuestConfigItemFailure {
     get {_failedItem ?? Strato_Agent_V1_GuestConfigItemFailure()}
     set {_failedItem = newValue}
@@ -6487,7 +7521,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `failedItem`. Subsequent reads from it will return its default value.
   public mutating func clearFailedItem() {self._failedItem = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var packages: Strato_Agent_V1_GuestConfigObservationPackagesSection {
     get {_packages ?? Strato_Agent_V1_GuestConfigObservationPackagesSection()}
     set {_packages = newValue}
@@ -6497,7 +7531,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `packages`. Subsequent reads from it will return its default value.
   public mutating func clearPackages() {self._packages = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var files: Strato_Agent_V1_GuestConfigObservationFilesSection {
     get {_files ?? Strato_Agent_V1_GuestConfigObservationFilesSection()}
     set {_files = newValue}
@@ -6507,7 +7541,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `files`. Subsequent reads from it will return its default value.
   public mutating func clearFiles() {self._files = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var services: Strato_Agent_V1_GuestConfigObservationServicesSection {
     get {_services ?? Strato_Agent_V1_GuestConfigObservationServicesSection()}
     set {_services = newValue}
@@ -6517,7 +7551,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   /// Clears the value of `services`. Subsequent reads from it will return its default value.
   public mutating func clearServices() {self._services = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sysctls: Strato_Agent_V1_GuestConfigObservationSysctlsSection {
     get {_sysctls ?? Strato_Agent_V1_GuestConfigObservationSysctlsSection()}
     set {_sysctls = newValue}
@@ -6541,12 +7575,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservation: Sendable {
   fileprivate var _sysctls: Strato_Agent_V1_GuestConfigObservationSysctlsSection? = nil
 }
 
+/// Control plane → agent: tear down an exec session (the browser went away).
 public nonisolated struct Strato_Agent_V1_GuestExecCloseMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6556,7 +7592,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecCloseMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6566,7 +7603,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecCloseMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6576,7 +7613,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecCloseMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -6596,12 +7633,16 @@ public nonisolated struct Strato_Agent_V1_GuestExecCloseMessage: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// Agent → control plane: the exec session ended without an exit code — the
+/// spawn failed, the guest channel died, or the resource stopped. Terminal for
+/// the session.
 public nonisolated struct Strato_Agent_V1_GuestExecClosedMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6611,7 +7652,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecClosedMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6621,7 +7663,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecClosedMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6631,7 +7673,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecClosedMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -6651,12 +7693,15 @@ public nonisolated struct Strato_Agent_V1_GuestExecClosedMessage: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// Agent → control plane: the exec process ended. Terminal for the session;
+/// all output was sent before this message.
 public nonisolated struct Strato_Agent_V1_GuestExecExitMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6666,7 +7711,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecExitMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6676,7 +7722,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecExitMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6686,7 +7732,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecExitMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Shell convention: a process killed by signal N reports 128 + N.
+  /// Required:
   public var exitCode: Int64 {
     get {_exitCode ?? 0}
     set {_exitCode = newValue}
@@ -6706,12 +7753,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecExitMessage: Sendable {
   fileprivate var _exitCode: Int64? = nil
 }
 
+/// Control plane → agent: stdin bytes for the exec process, and/or stdin EOF.
 public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6721,7 +7770,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6731,7 +7781,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6741,7 +7791,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Raw stdin bytes; absent for an EOF-only message.
+  /// Optional:
   public var data: Data {
     get {_data ?? Data()}
     set {_data = newValue}
@@ -6751,7 +7802,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   /// Clears the value of `data`. Subsequent reads from it will return its default value.
   public mutating func clearData() {self._data = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Close the exec process's stdin after writing `data` (if any).
+  /// Required:
   public var eof: Bool {
     get {_eof ?? false}
     set {_eof = newValue}
@@ -6772,12 +7824,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecInputMessage: Sendable {
   fileprivate var _eof: Bool? = nil
 }
 
+/// Agent → control plane: output bytes from the exec process.
 public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6787,7 +7841,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6797,7 +7852,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6807,7 +7862,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// `stdout` or `stderr`; PTY sessions always use `stdout`.
+  /// Required:
   public var stream: String {
     get {_stream ?? String()}
     set {_stream = newValue}
@@ -6817,7 +7873,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   /// Clears the value of `stream`. Subsequent reads from it will return its default value.
   public mutating func clearStream() {self._stream = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Raw output bytes; no base64 layer is used on the workload wire.
+  /// Required:
   public var data: Data {
     get {_data ?? Data()}
     set {_data = newValue}
@@ -6838,12 +7895,20 @@ public nonisolated struct Strato_Agent_V1_GuestExecOutputMessage: Sendable {
   fileprivate var _data: Data? = nil
 }
 
+/// Control plane → agent: retire a terminal recorded-session snapshot after
+/// the control plane durably committed or deliberately discarded its outcome.
+///
+/// This typed acknowledgement is keyed by `session_id`. Its independently
+/// minted `request_id` is only a log-correlation handle; it does not correlate
+/// this message as a generic RPC reply. An acknowledgement is meaningful only
+/// for an `exited` or `closed` snapshot.
 public nonisolated struct Strato_Agent_V1_GuestExecRecordedAckMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6853,7 +7918,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedAckMessage: Sendable 
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6863,7 +7929,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedAckMessage: Sendable 
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6882,12 +7948,32 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedAckMessage: Sendable 
   fileprivate var _sessionID: String? = nil
 }
 
+/// Agent → control plane: the complete bounded state of a recorded exec
+/// session. This is a level-triggered snapshot, not an output delta or a reply.
+///
+/// The agent re-offers running snapshots after registration and replays a
+/// terminal snapshot until it receives ``GuestExecRecordedAckMessage``. The
+/// status fields have these invariants:
+///
+/// - `running`: `exit_code` and `reason` are absent.
+/// - `exited`: `exit_code` is present and `reason` is absent.
+/// - `closed`: `exit_code` is absent and `reason` is present.
+///
+/// `revision` is a non-negative, per-session counter. The agent advances it
+/// whenever the authoritative capture changes, so replicas can reject an older
+/// snapshot after a reconnect without relying on socket arrival order.
+///
+/// `stdout` and `stderr` are authoritative raw byte snapshots. Their combined
+/// size never exceeds the output limit requested when the session was started. `truncated` says
+/// the capture may be incomplete: either bytes exceeded that bound or the
+/// channel closed without an authoritative `exec_exit` record.
 public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -6897,7 +7983,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -6907,7 +7994,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -6917,7 +8004,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var revision: Int64 {
     get {_revision ?? 0}
     set {_revision = newValue}
@@ -6927,7 +8014,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `revision`. Subsequent reads from it will return its default value.
   public mutating func clearRevision() {self._revision = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_GuestExecRecordedStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -6937,7 +8024,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete bounded stdout capture, as raw bytes; present even when empty.
+  /// Required:
   public var stdout: Data {
     get {_stdout ?? Data()}
     set {_stdout = newValue}
@@ -6947,7 +8035,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `stdout`. Subsequent reads from it will return its default value.
   public mutating func clearStdout() {self._stdout = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Complete bounded stderr capture, as raw bytes; present even when empty.
+  /// Required:
   public var stderr: Data {
     get {_stderr ?? Data()}
     set {_stderr = newValue}
@@ -6957,7 +8046,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `stderr`. Subsequent reads from it will return its default value.
   public mutating func clearStderr() {self._stderr = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var exitCode: Int64 {
     get {_exitCode ?? 0}
     set {_exitCode = newValue}
@@ -6967,7 +8056,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `exitCode`. Subsequent reads from it will return its default value.
   public mutating func clearExitCode() {self._exitCode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -6977,7 +8066,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   /// Clears the value of `reason`. Subsequent reads from it will return its default value.
   public mutating func clearReason() {self._reason = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var truncated: Bool {
     get {_truncated ?? false}
     set {_truncated = newValue}
@@ -7003,12 +8092,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecRecordedStateMessage: Sendabl
   fileprivate var _truncated: Bool? = nil
 }
 
+/// Control plane → agent: resize the exec session's PTY.
 public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -7018,7 +8109,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -7028,7 +8120,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -7038,7 +8130,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var rows: Int64 {
     get {_rows ?? 0}
     set {_rows = newValue}
@@ -7048,7 +8140,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   /// Clears the value of `rows`. Subsequent reads from it will return its default value.
   public mutating func clearRows() {self._rows = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cols: Int64 {
     get {_cols ?? 0}
     set {_cols = newValue}
@@ -7069,12 +8161,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecResizeMessage: Sendable {
   fileprivate var _cols: Int64? = nil
 }
 
+/// Control plane → agent: start an exec session inside a running guest.
 public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -7084,7 +8178,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -7094,7 +8189,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resourceKind: Strato_Agent_V1_GuestResourceKind {
     get {_resourceKind ?? .unspecified}
     set {_resourceKind = newValue}
@@ -7104,7 +8199,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `resourceKind`. Subsequent reads from it will return its default value.
   public mutating func clearResourceKind() {self._resourceKind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resourceID: String {
     get {_resourceID ?? String()}
     set {_resourceID = newValue}
@@ -7114,7 +8209,10 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `resourceID`. Subsequent reads from it will return its default value.
   public mutating func clearResourceID() {self._resourceID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Interactive sessions end with their frontend connection. Recorded
+  /// sessions survive a control-plane WebSocket reconnect while this agent
+  /// process remains alive and replay their state until acknowledged.
+  /// Required:
   public var sessionKind: Strato_Agent_V1_GuestExecSessionKind {
     get {_sessionKind ?? .unspecified}
     set {_sessionKind = newValue}
@@ -7124,7 +8222,9 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `sessionKind`. Subsequent reads from it will return its default value.
   public mutating func clearSessionKind() {self._sessionKind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Control-plane-minted session identifier every subsequent message on
+  /// this exec session carries.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -7134,7 +8234,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
   public mutating func clearSessionID() {self._sessionID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The argv to run in the guest context. Never empty.
+  /// Required:
   public var command: Strato_Agent_V1_GuestExecStartMessageCommandSection {
     get {_command ?? Strato_Agent_V1_GuestExecStartMessageCommandSection()}
     set {_command = newValue}
@@ -7144,7 +8245,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `command`. Subsequent reads from it will return its default value.
   public mutating func clearCommand() {self._command = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Extra environment merged over the workload's resolved environment.
+  /// Optional:
   public var env: Strato_Agent_V1_GuestExecStartMessageEnvSection {
     get {_env ?? Strato_Agent_V1_GuestExecStartMessageEnvSection()}
     set {_env = newValue}
@@ -7154,7 +8256,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `env`. Subsequent reads from it will return its default value.
   public mutating func clearEnv() {self._env = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Working directory; absence inherits the workload's resolved cwd.
+  /// Optional:
   public var workingDir: String {
     get {_workingDir ?? String()}
     set {_workingDir = newValue}
@@ -7164,7 +8267,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `workingDir`. Subsequent reads from it will return its default value.
   public mutating func clearWorkingDir() {self._workingDir = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Allocate a PTY. When true all output arrives as the `stdout` stream.
+  /// Required:
   public var tty: Bool {
     get {_tty ?? false}
     set {_tty = newValue}
@@ -7174,7 +8278,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `tty`. Subsequent reads from it will return its default value.
   public mutating func clearTty() {self._tty = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var rows: Int64 {
     get {_rows ?? 0}
     set {_rows = newValue}
@@ -7184,7 +8288,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   /// Clears the value of `rows`. Subsequent reads from it will return its default value.
   public mutating func clearRows() {self._rows = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var cols: Int64 {
     get {_cols ?? 0}
     set {_cols = newValue}
@@ -7212,12 +8316,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessage: Sendable {
   fileprivate var _cols: Int64? = nil
 }
 
+/// Agent → control plane: the exec process spawned; output may follow.
 public nonisolated struct Strato_Agent_V1_GuestExecStartedMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -7227,7 +8333,8 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartedMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -7237,7 +8344,7 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartedMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sessionID: String {
     get {_sessionID ?? String()}
     set {_sessionID = newValue}
@@ -7261,7 +8368,7 @@ public nonisolated struct Strato_Agent_V1_GuestFile: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var path: String {
     get {_path ?? String()}
     set {_path = newValue}
@@ -7271,7 +8378,7 @@ public nonisolated struct Strato_Agent_V1_GuestFile: Sendable {
   /// Clears the value of `path`. Subsequent reads from it will return its default value.
   public mutating func clearPath() {self._path = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var content: String {
     get {_content ?? String()}
     set {_content = newValue}
@@ -7281,7 +8388,7 @@ public nonisolated struct Strato_Agent_V1_GuestFile: Sendable {
   /// Clears the value of `content`. Subsequent reads from it will return its default value.
   public mutating func clearContent() {self._content = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var mode: String {
     get {_mode ?? String()}
     set {_mode = newValue}
@@ -7300,12 +8407,14 @@ public nonisolated struct Strato_Agent_V1_GuestFile: Sendable {
   fileprivate var _mode: String? = nil
 }
 
+/// One IP address configured inside the guest, as reported by qga.
 public nonisolated struct Strato_Agent_V1_GuestIPAddress: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The address family this address belongs to.
+  /// Required:
   public var family: Strato_Agent_V1_IPFamily {
     get {_family ?? .unspecified}
     set {_family = newValue}
@@ -7315,7 +8424,9 @@ public nonisolated struct Strato_Agent_V1_GuestIPAddress: Sendable {
   /// Clears the value of `family`. Subsequent reads from it will return its default value.
   public mutating func clearFamily() {self._family = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The address in its canonical text form (no prefix suffix), e.g.
+  /// "192.168.1.42" or "fe80::5054:ff:fe12:3456".
+  /// Required:
   public var address: String {
     get {_address ?? String()}
     set {_address = newValue}
@@ -7325,7 +8436,9 @@ public nonisolated struct Strato_Agent_V1_GuestIPAddress: Sendable {
   /// Clears the value of `address`. Subsequent reads from it will return its default value.
   public mutating func clearAddress() {self._address = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The prefix length (CIDR bits) the guest reported for this address, or
+  /// absence if qga did not supply one.
+  /// Optional:
   public var prefixLength: Int64 {
     get {_prefixLength ?? 0}
     set {_prefixLength = newValue}
@@ -7344,12 +8457,36 @@ public nonisolated struct Strato_Agent_V1_GuestIPAddress: Sendable {
   fileprivate var _prefixLength: Int64? = nil
 }
 
+/// What the QEMU guest agent (qga) reported about a running VM's guest OS,
+/// attached to that VM's `ObservedVMState` on the agent → control-plane
+/// observed-state report (issue #563).
+///
+/// This is a best-effort, informational channel, not a source of truth: qga is
+/// *unresponsive whenever the guest is not running the agent*, so the whole
+/// struct is absent (`ObservedVMState.guest_info == absence`) for VMs whose image
+/// lacks qga, whose guest is still booting, or whose guest hung — and every
+/// field within it is independently optional for the same reason. Readers must
+/// tolerate a missing struct and missing pieces rather than assume a complete
+/// record.
+///
+/// The observed addresses here are deliberately distinct from a VM's
+/// *allocated* addresses (IPAM's static assignment, or nothing at all on
+/// DHCP/SLIRP): only qga can see what the guest actually configured — DHCP
+/// leases, manual changes, IPv6 SLAAC addresses — so these are the sole way
+/// those addresses become visible to the control plane.
 public nonisolated struct Strato_Agent_V1_GuestInfo: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the guest agent answered at all during the last probe. `true`
+  /// means a `guest-ping`/`guest-sync` round-trip succeeded within its
+  /// budget; the address/hostname fields are only meaningful when this is
+  /// `true`. A VM with no qga never produces a `GuestInfo` at all, so in
+  /// practice this is `true` on every reported struct — it exists so the
+  /// control plane can still record a positive liveness signal even when the
+  /// follow-up detail queries came back empty.
+  /// Required:
   public var qgaAvailable: Bool {
     get {_qgaAvailable ?? false}
     set {_qgaAvailable = newValue}
@@ -7359,7 +8496,9 @@ public nonisolated struct Strato_Agent_V1_GuestInfo: Sendable {
   /// Clears the value of `qgaAvailable`. Subsequent reads from it will return its default value.
   public mutating func clearQgaAvailable() {self._qgaAvailable = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The guest OS hostname (`guest-get-host-name`), or absence if the guest could
+  /// not report one.
+  /// Optional:
   public var hostname: String {
     get {_hostname ?? String()}
     set {_hostname = newValue}
@@ -7369,7 +8508,12 @@ public nonisolated struct Strato_Agent_V1_GuestInfo: Sendable {
   /// Clears the value of `hostname`. Subsequent reads from it will return its default value.
   public mutating func clearHostname() {self._hostname = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network interfaces the guest actually has configured
+  /// (`guest-network-get-interfaces`), keyed for the control plane by each
+  /// interface's hardware (MAC) address so it can be matched against the
+  /// VM's `VMNetworkInterface` rows. Empty when the guest reported no
+  /// interfaces or the query failed.
+  /// Required:
   public var interfaces: Strato_Agent_V1_GuestInfoInterfacesSection {
     get {_interfaces ?? Strato_Agent_V1_GuestInfoInterfacesSection()}
     set {_interfaces = newValue}
@@ -7388,12 +8532,17 @@ public nonisolated struct Strato_Agent_V1_GuestInfo: Sendable {
   fileprivate var _interfaces: Strato_Agent_V1_GuestInfoInterfacesSection? = nil
 }
 
+/// One network interface as seen *inside the guest* by qga
+/// (`guest-network-get-interfaces`). Distinct from `VMNetworkInterface`, which
+/// is the control plane's own record of the NIC it attached: this is what the
+/// guest OS reports it did with that NIC.
 public nonisolated struct Strato_Agent_V1_GuestNetworkInterface: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The guest's name for the interface, e.g. "eth0", "enp0s3", "lo".
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -7403,7 +8552,11 @@ public nonisolated struct Strato_Agent_V1_GuestNetworkInterface: Sendable {
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The interface's hardware (MAC) address, lowercased and colon-separated
+  /// (e.g. "52:54:00:12:34:56"), or absence for interfaces the guest reported
+  /// without one (notably loopback). This is the join key the control plane
+  /// uses to attribute observed addresses to a `VMNetworkInterface`.
+  /// Optional:
   public var hardwareAddress: String {
     get {_hardwareAddress ?? String()}
     set {_hardwareAddress = newValue}
@@ -7413,7 +8566,10 @@ public nonisolated struct Strato_Agent_V1_GuestNetworkInterface: Sendable {
   /// Clears the value of `hardwareAddress`. Subsequent reads from it will return its default value.
   public mutating func clearHardwareAddress() {self._hardwareAddress = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The addresses the guest has configured on this interface. Includes
+  /// DHCP/SLAAC/link-local addresses the control plane never allocated, which
+  /// is the whole point. An empty collection means the guest reported none.
+  /// Required:
   public var addresses: Strato_Agent_V1_GuestNetworkInterfaceAddressesSection {
     get {_addresses ?? Strato_Agent_V1_GuestNetworkInterfaceAddressesSection()}
     set {_addresses = newValue}
@@ -7437,7 +8593,7 @@ public nonisolated struct Strato_Agent_V1_GuestPackage: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -7447,7 +8603,7 @@ public nonisolated struct Strato_Agent_V1_GuestPackage: Sendable {
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var state: Strato_Agent_V1_GuestPackageState {
     get {_state ?? .unspecified}
     set {_state = newValue}
@@ -7470,7 +8626,7 @@ public nonisolated struct Strato_Agent_V1_GuestService: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -7480,7 +8636,7 @@ public nonisolated struct Strato_Agent_V1_GuestService: Sendable {
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var enabled: Bool {
     get {_enabled ?? false}
     set {_enabled = newValue}
@@ -7503,7 +8659,7 @@ public nonisolated struct Strato_Agent_V1_GuestSysctl: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var key: String {
     get {_key ?? String()}
     set {_key = newValue}
@@ -7513,7 +8669,7 @@ public nonisolated struct Strato_Agent_V1_GuestSysctl: Sendable {
   /// Clears the value of `key`. Subsequent reads from it will return its default value.
   public mutating func clearKey() {self._key = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var value: String {
     get {_value ?? String()}
     set {_value = newValue}
@@ -7531,12 +8687,25 @@ public nonisolated struct Strato_Agent_V1_GuestSysctl: Sendable {
   fileprivate var _value: String? = nil
 }
 
+/// Descriptive hardware, platform, and OS details for a hypervisor host,
+/// gathered by the agent at registration and surfaced on the agent object for
+/// operators. Purely informational — the scheduler keys placement on the typed
+/// `CPUArchitecture`, `HypervisorSupport`, and `AgentResources` fields, not on
+/// anything here.
+///
+/// Every field is optional: probes are best-effort and platform-specific (a
+/// value the agent couldn't read stays `absence`), and the whole struct is absent
+/// for agents that registered before host-info reporting, so readers must
+/// tolerate missing pieces rather than assume a complete record.
 public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Human-readable OS product/distribution name including its version, e.g.
+  /// "Ubuntu 24.04.1 LTS" (from `/etc/os-release` `PRETTY_NAME`) or
+  /// "macOS 15.1".
+  /// Optional:
   public var osName: String {
     get {_osName ?? String()}
     set {_osName = newValue}
@@ -7546,7 +8715,9 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `osName`. Subsequent reads from it will return its default value.
   public mutating func clearOsName() {self._osName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Kernel release string (`uname -r`), e.g. "6.8.0-45-generic" on Linux or
+  /// the Darwin release "24.1.0" on macOS.
+  /// Optional:
   public var kernelVersion: String {
     get {_kernelVersion ?? String()}
     set {_kernelVersion = newValue}
@@ -7556,7 +8727,9 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `kernelVersion`. Subsequent reads from it will return its default value.
   public mutating func clearKernelVersion() {self._kernelVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// CPU brand/model string, e.g. "Apple M2 Pro" or
+  /// "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz".
+  /// Optional:
   public var cpuModel: String {
     get {_cpuModel ?? String()}
     set {_cpuModel = newValue}
@@ -7566,7 +8739,8 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `cpuModel`. Subsequent reads from it will return its default value.
   public mutating func clearCpuModel() {self._cpuModel = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// CPU vendor identifier, e.g. "GenuineIntel", "AuthenticAMD", or "Apple".
+  /// Optional:
   public var cpuVendor: String {
     get {_cpuVendor ?? String()}
     set {_cpuVendor = newValue}
@@ -7576,7 +8750,9 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `cpuVendor`. Subsequent reads from it will return its default value.
   public mutating func clearCpuVendor() {self._cpuVendor = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Number of physical CPU cores (distinct from `logical_core_count`, which
+  /// counts hardware threads / hyperthreads).
+  /// Optional:
   public var physicalCoreCount: Int64 {
     get {_physicalCoreCount ?? 0}
     set {_physicalCoreCount = newValue}
@@ -7586,7 +8762,8 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `physicalCoreCount`. Subsequent reads from it will return its default value.
   public mutating func clearPhysicalCoreCount() {self._physicalCoreCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Number of logical CPU cores (hardware threads) available to the host.
+  /// Optional:
   public var logicalCoreCount: Int64 {
     get {_logicalCoreCount ?? 0}
     set {_logicalCoreCount = newValue}
@@ -7596,7 +8773,8 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `logicalCoreCount`. Subsequent reads from it will return its default value.
   public mutating func clearLogicalCoreCount() {self._logicalCoreCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Total physical memory on the host, in bytes.
+  /// Optional:
   public var totalMemoryBytes: Int64 {
     get {_totalMemoryBytes ?? 0}
     set {_totalMemoryBytes = newValue}
@@ -7606,7 +8784,9 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `totalMemoryBytes`. Subsequent reads from it will return its default value.
   public mutating func clearTotalMemoryBytes() {self._totalMemoryBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Machine/hardware model identifier, e.g. "MacBookPro18,3" (macOS
+  /// `hw.model`) or the DMI product name on Linux ("PowerEdge R650").
+  /// Optional:
   public var machineModel: String {
     get {_machineModel ?? String()}
     set {_machineModel = newValue}
@@ -7616,7 +8796,10 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   /// Clears the value of `machineModel`. Subsequent reads from it will return its default value.
   public mutating func clearMachineModel() {self._machineModel = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The instant the host last booted. A fixed point in time (unlike an
+  /// uptime duration, which goes stale the moment it's stored), so the UI can
+  /// render a live "up for N days" from it.
+  /// Optional:
   public var bootTime: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_bootTime ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_bootTime = newValue}
@@ -7641,12 +8824,14 @@ public nonisolated struct Strato_Agent_V1_HostInfo: Sendable {
   fileprivate var _bootTime: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
 }
 
+/// Physical memory remains physical. Consumers use remainingAllocatableBytes directly;
+/// neither the host reserve nor workload commitments may be subtracted again.
 public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var physicalBytes: Int64 {
     get {_physicalBytes ?? 0}
     set {_physicalBytes = newValue}
@@ -7656,7 +8841,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   /// Clears the value of `physicalBytes`. Subsequent reads from it will return its default value.
   public mutating func clearPhysicalBytes() {self._physicalBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var hostReservedBytes: Int64 {
     get {_hostReservedBytes ?? 0}
     set {_hostReservedBytes = newValue}
@@ -7666,7 +8851,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   /// Clears the value of `hostReservedBytes`. Subsequent reads from it will return its default value.
   public mutating func clearHostReservedBytes() {self._hostReservedBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var workloadEffectiveBytes: Int64 {
     get {_workloadEffectiveBytes ?? 0}
     set {_workloadEffectiveBytes = newValue}
@@ -7676,7 +8861,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   /// Clears the value of `workloadEffectiveBytes`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadEffectiveBytes() {self._workloadEffectiveBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var remainingAllocatableBytes: Int64 {
     get {_remainingAllocatableBytes ?? 0}
     set {_remainingAllocatableBytes = newValue}
@@ -7686,7 +8871,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   /// Clears the value of `remainingAllocatableBytes`. Subsequent reads from it will return its default value.
   public mutating func clearRemainingAllocatableBytes() {self._remainingAllocatableBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var qemuOverheadBytes: Int64 {
     get {_qemuOverheadBytes ?? 0}
     set {_qemuOverheadBytes = newValue}
@@ -7707,12 +8892,13 @@ public nonisolated struct Strato_Agent_V1_HostMemoryAccounting: Sendable {
   fileprivate var _qemuOverheadBytes: Int64? = nil
 }
 
+/// Operator bootstrap intent, never a desired-state instruction or API mutation.
 public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var tier: Strato_Agent_V1_HostMemoryTier {
     get {_tier ?? .unspecified}
     set {_tier = newValue}
@@ -7722,7 +8908,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `tier`. Subsequent reads from it will return its default value.
   public mutating func clearTier() {self._tier = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var tenantClass: Strato_Agent_V1_HostMemoryTenantClass {
     get {_tenantClass ?? .unspecified}
     set {_tenantClass = newValue}
@@ -7732,7 +8918,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `tenantClass`. Subsequent reads from it will return its default value.
   public mutating func clearTenantClass() {self._tenantClass = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var nvmeSwap: String {
     get {_nvmeSwap ?? String()}
     set {_nvmeSwap = newValue}
@@ -7742,7 +8928,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `nvmeSwap`. Subsequent reads from it will return its default value.
   public mutating func clearNvmeSwap() {self._nvmeSwap = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var zramBytes: Int64 {
     get {_zramBytes ?? 0}
     set {_zramBytes = newValue}
@@ -7752,7 +8938,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `zramBytes`. Subsequent reads from it will return its default value.
   public mutating func clearZramBytes() {self._zramBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var zswapPoolPercent: Int64 {
     get {_zswapPoolPercent ?? 0}
     set {_zswapPoolPercent = newValue}
@@ -7762,7 +8948,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `zswapPoolPercent`. Subsequent reads from it will return its default value.
   public mutating func clearZswapPoolPercent() {self._zswapPoolPercent = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var ksm: Bool {
     get {_ksm ?? false}
     set {_ksm = newValue}
@@ -7772,7 +8958,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `ksm`. Subsequent reads from it will return its default value.
   public mutating func clearKsm() {self._ksm = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var requireMglru: Bool {
     get {_requireMglru ?? false}
     set {_requireMglru = newValue}
@@ -7782,7 +8968,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `requireMglru`. Subsequent reads from it will return its default value.
   public mutating func clearRequireMglru() {self._requireMglru = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var ksmPagesToScan: Int64 {
     get {_ksmPagesToScan ?? 0}
     set {_ksmPagesToScan = newValue}
@@ -7792,7 +8978,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   /// Clears the value of `ksmPagesToScan`. Subsequent reads from it will return its default value.
   public mutating func clearKsmPagesToScan() {self._ksmPagesToScan = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var ksmSleepMilliseconds: Int64 {
     get {_ksmSleepMilliseconds ?? 0}
     set {_ksmSleepMilliseconds = newValue}
@@ -7817,12 +9003,14 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileConfiguration: Sendab
   fileprivate var _ksmSleepMilliseconds: Int64? = nil
 }
 
+/// Live read-only evidence. Absence and configured/effective mismatch are failures,
+/// including the interval between disabling KSM and completion of unmerging.
 public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var configured: Strato_Agent_V1_HostMemoryProfileConfiguration {
     get {_configured ?? Strato_Agent_V1_HostMemoryProfileConfiguration()}
     set {_configured = newValue}
@@ -7832,7 +9020,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable
   /// Clears the value of `configured`. Subsequent reads from it will return its default value.
   public mutating func clearConfigured() {self._configured = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var effectiveTier: Strato_Agent_V1_HostMemoryTier {
     get {_effectiveTier ?? .unspecified}
     set {_effectiveTier = newValue}
@@ -7842,7 +9030,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable
   /// Clears the value of `effectiveTier`. Subsequent reads from it will return its default value.
   public mutating func clearEffectiveTier() {self._effectiveTier = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var thpPolicy: String {
     get {_thpPolicy ?? String()}
     set {_thpPolicy = newValue}
@@ -7852,7 +9040,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable
   /// Clears the value of `thpPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearThpPolicy() {self._thpPolicy = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var ksmRunning: Bool {
     get {_ksmRunning ?? false}
     set {_ksmRunning = newValue}
@@ -7862,7 +9050,7 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable
   /// Clears the value of `ksmRunning`. Subsequent reads from it will return its default value.
   public mutating func clearKsmRunning() {self._ksmRunning = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -7883,12 +9071,13 @@ public nonisolated struct Strato_Agent_V1_HostMemoryProfileObservation: Sendable
   fileprivate var _reason: String? = nil
 }
 
+/// Host-wide pressure, reclaim, swap, and OOM observations.
 public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sampledAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._sampledAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._sampledAt = newValue}
@@ -7898,7 +9087,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `sampledAt`. Subsequent reads from it will return its default value.
   public mutating func clearSampledAt() {_uniqueStorage()._sampledAt = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var health: Strato_Agent_V1_ResourcePressureHealth {
     get {_storage._health ?? .unspecified}
     set {_uniqueStorage()._health = newValue}
@@ -7908,7 +9097,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `health`. Subsequent reads from it will return its default value.
   public mutating func clearHealth() {_uniqueStorage()._health = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._cpuPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._cpuPressure = newValue}
@@ -7918,7 +9107,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `cpuPressure`. Subsequent reads from it will return its default value.
   public mutating func clearCpuPressure() {_uniqueStorage()._cpuPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._memoryPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._memoryPressure = newValue}
@@ -7928,7 +9117,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `memoryPressure`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryPressure() {_uniqueStorage()._memoryPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ioPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._ioPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._ioPressure = newValue}
@@ -7938,7 +9127,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `ioPressure`. Subsequent reads from it will return its default value.
   public mutating func clearIoPressure() {_uniqueStorage()._ioPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var swapTotalBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._swapTotalBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._swapTotalBytes = newValue}
@@ -7948,7 +9137,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapTotalBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSwapTotalBytes() {_uniqueStorage()._swapTotalBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var swapUsedBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._swapUsedBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._swapUsedBytes = newValue}
@@ -7958,7 +9147,8 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapUsedBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSwapUsedBytes() {_uniqueStorage()._swapUsedBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Bytes of original pages currently represented in zswap.
+  /// Required:
   public var zswapStoredBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._zswapStoredBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._zswapStoredBytes = newValue}
@@ -7968,7 +9158,8 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `zswapStoredBytes`. Subsequent reads from it will return its default value.
   public mutating func clearZswapStoredBytes() {_uniqueStorage()._zswapStoredBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Bytes currently consumed by zswap's compressed pool.
+  /// Required:
   public var zswapPoolBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._zswapPoolBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._zswapPoolBytes = newValue}
@@ -7978,7 +9169,8 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `zswapPoolBytes`. Subsequent reads from it will return its default value.
   public mutating func clearZswapPoolBytes() {_uniqueStorage()._zswapPoolBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sum of `mem_used_total` across the host's zram block devices.
+  /// Required:
   public var zramUsedBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._zramUsedBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._zramUsedBytes = newValue}
@@ -7988,7 +9180,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `zramUsedBytes`. Subsequent reads from it will return its default value.
   public mutating func clearZramUsedBytes() {_uniqueStorage()._zramUsedBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var majorFaultsTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._majorFaultsTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._majorFaultsTotal = newValue}
@@ -7998,7 +9190,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `majorFaultsTotal`. Subsequent reads from it will return its default value.
   public mutating func clearMajorFaultsTotal() {_uniqueStorage()._majorFaultsTotal = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var reclaimScannedPagesTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._reclaimScannedPagesTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._reclaimScannedPagesTotal = newValue}
@@ -8008,7 +9200,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `reclaimScannedPagesTotal`. Subsequent reads from it will return its default value.
   public mutating func clearReclaimScannedPagesTotal() {_uniqueStorage()._reclaimScannedPagesTotal = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var reclaimReclaimedPagesTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._reclaimReclaimedPagesTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._reclaimReclaimedPagesTotal = newValue}
@@ -8018,7 +9210,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `reclaimReclaimedPagesTotal`. Subsequent reads from it will return its default value.
   public mutating func clearReclaimReclaimedPagesTotal() {_uniqueStorage()._reclaimReclaimedPagesTotal = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var oomKillsTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._oomKillsTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._oomKillsTotal = newValue}
@@ -8028,7 +9220,9 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `oomKillsTotal`. Subsequent reads from it will return its default value.
   public mutating func clearOomKillsTotal() {_uniqueStorage()._oomKillsTotal = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Available false means the kernel exposes MGLRU but it is disabled;
+  /// unavailable means this kernel exposes no MGLRU control at all.
+  /// Required:
   public var mglruEnabled: Strato_Agent_V1_ResourceTelemetryFlag {
     get {_storage._mglruEnabled ?? Strato_Agent_V1_ResourceTelemetryFlag()}
     set {_uniqueStorage()._mglruEnabled = newValue}
@@ -8038,7 +9232,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `mglruEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearMglruEnabled() {_uniqueStorage()._mglruEnabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var memoryProfile: Strato_Agent_V1_HostMemoryProfileObservation {
     get {_storage._memoryProfile ?? Strato_Agent_V1_HostMemoryProfileObservation()}
     set {_uniqueStorage()._memoryProfile = newValue}
@@ -8048,7 +9242,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `memoryProfile`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryProfile() {_uniqueStorage()._memoryProfile = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var swapInPagesTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._swapInPagesTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._swapInPagesTotal = newValue}
@@ -8058,7 +9252,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapInPagesTotal`. Subsequent reads from it will return its default value.
   public mutating func clearSwapInPagesTotal() {_uniqueStorage()._swapInPagesTotal = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var swapOutPagesTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._swapOutPagesTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._swapOutPagesTotal = newValue}
@@ -8068,7 +9262,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapOutPagesTotal`. Subsequent reads from it will return its default value.
   public mutating func clearSwapOutPagesTotal() {_uniqueStorage()._swapOutPagesTotal = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var zramOriginalBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._zramOriginalBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._zramOriginalBytes = newValue}
@@ -8078,7 +9272,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `zramOriginalBytes`. Subsequent reads from it will return its default value.
   public mutating func clearZramOriginalBytes() {_uniqueStorage()._zramOriginalBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var swapInPagesPerSecond: Double {
     get {_storage._swapInPagesPerSecond ?? 0}
     set {_uniqueStorage()._swapInPagesPerSecond = newValue}
@@ -8088,7 +9282,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapInPagesPerSecond`. Subsequent reads from it will return its default value.
   public mutating func clearSwapInPagesPerSecond() {_uniqueStorage()._swapInPagesPerSecond = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var swapOutPagesPerSecond: Double {
     get {_storage._swapOutPagesPerSecond ?? 0}
     set {_uniqueStorage()._swapOutPagesPerSecond = newValue}
@@ -8098,7 +9292,7 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   /// Clears the value of `swapOutPagesPerSecond`. Subsequent reads from it will return its default value.
   public mutating func clearSwapOutPagesPerSecond() {_uniqueStorage()._swapOutPagesPerSecond = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var memoryWarnings: Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSection {
     get {_storage._memoryWarnings ?? Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSection()}
     set {_uniqueStorage()._memoryWarnings = newValue}
@@ -8115,12 +9309,16 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetry: @unchecked Send
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// One hypervisor on an agent host: what it is, whether it can actually run
+/// VMs right now (probed at agent startup, not assumed from the platform),
+/// and what it supports.
 public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The hypervisor type
+  /// Required:
   public var type: Strato_Agent_V1_HypervisorType {
     get {_type ?? .unspecified}
     set {_type = newValue}
@@ -8130,7 +9328,8 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `type`. Subsequent reads from it will return its default value.
   public mutating func clearType() {self._type = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the hypervisor is usable on this host (binary present, etc.)
+  /// Required:
   public var available: Bool {
     get {_available ?? false}
     set {_available = newValue}
@@ -8140,7 +9339,8 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `available`. Subsequent reads from it will return its default value.
   public mutating func clearAvailable() {self._available = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether hardware acceleration (KVM/HVF) backs this hypervisor
+  /// Required:
   public var accelerated: Bool {
     get {_accelerated ?? false}
     set {_accelerated = newValue}
@@ -8150,7 +9350,8 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `accelerated`. Subsequent reads from it will return its default value.
   public mutating func clearAccelerated() {self._accelerated = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Why the hypervisor is unavailable, when `available` is false
+  /// Optional:
   public var unavailabilityReason: String {
     get {_unavailabilityReason ?? String()}
     set {_unavailabilityReason = newValue}
@@ -8160,7 +9361,8 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `unavailabilityReason`. Subsequent reads from it will return its default value.
   public mutating func clearUnavailabilityReason() {self._unavailabilityReason = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this backend can create and restore snapshots.
+  /// Required:
   public var supportsSnapshots: Bool {
     get {_supportsSnapshots ?? false}
     set {_supportsSnapshots = newValue}
@@ -8170,7 +9372,10 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `supportsSnapshots`. Subsequent reads from it will return its default value.
   public mutating func clearSupportsSnapshots() {self._supportsSnapshots = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether this host can attach a virtio-vsock device for this
+  /// hypervisor. Optional/additive so persisted registrations from before
+  /// vsock probing still decode; absence must be treated as not capable.
+  /// Optional:
   public var supportsVsock: Bool {
     get {_supportsVsock ?? false}
     set {_supportsVsock = newValue}
@@ -8180,7 +9385,11 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `supportsVsock`. Subsequent reads from it will return its default value.
   public mutating func clearSupportsVsock() {self._supportsVsock = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether this agent can bridge guest-exec sessions to VMs running on
+  /// this hypervisor. Optional/additive because virtio-vsock availability
+  /// alone does not imply that the node-agent bridge exists; absence must
+  /// be treated as not capable.
+  /// Optional:
   public var supportsGuestExec: Bool {
     get {_supportsGuestExec ?? false}
     set {_supportsGuestExec = newValue}
@@ -8190,7 +9399,11 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `supportsGuestExec`. Subsequent reads from it will return its default value.
   public mutating func clearSupportsGuestExec() {self._supportsGuestExec = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether this backend can enforce and read back per-volume total IOPS
+  /// and bytes-per-second ceilings. Optional/additive so registrations
+  /// persisted before STR-270 decode as not capable rather than inheriting
+  /// support from the backend name alone.
+  /// Optional:
   public var supportsVolumeIoLimits: Bool {
     get {_supportsVolumeIoLimits ?? false}
     set {_supportsVolumeIoLimits = newValue}
@@ -8200,7 +9413,12 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `supportsVolumeIoLimits`. Subsequent reads from it will return its default value.
   public mutating func clearSupportsVolumeIoLimits() {self._supportsVolumeIoLimits = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
+  /// from `firecracker --version`). Optional/additive: absence from agents that
+  /// predate version probing, or when the probe failed. Snapshot mobility
+  /// (issue #428) keys cross-agent restore placement on Firecracker version
+  /// equality, and treats absence as incompatible rather than guessing.
+  /// Optional:
   public var version: String {
     get {_version ?? String()}
     set {_version = newValue}
@@ -8210,7 +9428,9 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `version`. Subsequent reads from it will return its default value.
   public mutating func clearVersion() {self._version = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Host-specific guest memory bounds. Apple placement requires both;
+  /// older registrations without them must refresh before accepting VMs.
+  /// Optional:
   public var minimumMemoryBytes: Int64 {
     get {_minimumMemoryBytes ?? 0}
     set {_minimumMemoryBytes = newValue}
@@ -8220,7 +9440,7 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   /// Clears the value of `minimumMemoryBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMinimumMemoryBytes() {self._minimumMemoryBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var maximumMemoryBytes: Int64 {
     get {_maximumMemoryBytes ?? 0}
     set {_maximumMemoryBytes = newValue}
@@ -8247,12 +9467,28 @@ public nonisolated struct Strato_Agent_V1_HypervisorSupport: Sendable {
   fileprivate var _maximumMemoryBytes: Int64? = nil
 }
 
+/// Whether — and as what — the IMDS may vend this instance a SPIFFE identity
+/// (phase 3 of the IMDS work; nothing consumes this yet).
+///
+/// It exists on `InstanceMetadata` from the start so instance identity arrives
+/// as a *policy the control plane already decided*, delivered on the sync like
+/// everything else, rather than as a second channel the agent has to be taught
+/// about later. The agent's job stays "serve what the last sync said"; deciding
+/// which VM may hold which SPIFFE ID stays entirely control-plane side, where
+/// the org hierarchy and the policy engine are.
+///
+/// Absence on `InstanceMetadata` is the conservative reading and the only one
+/// available today: no identity is vended.
 public nonisolated struct Strato_Agent_V1_IdentityPolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The SPIFFE ID the instance may be issued documents for:
+  /// `spiffe://<trust-domain>/vm/<vm-uuid>`, the key the VM's workload
+  /// registration is filed under (STR-55). Authored by the control plane; the
+  /// agent never derives or extends it.
+  /// Required:
   public var spiffeID: String {
     get {_spiffeID ?? String()}
     set {_spiffeID = newValue}
@@ -8262,7 +9498,10 @@ public nonisolated struct Strato_Agent_V1_IdentityPolicy: Sendable {
   /// Clears the value of `spiffeID`. Subsequent reads from it will return its default value.
   public mutating func clearSpiffeID() {self._spiffeID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Audiences the IMDS may mint JWT-SVIDs for. Empty means none — a guest
+  /// asking for an audience outside this list is refused rather than served
+  /// a token nothing will accept.
+  /// Required:
   public var audiences: Strato_Agent_V1_IdentityPolicyAudiencesSection {
     get {_audiences ?? Strato_Agent_V1_IdentityPolicyAudiencesSection()}
     set {_audiences = newValue}
@@ -8272,7 +9511,10 @@ public nonisolated struct Strato_Agent_V1_IdentityPolicy: Sendable {
   /// Clears the value of `audiences`. Subsequent reads from it will return its default value.
   public mutating func clearAudiences() {self._audiences = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Upper bound, in seconds, on the lifetime of a document handed to the
+  /// guest. Absence defers to the issuer's own default rather than meaning
+  /// "unbounded"; an identity document with no expiry is never the intent.
+  /// Optional:
   public var ttlSeconds: Int64 {
     get {_ttlSeconds ?? 0}
     set {_ttlSeconds = newValue}
@@ -8291,12 +9533,16 @@ public nonisolated struct Strato_Agent_V1_IdentityPolicy: Sendable {
   fileprivate var _ttlSeconds: Int64? = nil
 }
 
+/// Contains information for the agent to download and cache an image.
+///
+/// Every stored file is represented exactly once in `artifacts`. Hypervisor
+/// drivers select the kind they require and fail explicitly when it is absent.
 public nonisolated struct Strato_Agent_V1_ImageInfo: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var imageID: String {
     get {_imageID ?? String()}
@@ -8307,7 +9553,7 @@ public nonisolated struct Strato_Agent_V1_ImageInfo: Sendable {
   /// Clears the value of `imageID`. Subsequent reads from it will return its default value.
   public mutating func clearImageID() {self._imageID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var projectID: String {
     get {_projectID ?? String()}
@@ -8318,7 +9564,7 @@ public nonisolated struct Strato_Agent_V1_ImageInfo: Sendable {
   /// Clears the value of `projectID`. Subsequent reads from it will return its default value.
   public mutating func clearProjectID() {self._projectID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var architecture: Strato_Agent_V1_CPUArchitecture {
     get {_architecture ?? .unspecified}
     set {_architecture = newValue}
@@ -8328,7 +9574,7 @@ public nonisolated struct Strato_Agent_V1_ImageInfo: Sendable {
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {self._architecture = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var artifacts: Strato_Agent_V1_ImageInfoArtifactsSection {
     get {_artifacts ?? Strato_Agent_V1_ImageInfoArtifactsSection()}
     set {_artifacts = newValue}
@@ -8348,12 +9594,73 @@ public nonisolated struct Strato_Agent_V1_ImageInfo: Sendable {
   fileprivate var _artifacts: Strato_Agent_V1_ImageInfoArtifactsSection? = nil
 }
 
+/// Everything a VM's link-local metadata service (169.254.169.254) may tell the
+/// guest about itself — the IMDS's replacement for the boot-time NoCloud seed
+/// ISO.
+///
+/// ## Why this rides the desired-state sync
+///
+/// A seed ISO is written once, at create, and is a lie from the first edit
+/// afterwards: changing an SSH key or a tag means rebuilding the disk and
+/// rebooting the guest. Carrying the same content on `DesiredVMState` instead
+/// makes it level-triggered, generation-guarded, and safe to drop or replay,
+/// with no second control loop and no second transport. An operator's metadata
+/// edit propagates on the next sync — which is the entire reason the IMDS beats
+/// a seed ISO.
+///
+/// It follows that this is **desired** state like everything else in the sync:
+/// the agent stores the latest version it applied and serves that (STR-52), and
+/// a replayed older sync is rejected by the VM's `generation`, not by anything
+/// in here. Nothing in this value may expire, for the same reason no image URL
+/// in a sync may — a sync must stay valid however long it takes to arrive.
+///
+/// ## What may go in here
+///
+/// Only what the control plane can legitimately know and is willing to disclose
+/// *to the guest*. Every field is readable by any process inside the VM that
+/// can reach the link-local address, so this is a publication boundary, not an
+/// internal DTO: adding a field here hands it to unprivileged guest code.
+///
+/// `service_enabled` and `no_cloud_seed_token` are deliberate transport controls.
+/// The first decides whether any of the rest is disclosed at all; the second is
+/// copied into the local seed ISO so stock NoCloud can authenticate the three
+/// bootstrap GETs it makes before an IMDSv2-aware client exists. Neither is
+/// rendered as metadata. See their own docs for why they ride here rather than
+/// beside `metadata` on `DesiredVMState`.
+///
+/// ## Size on the wire
+///
+/// `user_data`/`vendor_data` are carried inline, which is the one place this
+/// value cuts against the grain of `DesiredVMState`: `image_info` deliberately
+/// carries *paths* the agent fetches rather than content, to keep the sync
+/// small. Inline is the deliberate call here, and the bound is worth stating,
+/// because a sync is a full snapshot re-pushed on a timer (~60s to dirty
+/// agents, ~10 minutes to all) rather than a one-shot create payload.
+///
+/// The sync already carries a `CloudInitUserDataFormat.maxBytes`-capped
+/// `VMSpec.user_data` per VM — that is what the agent builds the seed ISO from.
+/// This value duplicates it (and `ssh_authorized_keys`) for the length of the
+/// migration, taking the per-VM worst case from ~64 KiB to ~128 KiB before
+/// Protobuf framing; retiring the seed ISO deletes the spec
+/// copy and returns it to ~64 KiB. The hard ceiling is the 16 MiB frame both
+/// ends set, which a sync must fit in whole — an oversized frame does not
+/// degrade partially, it stops that agent converging on everything it hosts.
+/// Reaching it takes on the order of 130 VMs on one host all at the user-data
+/// cap, or ~250 once the spec copy is gone.
+///
+/// Making these references would not move that ceiling while the spec copy
+/// exists, and it would cost the property the whole design rests on — the
+/// agent serves exactly what the last sync said, with no fetch that can fail
+/// after a sync was applied. If the ceiling ever does need moving, the lever
+/// is an IMDS-specific limit below `maxBytes`, not a second transport.
 public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The VM's id — the same UUID as `DesiredVMState.vm_id`, restated here so a
+  /// renderer never has to reach outside the metadata it was handed.
+  /// Required:
   /// Format: uuid.
   public var instanceID: String {
     get {_storage._instanceID ?? String()}
@@ -8364,7 +9671,18 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `instanceID`. Subsequent reads from it will return its default value.
   public mutating func clearInstanceID() {_uniqueStorage()._instanceID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The VM's DNS label, when it has one — also the name it registers under
+  /// in its network's primary DNS zone (see `docs/architecture/dns.md`), so
+  /// the two must not drift.
+  ///
+  /// Optional because `VM.hostname` is (issue #770): VMs predating the column
+  /// have none, and nothing on this side may invent one. A slugified `name`
+  /// is precisely the lossy derivation the stored column exists to avoid, and
+  /// a hostname fabricated here would disagree with the zone — breaking the
+  /// no-drift invariant above in the one case it was written for. So the
+  /// renderer decides what an unset hostname looks like, exactly as with
+  /// `environment`, and a hostname-less VM still gets all the rest of this.
+  /// Optional:
   public var hostname: String {
     get {_storage._hostname ?? String()}
     set {_uniqueStorage()._hostname = newValue}
@@ -8374,7 +9692,10 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `hostname`. Subsequent reads from it will return its default value.
   public mutating func clearHostname() {_uniqueStorage()._hostname = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The project owning the VM. Renderers expose it as the tenancy
+  /// identifier (EC2's account/owner slot); it is never an authorization
+  /// input — the IMDS serves whichever guest can reach it.
+  /// Required:
   /// Format: uuid.
   public var projectID: String {
     get {_storage._projectID ?? String()}
@@ -8385,7 +9706,10 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `projectID`. Subsequent reads from it will return its default value.
   public mutating func clearProjectID() {_uniqueStorage()._projectID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The VM's environment within its project (`production`, `staging`, ...),
+  /// when the project defines environments. Absence rather than the project's
+  /// default: the renderer decides what an unset environment looks like.
+  /// Optional:
   public var environment: String {
     get {_storage._environment ?? String()}
     set {_uniqueStorage()._environment = newValue}
@@ -8395,7 +9719,13 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `environment`. Subsequent reads from it will return its default value.
   public mutating func clearEnvironment() {_uniqueStorage()._environment = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Placement, coarse: conventionally the VM's site name. One of the EC2
+  /// renderer's two placement keys.
+  ///
+  /// Populated here regardless of policy — whether a guest is *told* where it
+  /// runs is the renderer's call, not the model's, so that the decision lives
+  /// in one place instead of being baked into every assembler.
+  /// Optional:
   public var region: String {
     get {_storage._region ?? String()}
     set {_uniqueStorage()._region = newValue}
@@ -8405,7 +9735,11 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `region`. Subsequent reads from it will return its default value.
   public mutating func clearRegion() {_uniqueStorage()._region = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Placement, fine: conventionally the name of the agent hosting the VM.
+  /// The other EC2 placement key, with the same disclosure caveat as
+  /// `region` — it names a specific host, so a renderer that emits it is
+  /// telling the guest which machine it shares.
+  /// Optional:
   public var availabilityZone: String {
     get {_storage._availabilityZone ?? String()}
     set {_uniqueStorage()._availabilityZone = newValue}
@@ -8415,7 +9749,11 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `availabilityZone`. Subsequent reads from it will return its default value.
   public mutating func clearAvailabilityZone() {_uniqueStorage()._availabilityZone = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The VM's NICs, in the order the control plane realized them (`net0`,
+  /// `net1`, ...). Empty for a VM with no interfaces; never partially
+  /// populated — a NIC the control plane knows about appears here even if the
+  /// guest has not configured it.
+  /// Required:
   public var nics: Strato_Agent_V1_InstanceMetadataNicsSection {
     get {_storage._nics ?? Strato_Agent_V1_InstanceMetadataNicsSection()}
     set {_uniqueStorage()._nics = newValue}
@@ -8425,7 +9763,11 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `nics`. Subsequent reads from it will return its default value.
   public mutating func clearNics() {_uniqueStorage()._nics = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// SSH public keys to authorize for the guest's default user, the same set
+  /// carried on `VMSpec.ssh_authorized_keys`. Duplicated deliberately: the spec
+  /// copy is what a *boot-time* provisioner consumes, this copy is what the
+  /// running guest can re-read after an operator rotates a key.
+  /// Required:
   public var sshAuthorizedKeys: Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSection {
     get {_storage._sshAuthorizedKeys ?? Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSection()}
     set {_uniqueStorage()._sshAuthorizedKeys = newValue}
@@ -8435,7 +9777,12 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `sshAuthorizedKeys`. Subsequent reads from it will return its default value.
   public mutating func clearSshAuthorizedKeys() {_uniqueStorage()._sshAuthorizedKeys = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Caller-supplied cloud-init user data, verbatim and unvalidated beyond
+  /// what the create request already checked (see `CloudInitUserDataFormat`).
+  /// Absence when the caller supplied none — which is not the same as empty, and
+  /// renderers must keep the distinction: cloud-init treats a zero-length
+  /// user-data document as "provided, and does nothing".
+  /// Optional:
   public var userData: String {
     get {_storage._userData ?? String()}
     set {_uniqueStorage()._userData = newValue}
@@ -8445,7 +9792,12 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `userData`. Subsequent reads from it will return its default value.
   public mutating func clearUserData() {_uniqueStorage()._userData = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Vendor data — Strato's own provisioning document, distinct from the
+  /// caller's `user_data` so that platform config and tenant config never
+  /// have to be merged into one payload (cloud-init consumes them as
+  /// separate sources with separate precedence). Absence when the platform has
+  /// nothing to say.
+  /// Optional:
   public var vendorData: String {
     get {_storage._vendorData ?? String()}
     set {_uniqueStorage()._vendorData = newValue}
@@ -8455,7 +9807,8 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `vendorData`. Subsequent reads from it will return its default value.
   public mutating func clearVendorData() {_uniqueStorage()._vendorData = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absence disables the Strato root daemon bootstrap; a release tag pins first-boot installation.
+  /// Optional:
   public var guestAgentRelease: String {
     get {_storage._guestAgentRelease ?? String()}
     set {_uniqueStorage()._guestAgentRelease = newValue}
@@ -8465,7 +9818,10 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `guestAgentRelease`. Subsequent reads from it will return its default value.
   public mutating func clearGuestAgentRelease() {_uniqueStorage()._guestAgentRelease = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Free-form key/value labels from the VM's tags. Ordinary metadata, not
+  /// identity: nothing may authorize on a tag, because a guest reads its own
+  /// tags and an operator can set them to anything.
+  /// Required:
   public var tags: Strato_Agent_V1_InstanceMetadataTagsSection {
     get {_storage._tags ?? Strato_Agent_V1_InstanceMetadataTagsSection()}
     set {_uniqueStorage()._tags = newValue}
@@ -8475,7 +9831,10 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `tags`. Subsequent reads from it will return its default value.
   public mutating func clearTags() {_uniqueStorage()._tags = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// How, and whether, the IMDS may vend this instance a SPIFFE identity
+  /// (phase 3). Absence means it may not — the conservative reading, and the one
+  /// every VM gets until identity ships.
+  /// Optional:
   public var identity: Strato_Agent_V1_IdentityPolicy {
     get {_storage._identity ?? Strato_Agent_V1_IdentityPolicy()}
     set {_uniqueStorage()._identity = newValue}
@@ -8485,7 +9844,19 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `identity`. Subsequent reads from it will return its default value.
   public mutating func clearIdentity() {_uniqueStorage()._identity = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The per-VM capability carried by an IMDS-backed NoCloud seed URL.
+  ///
+  /// Stock NoCloud follows `seedfrom` with ordinary GETs and cannot perform
+  /// the IMDSv2 token handshake. This value lets the agent authenticate only
+  /// those three bootstrap document reads without weakening the ordinary
+  /// `/latest/*` tree. It is deliberately not rendered into any metadata
+  /// document; the agent copies it only into the VM's local seed ISO.
+  ///
+  /// Absence for an ISO-backed VM and for desired-state payloads produced before
+  /// STR-64. Although it rides the durable desired-state snapshot so agent
+  /// restarts do not invalidate an already-created ISO, it is a credential:
+  /// callers must never log this value or the seed URL containing it.
+  /// Optional:
   /// Format: uuid.
   public var noCloudSeedToken: String {
     get {_storage._noCloudSeedToken ?? String()}
@@ -8496,7 +9867,36 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadata: @unchecked Sendable 
   /// Clears the value of `noCloudSeedToken`. Subsequent reads from it will return its default value.
   public mutating func clearNoCloudSeedToken() {_uniqueStorage()._noCloudSeedToken = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the metadata service answers this instance at all — Strato's
+  /// per-instance kill switch, `VM.metadata_enabled`, and the equivalent of
+  /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
+  ///
+  /// Distinct from `NetworkSpec.metadata_enabled` / `DesiredNetworkState`'s,
+  /// which is per **network** and decides whether the link-local endpoint is
+  /// published on that switch at all. The two compose as an AND from the
+  /// guest's side, and neither is derived from the other: the network switch
+  /// is realized by the localport, this one by the listener refusing the
+  /// caller and by an ACL that denies its port the address.
+  ///
+  /// ## Why it lives on the document rather than beside it
+  ///
+  /// It could as easily have been a sibling of `metadata` on `DesiredVMState`.
+  /// Carrying it *inside* buys two things that separate fields cannot:
+  ///
+  /// - **It cannot drift from the payload it governs.** The agent's store,
+  ///   its durable copy and the snapshot pushed to a listener all move one
+  ///   value, so there is no second field to arrive late, be dropped by an
+  ///   older persisted record, or survive a restore without its policy.
+  /// - **It survives the fail-static path.** `MetadataStore` restores what the
+  ///   last sync said when the control plane is unreachable. A policy stored
+  ///   anywhere but next to the document would be the one thing that restore
+  ///   did not bring back — and an agent that comes up serving a VM its
+  ///   operator switched off is the exact failure this field exists to
+  ///   prevent.
+  ///
+  /// It is never rendered into a document: a disabled service publishes
+  /// nothing, so there is nothing for a guest to read this out of.
+  /// Required:
   public var serviceEnabled: Bool {
     get {_storage._serviceEnabled ?? false}
     set {_uniqueStorage()._serviceEnabled = newValue}
@@ -8518,7 +9918,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigItemFailure: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var section: Strato_Agent_V1_GuestConfigObservationSection {
     get {_section ?? .unspecified}
     set {_section = newValue}
@@ -8528,7 +9928,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigItemFailure: Sendable {
   /// Clears the value of `section`. Subsequent reads from it will return its default value.
   public mutating func clearSection() {self._section = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var identity: String {
     get {_identity ?? String()}
     set {_identity = newValue}
@@ -8538,7 +9938,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigItemFailure: Sendable {
   /// Clears the value of `identity`. Subsequent reads from it will return its default value.
   public mutating func clearIdentity() {self._identity = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -8557,12 +9957,26 @@ public nonisolated struct Strato_Agent_V1_GuestConfigItemFailure: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// Guest machine features beyond resource sizing (issue #565).
+///
+/// Both flags are what Windows 11 / Server 2025 refuse to install without, and
+/// both are realized entirely agent-side: Secure Boot selects the firmware set
+/// (the `.secboot` EDK2 build plus a pre-enrolled variable store) and `tpm`
+/// makes the agent run a per-VM `swtpm` alongside the guest. The control plane
+/// only records the *intent*; it never names a firmware file or a socket.
+///
+/// Defaults are both-off, so a VM that says nothing boots exactly as it did
+/// before this existed.
 public nonisolated struct Strato_Agent_V1_MachineProfile: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the guest boots with UEFI Secure Boot enabled. Requires a
+  /// firmware set whose variable store ships Microsoft's KEK/db enrolled;
+  /// agents that cannot resolve one fail the create rather than booting the
+  /// guest insecurely under a name that promises otherwise.
+  /// Required:
   public var secureBoot: Bool {
     get {_secureBoot ?? false}
     set {_secureBoot = newValue}
@@ -8572,7 +9986,10 @@ public nonisolated struct Strato_Agent_V1_MachineProfile: Sendable {
   /// Clears the value of `secureBoot`. Subsequent reads from it will return its default value.
   public mutating func clearSecureBoot() {self._secureBoot = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the guest gets an emulated TPM 2.0. Requires `swtpm` on the
+  /// host, which agents advertise as a capability so the scheduler never
+  /// places a TPM VM where it cannot be realized.
+  /// Required:
   public var tpm: Bool {
     get {_tpm ?? false}
     set {_tpm = newValue}
@@ -8590,12 +10007,27 @@ public nonisolated struct Strato_Agent_V1_MachineProfile: Sendable {
   fileprivate var _tpm: Bool? = nil
 }
 
+/// One of a VM's network interfaces as the guest is told about it.
+///
+/// This is the *control plane's* view — what IPAM allocated and what the
+/// network reconciler realized — not what the guest currently has configured
+/// (that is `GuestNetworkInterface`, reported the other way by the QEMU guest
+/// agent). The two can legitimately disagree: a guest that has not renewed its
+/// lease still has an entry here.
+///
+/// Addressing is carried as address + prefix length rather than a dotted
+/// netmask, because that is the form both renderer targets want — cloud-init's
+/// network-config v2 (`addresses: [10.0.0.5/24]`) and EC2's CIDR-block keys.
+/// The dotted form is derivable; the reverse needs a validity check.
 public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Stable device name (`net0`, `net1`, ...) from the interface's
+  /// `device_name`, ordered by `order_index`. Stable across reboots and
+  /// re-realization, which the guest-visible kernel name is not.
+  /// Required:
   public var deviceName: String {
     get {_deviceName ?? String()}
     set {_deviceName = newValue}
@@ -8605,7 +10037,10 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `deviceName`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceName() {self._deviceName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The NIC's MAC address. The EC2 renderer keys its whole interface tree on
+  /// this (`network/interfaces/macs/<mac>/`), and it is how a guest matches an
+  /// entry here to one of its own links.
+  /// Required:
   public var macAddress: String {
     get {_macAddress ?? String()}
     set {_macAddress = newValue}
@@ -8615,7 +10050,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `macAddress`. Subsequent reads from it will return its default value.
   public mutating func clearMacAddress() {self._macAddress = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The logical network the NIC attaches to.
+  /// Required:
   /// Format: uuid.
   public var networkID: String {
     get {_networkID ?? String()}
@@ -8626,7 +10062,10 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `networkID`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkID() {self._networkID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network's name — a human label for the guest, exactly as on
+  /// `NetworkSpec.network`. Names are unique only within a project, so
+  /// nothing may key on it.
+  /// Required:
   public var networkName: String {
     get {_networkName ?? String()}
     set {_networkName = newValue}
@@ -8636,7 +10075,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `networkName`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkName() {self._networkName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The allocated IPv4 address, or absence on a NIC with no v4 assignment.
+  /// Optional:
   public var ipAddress: String {
     get {_ipAddress ?? String()}
     set {_ipAddress = newValue}
@@ -8646,7 +10086,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {self._ipAddress = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Prefix length of `ip_address` within its subnet (24 for a /24).
+  /// Optional:
   public var prefixLength: Int64 {
     get {_prefixLength ?? 0}
     set {_prefixLength = newValue}
@@ -8656,7 +10097,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `prefixLength`. Subsequent reads from it will return its default value.
   public mutating func clearPrefixLength() {self._prefixLength = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The network's IPv4 gateway, when it has L3.
+  /// Optional:
   public var gateway: String {
     get {_gateway ?? String()}
     set {_gateway = newValue}
@@ -8666,7 +10108,9 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `gateway`. Subsequent reads from it will return its default value.
   public mutating func clearGateway() {self._gateway = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The allocated IPv6 address in canonical RFC 5952 form, on a dual-stack
+  /// network.
+  /// Optional:
   public var ipv6Address: String {
     get {_ipv6Address ?? String()}
     set {_ipv6Address = newValue}
@@ -8676,7 +10120,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `ipv6Address`. Subsequent reads from it will return its default value.
   public mutating func clearIpv6Address() {self._ipv6Address = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Prefix length of `ipv6_address` (64 for tenant networks).
+  /// Optional:
   public var ipv6PrefixLength: Int64 {
     get {_ipv6PrefixLength ?? 0}
     set {_ipv6PrefixLength = newValue}
@@ -8686,7 +10131,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `ipv6PrefixLength`. Subsequent reads from it will return its default value.
   public mutating func clearIpv6PrefixLength() {self._ipv6PrefixLength = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The network's IPv6 gateway, when dual-stack.
+  /// Optional:
   public var gateway6: String {
     get {_gateway6 ?? String()}
     set {_gateway6 = newValue}
@@ -8696,7 +10142,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `gateway6`. Subsequent reads from it will return its default value.
   public mutating func clearGateway6() {self._gateway6 = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Link MTU, when the network sets one.
+  /// Optional:
   public var mtu: Int64 {
     get {_mtu ?? 0}
     set {_mtu = newValue}
@@ -8706,7 +10153,11 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `mtu`. Subsequent reads from it will return its default value.
   public mutating func clearMtu() {self._mtu = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Resolvers for this NIC's network; may be mixed-family, like
+  /// `DesiredNetworkState.dns_servers`. Carried because the IMDS has to be
+  /// able to tell a guest everything the seed ISO's static network config
+  /// used to, on networks where DHCP is off.
+  /// Required:
   public var dnsServers: Strato_Agent_V1_MetadataNICDnsServersSection {
     get {_dnsServers ?? Strato_Agent_V1_MetadataNICDnsServersSection()}
     set {_dnsServers = newValue}
@@ -8716,7 +10167,8 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `dnsServers`. Subsequent reads from it will return its default value.
   public mutating func clearDnsServers() {self._dnsServers = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// DNS search domain for this NIC's network, when set.
+  /// Optional:
   public var domainName: String {
     get {_domainName ?? String()}
     set {_domainName = newValue}
@@ -8726,7 +10178,11 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `domainName`. Subsequent reads from it will return its default value.
   public mutating func clearDomainName() {self._domainName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this NIC should ask the network's DHCP responder for its guest
+  /// configuration. The NoCloud-net renderer needs the same decision the
+  /// seed ISO renderer receives on `NetworkSpec`; an allocated address alone
+  /// cannot distinguish DHCP from static configuration.
+  /// Required:
   public var dhcpEnabled: Bool {
     get {_dhcpEnabled ?? false}
     set {_dhcpEnabled = newValue}
@@ -8736,7 +10192,9 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `dhcpEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearDhcpEnabled() {self._dhcpEnabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this NIC's network publishes the link-local metadata endpoint.
+  /// Used only to render the on-link routes the existing seed ISO carries.
+  /// Required:
   public var metadataEnabled: Bool {
     get {_metadataEnabled ?? false}
     set {_metadataEnabled = newValue}
@@ -8746,7 +10204,10 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   /// Clears the value of `metadataEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearMetadataEnabled() {self._metadataEnabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// This network's link-local resolver addresses, or an empty list when the
+  /// resolver is unavailable. When present these replace `dns_servers` in
+  /// static guest configuration, exactly as in the seed ISO renderer.
+  /// Required:
   public var resolverAddresses: Strato_Agent_V1_MetadataNICResolverAddressesSection {
     get {_resolverAddresses ?? Strato_Agent_V1_MetadataNICResolverAddressesSection()}
     set {_resolverAddresses = newValue}
@@ -8778,12 +10239,16 @@ public nonisolated struct Strato_Agent_V1_MetadataNIC: Sendable {
   fileprivate var _resolverAddresses: Strato_Agent_V1_MetadataNICResolverAddressesSection? = nil
 }
 
+/// A NIC attached to a logical network, referenced by id. The agent realizes
+/// the attachment (tap interface, user-mode SLIRP, ...) according to its platform.
 public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Stable control-plane identity of this interface. Current producers supply
+  /// it; absence is retained only for hydrating legacy persisted manifests.
+  /// Optional:
   /// Format: uuid.
   public var interfaceID: String {
     get {_storage._interfaceID ?? String()}
@@ -8794,7 +10259,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `interfaceID`. Subsequent reads from it will return its default value.
   public mutating func clearInterfaceID() {_uniqueStorage()._interfaceID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Stable guest-facing device label assigned by the control plane.
+  /// Optional:
   public var deviceName: String {
     get {_storage._deviceName ?? String()}
     set {_uniqueStorage()._deviceName = newValue}
@@ -8804,7 +10270,10 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `deviceName`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceName() {_uniqueStorage()._deviceName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Stable host-resource slot. New agents use this instead of the NIC's
+  /// compact array position, so removing a middle interface cannot rename the
+  /// TAP and OVN port belonging to every interface after it.
+  /// Optional:
   public var orderIndex: Int64 {
     get {_storage._orderIndex ?? 0}
     set {_uniqueStorage()._orderIndex = newValue}
@@ -8814,7 +10283,11 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `orderIndex`. Subsequent reads from it will return its default value.
   public mutating func clearOrderIndex() {_uniqueStorage()._orderIndex = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Logical network name — a *human label only*, used for the OVN
+  /// `network-name` external-id and logging. Never an identifier: names are
+  /// unique per project, so two networks on one chassis may share one
+  /// (issue #765). Nothing may be matched or keyed on it.
+  /// Required:
   public var network: String {
     get {_storage._network ?? String()}
     set {_uniqueStorage()._network = newValue}
@@ -8824,7 +10297,10 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `network`. Subsequent reads from it will return its default value.
   public mutating func clearNetwork() {_uniqueStorage()._network = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network's stable id: the only thing that identifies it. Agents derive
+  /// every OVN object name from it (`OVNNaming.switchName`, the DHCP row's
+  /// `network-id` external-id), matching what the network reconciler creates.
+  /// Required:
   /// Format: uuid.
   public var networkID: String {
     get {_storage._networkID ?? String()}
@@ -8835,7 +10311,7 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `networkID`. Subsequent reads from it will return its default value.
   public mutating func clearNetworkID() {_uniqueStorage()._networkID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var macAddress: String {
     get {_storage._macAddress ?? String()}
     set {_uniqueStorage()._macAddress = newValue}
@@ -8845,7 +10321,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `macAddress`. Subsequent reads from it will return its default value.
   public mutating func clearMacAddress() {_uniqueStorage()._macAddress = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Static IP assignment, when the control plane has allocated one.
+  /// Optional:
   public var ipAddress: String {
     get {_storage._ipAddress ?? String()}
     set {_uniqueStorage()._ipAddress = newValue}
@@ -8855,7 +10332,7 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `ipAddress`. Subsequent reads from it will return its default value.
   public mutating func clearIpAddress() {_uniqueStorage()._ipAddress = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var netmask: String {
     get {_storage._netmask ?? String()}
     set {_uniqueStorage()._netmask = newValue}
@@ -8865,7 +10342,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `netmask`. Subsequent reads from it will return its default value.
   public mutating func clearNetmask() {_uniqueStorage()._netmask = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Gateway of the logical network, when the control plane knows it.
+  /// Optional:
   public var gateway: String {
     get {_storage._gateway ?? String()}
     set {_uniqueStorage()._gateway = newValue}
@@ -8875,7 +10353,9 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `gateway`. Subsequent reads from it will return its default value.
   public mutating func clearGateway() {_uniqueStorage()._gateway = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Static IPv6 assignment on a dual-stack network, canonical RFC 5952
+  /// form. Absence for an IPv4-only or not-yet-addressed interface.
+  /// Optional:
   public var ipv6Address: String {
     get {_storage._ipv6Address ?? String()}
     set {_uniqueStorage()._ipv6Address = newValue}
@@ -8885,7 +10365,9 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `ipv6Address`. Subsequent reads from it will return its default value.
   public mutating func clearIpv6Address() {_uniqueStorage()._ipv6Address = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Prefix length for `ipv6_address` (64 for tenant networks). IPv6 has no
+  /// dotted-netmask form, so the prefix travels as an integer.
+  /// Optional:
   public var ipv6PrefixLength: Int64 {
     get {_storage._ipv6PrefixLength ?? 0}
     set {_uniqueStorage()._ipv6PrefixLength = newValue}
@@ -8895,7 +10377,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `ipv6PrefixLength`. Subsequent reads from it will return its default value.
   public mutating func clearIpv6PrefixLength() {_uniqueStorage()._ipv6PrefixLength = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// IPv6 gateway of the logical network, when dual-stack.
+  /// Optional:
   public var gateway6: String {
     get {_storage._gateway6 ?? String()}
     set {_uniqueStorage()._gateway6 = newValue}
@@ -8905,7 +10388,7 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `gateway6`. Subsequent reads from it will return its default value.
   public mutating func clearGateway6() {_uniqueStorage()._gateway6 = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var mtu: Int64 {
     get {_storage._mtu ?? 0}
     set {_uniqueStorage()._mtu = newValue}
@@ -8915,7 +10398,11 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `mtu`. Subsequent reads from it will return its default value.
   public mutating func clearMtu() {_uniqueStorage()._mtu = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// When true, the agent programs OVN's native DHCP responder to hand the
+  /// control-plane-allocated `ip_address` (plus `dns_servers`/`gateway`/`mtu`) to
+  /// the guest, and cloud-init omits static L3 config. When false (or on
+  /// platforms without OVN), the guest is configured statically via cloud-init.
+  /// Required:
   public var dhcpEnabled: Bool {
     get {_storage._dhcpEnabled ?? false}
     set {_uniqueStorage()._dhcpEnabled = newValue}
@@ -8925,7 +10412,12 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `dhcpEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearDhcpEnabled() {_uniqueStorage()._dhcpEnabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The network's DNS resolvers. What they are depends on
+  /// `resolver_enabled`: with it off these are advertised to the guest over
+  /// DHCP (`dns_server` option), which is all they ever were; with it on the
+  /// guest is told `NetworkResolverEndpoint.address` and these become the
+  /// upstream forwarders the network's CoreDNS sends misses to.
+  /// Required:
   public var dnsServers: Strato_Agent_V1_NetworkSpecDnsServersSection {
     get {_storage._dnsServers ?? Strato_Agent_V1_NetworkSpecDnsServersSection()}
     set {_uniqueStorage()._dnsServers = newValue}
@@ -8935,7 +10427,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `dnsServers`. Subsequent reads from it will return its default value.
   public mutating func clearDnsServers() {_uniqueStorage()._dnsServers = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// DNS search domain advertised over DHCP (`domain_name` option), if set.
+  /// Optional:
   public var domainName: String {
     get {_storage._domainName ?? String()}
     set {_uniqueStorage()._domainName = newValue}
@@ -8945,7 +10438,8 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `domainName`. Subsequent reads from it will return its default value.
   public mutating func clearDomainName() {_uniqueStorage()._domainName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// DHCP lease time in seconds (`lease_time` option), if set.
+  /// Optional:
   public var leaseTime: Int64 {
     get {_storage._leaseTime ?? 0}
     set {_uniqueStorage()._leaseTime = newValue}
@@ -8955,7 +10449,20 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `leaseTime`. Subsequent reads from it will return its default value.
   public mutating func clearLeaseTime() {_uniqueStorage()._leaseTime = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Security groups this NIC belongs to. The agent adds the NIC's logical
+  /// switch port to each group's OVN port group (and to the global drop
+  /// group) — port-group *membership* is per-workload and owned by the
+  /// hosting agent, while the groups' ACLs are authored by the topology
+  /// authority from `DesiredStateMessage.security_groups`. Absence means the NIC
+  /// is unmanaged: the port joins no groups, including the drop group. When
+  /// present the list is never empty — the control plane enforces the
+  /// ≥1-group invariant.
+  ///
+  /// VM and sandbox NICs carry membership on identical terms (STR-102);
+  /// nothing here distinguishes them. A sandbox's NIC reaches the wire only
+  /// on an agent that advertised `sandbox_networking_capable` (STR-103), so a
+  /// sandbox's membership is always *authored* but only sometimes *sent*.
+  /// Optional:
   /// Format: uuid.
   public var securityGroupIds: Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection {
     get {_storage._securityGroupIds ?? Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection()}
@@ -8966,7 +10473,18 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `securityGroupIds`. Subsequent reads from it will return its default value.
   public mutating func clearSecurityGroupIds() {_uniqueStorage()._securityGroupIds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this NIC's network publishes the instance metadata service.
+  ///
+  /// The same setting travels on `DesiredNetworkState.metadata_enabled`, which
+  /// is what authors the OVN `localport`; this per-NIC copy is what reaches
+  /// the *chassis* side. A sited agent that is not its site's network
+  /// controller receives an empty `networks` list (it may not author
+  /// topology), yet it still has to materialize the metadata address in a
+  /// local namespace for its own guests — so the only input it has is its own
+  /// workloads' specs. Same shape as `security_group_ids`, which is per-NIC for
+  /// the same "this host owns it even without topology authority" reason.
+  ///
+  /// Required:
   public var metadataEnabled: Bool {
     get {_storage._metadataEnabled ?? false}
     set {_uniqueStorage()._metadataEnabled = newValue}
@@ -8976,7 +10494,23 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `metadataEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearMetadataEnabled() {_uniqueStorage()._metadataEnabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether this NIC's network publishes the per-network DNS resolver
+  ///.
+  ///
+  /// Here for exactly `metadata_enabled`'s reason:
+  /// `DesiredNetworkState.resolver_enabled` authors the OVN `localport` and the
+  /// DHCP row, and this per-NIC copy is what reaches a sited non-authority
+  /// agent, whose `networks` list is empty because it may not author topology
+  /// but which still has to materialize the resolver address — in its *host*
+  /// namespace, on that port's own OVS interface — and serve it from the
+  /// host's CoreDNS, for its own guests.
+  ///
+  /// The forwarders and search domain that CoreDNS needs are already on this
+  /// spec as `dns_servers` and `domain_name`, so this flag is the only addition.
+  ///
+  /// Absence means the sender has no service opinion; the agent converges nothing
+  /// rather than reading silence as "tear down".
+  /// Optional:
   public var resolverEnabled: Bool {
     get {_storage._resolverEnabled ?? false}
     set {_uniqueStorage()._resolverEnabled = newValue}
@@ -8986,7 +10520,11 @@ public nonisolated struct Strato_Agent_V1_NetworkSpec: @unchecked Sendable {
   /// Clears the value of `resolverEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearResolverEnabled() {_uniqueStorage()._resolverEnabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// This network's own resolver addresses, v4 first — distinct per network,
+  /// which is what lets the host serve every one of them from a single
+  /// namespace and forward through its own egress (STR-40). Non-absence exactly
+  /// when `resolver_enabled` is true.
+  /// Optional:
   public var resolverAddresses: Strato_Agent_V1_NetworkSpecResolverAddressesSection {
     get {_storage._resolverAddresses ?? Strato_Agent_V1_NetworkSpecResolverAddressesSection()}
     set {_uniqueStorage()._resolverAddresses = newValue}
@@ -9008,7 +10546,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyFailureReason: Sendable 
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var code: Strato_Agent_V1_NodeDependencyFailureCode {
     get {_code ?? .unspecified}
     set {_code = newValue}
@@ -9018,7 +10556,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyFailureReason: Sendable 
   /// Clears the value of `code`. Subsequent reads from it will return its default value.
   public mutating func clearCode() {self._code = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var message: String {
     get {_message ?? String()}
     set {_message = newValue}
@@ -9036,12 +10574,13 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyFailureReason: Sendable 
   fileprivate var _message: String? = nil
 }
 
+/// The latest level-triggered observation of one node dependency.
 public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var id: Strato_Agent_V1_NodeDependencyID {
     get {_storage._id ?? .unspecified}
     set {_uniqueStorage()._id = newValue}
@@ -9051,7 +10590,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {_uniqueStorage()._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var role: Strato_Agent_V1_NodeDependencyRole {
     get {_storage._role ?? .unspecified}
     set {_uniqueStorage()._role = newValue}
@@ -9061,7 +10600,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `role`. Subsequent reads from it will return its default value.
   public mutating func clearRole() {_uniqueStorage()._role = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredState: Strato_Agent_V1_NodeDependencyDesiredState {
     get {_storage._desiredState ?? .unspecified}
     set {_uniqueStorage()._desiredState = newValue}
@@ -9071,7 +10610,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `desiredState`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredState() {_uniqueStorage()._desiredState = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ownership: Strato_Agent_V1_NodeDependencyOwnership {
     get {_storage._ownership ?? .unspecified}
     set {_uniqueStorage()._ownership = newValue}
@@ -9081,7 +10620,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `ownership`. Subsequent reads from it will return its default value.
   public mutating func clearOwnership() {_uniqueStorage()._ownership = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var supervisorState: Strato_Agent_V1_NodeDependencySupervisorState {
     get {_storage._supervisorState ?? .unspecified}
     set {_uniqueStorage()._supervisorState = newValue}
@@ -9091,7 +10630,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `supervisorState`. Subsequent reads from it will return its default value.
   public mutating func clearSupervisorState() {_uniqueStorage()._supervisorState = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var installedVersion: String {
     get {_storage._installedVersion ?? String()}
     set {_uniqueStorage()._installedVersion = newValue}
@@ -9101,7 +10640,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `installedVersion`. Subsequent reads from it will return its default value.
   public mutating func clearInstalledVersion() {_uniqueStorage()._installedVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var daemonVersion: String {
     get {_storage._daemonVersion ?? String()}
     set {_uniqueStorage()._daemonVersion = newValue}
@@ -9111,7 +10650,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `daemonVersion`. Subsequent reads from it will return its default value.
   public mutating func clearDaemonVersion() {_uniqueStorage()._daemonVersion = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var compatibility: Strato_Agent_V1_NodeDependencyCompatibility {
     get {_storage._compatibility ?? .unspecified}
     set {_uniqueStorage()._compatibility = newValue}
@@ -9121,7 +10660,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `compatibility`. Subsequent reads from it will return its default value.
   public mutating func clearCompatibility() {_uniqueStorage()._compatibility = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var functionalState: Strato_Agent_V1_NodeDependencyFunctionalState {
     get {_storage._functionalState ?? .unspecified}
     set {_uniqueStorage()._functionalState = newValue}
@@ -9131,7 +10670,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `functionalState`. Subsequent reads from it will return its default value.
   public mutating func clearFunctionalState() {_uniqueStorage()._functionalState = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var checkedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._checkedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._checkedAt = newValue}
@@ -9141,7 +10680,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `checkedAt`. Subsequent reads from it will return its default value.
   public mutating func clearCheckedAt() {_uniqueStorage()._checkedAt = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastHealthyAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._lastHealthyAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._lastHealthyAt = newValue}
@@ -9151,7 +10690,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `lastHealthyAt`. Subsequent reads from it will return its default value.
   public mutating func clearLastHealthyAt() {_uniqueStorage()._lastHealthyAt = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var reason: Strato_Agent_V1_NodeDependencyFailureReason {
     get {_storage._reason ?? Strato_Agent_V1_NodeDependencyFailureReason()}
     set {_uniqueStorage()._reason = newValue}
@@ -9161,7 +10700,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `reason`. Subsequent reads from it will return its default value.
   public mutating func clearReason() {_uniqueStorage()._reason = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var consecutiveFailures: Int64 {
     get {_storage._consecutiveFailures ?? 0}
     set {_uniqueStorage()._consecutiveFailures = newValue}
@@ -9171,7 +10710,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `consecutiveFailures`. Subsequent reads from it will return its default value.
   public mutating func clearConsecutiveFailures() {_uniqueStorage()._consecutiveFailures = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var remediationCount: Int64 {
     get {_storage._remediationCount ?? 0}
     set {_uniqueStorage()._remediationCount = newValue}
@@ -9181,7 +10720,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `remediationCount`. Subsequent reads from it will return its default value.
   public mutating func clearRemediationCount() {_uniqueStorage()._remediationCount = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var restartCount: Int64 {
     get {_storage._restartCount ?? 0}
     set {_uniqueStorage()._restartCount = newValue}
@@ -9191,7 +10730,7 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   /// Clears the value of `restartCount`. Subsequent reads from it will return its default value.
   public mutating func clearRestartCount() {_uniqueStorage()._restartCount = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var affectedCapabilities: Strato_Agent_V1_NodeDependencyObservationAffectedCapabilitiesSection {
     get {_storage._affectedCapabilities ?? Strato_Agent_V1_NodeDependencyObservationAffectedCapabilitiesSection()}
     set {_uniqueStorage()._affectedCapabilities = newValue}
@@ -9208,12 +10747,18 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservation: @unchecked 
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Why an agent is not converging on the sync's `DesiredAgentUpdate`
+/// (issue #434), reported back on the observed-state report so the control
+/// plane's rollout can distinguish "waiting on a precondition" from "the
+/// update itself failed" instead of timing both out identically.
 public nonisolated struct Strato_Agent_V1_ObservedAgentUpdateStatus: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The `DesiredAgentUpdate.target_version` this status is about, so a
+  /// stale report can never be attributed to a newer rollout target.
+  /// Required:
   public var targetVersion: String {
     get {_targetVersion ?? String()}
     set {_targetVersion = newValue}
@@ -9223,7 +10768,10 @@ public nonisolated struct Strato_Agent_V1_ObservedAgentUpdateStatus: Sendable {
   /// Clears the value of `targetVersion`. Subsequent reads from it will return its default value.
   public mutating func clearTargetVersion() {self._targetVersion = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// One of the `disposition*` constants. A string rather than an enum so
+  /// a disposition added later still decodes on older control planes
+  /// (unknown values are treated as `blocked`, the conservative reading).
+  /// Required:
   public var disposition: String {
     get {_disposition ?? String()}
     set {_disposition = newValue}
@@ -9233,7 +10781,8 @@ public nonisolated struct Strato_Agent_V1_ObservedAgentUpdateStatus: Sendable {
   /// Clears the value of `disposition`. Subsequent reads from it will return its default value.
   public mutating func clearDisposition() {self._disposition = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Human-readable explanation, surfaced on the agent's API resource.
+  /// Required:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -9257,7 +10806,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerBackend: Sendable 
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -9268,7 +10817,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerBackend: Sendable 
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var healthStatus: Strato_Agent_V1_ObservedLoadBalancerBackendHealth {
     get {_healthStatus ?? .unspecified}
     set {_healthStatus = newValue}
@@ -9278,7 +10827,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerBackend: Sendable 
   /// Clears the value of `healthStatus`. Subsequent reads from it will return its default value.
   public mutating func clearHealthStatus() {self._healthStatus = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastCheckedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_lastCheckedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_lastCheckedAt = newValue}
@@ -9297,12 +10846,15 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerBackend: Sendable 
   fileprivate var _lastCheckedAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
 }
 
+/// What the site's single OVN author observed after reconciling one native
+/// load balancer. Optional at the report level because non-authoritative and
+/// absence means the sender has no opinion about these project-scoped rows.
 public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -9313,7 +10865,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var observedGeneration: Int64 {
     get {_observedGeneration ?? 0}
     set {_observedGeneration = newValue}
@@ -9323,7 +10875,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {self._observedGeneration = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_ObservedLoadBalancerStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -9333,7 +10885,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastError: String {
     get {_lastError ?? String()}
     set {_lastError = newValue}
@@ -9343,7 +10895,7 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {self._lastError = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backends: Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection {
     get {_backends ?? Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection()}
     set {_backends = newValue}
@@ -9364,12 +10916,25 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerState: Sendable {
   fileprivate var _backends: Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection? = nil
 }
 
+/// Agent → control plane: what the agent's durable workload manifest — its
+/// only memory of what it is running — was able to tell it at startup
+/// (STR-138).
+///
+/// Sent only when there is something wrong to say; absence is the steady state.
 public nonisolated struct Strato_Agent_V1_ObservedManifestStatus: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the `vms`/`sandboxes` lists on this report are a complete
+  /// inventory of the host.
+  ///
+  /// **False changes the meaning of the whole report.** The manifest could
+  /// not be read at all, so the agent cannot enumerate its own workloads:
+  /// the lists are empty because it doesn't know, not because the host is
+  /// empty. Absence confirms nothing — not a deletion, not a loss — and the
+  /// control plane must apply none of the report's workload half.
+  /// Required:
   public var inventoryComplete: Bool {
     get {_inventoryComplete ?? false}
     set {_inventoryComplete = newValue}
@@ -9379,7 +10944,12 @@ public nonisolated struct Strato_Agent_V1_ObservedManifestStatus: Sendable {
   /// Clears the value of `inventoryComplete`. Subsequent reads from it will return its default value.
   public mutating func clearInventoryComplete() {self._inventoryComplete = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Entries that decoded far enough to prove a workload exists under that
+  /// id, but not far enough to route operations to it (an unrecognized
+  /// hypervisor type, a spec this build cannot read). They keep reserving
+  /// capacity and are reported as present, but nothing can be done to them
+  /// until an agent that understands them runs here.
+  /// Required:
   public var quarantinedEntries: Int64 {
     get {_quarantinedEntries ?? 0}
     set {_quarantinedEntries = newValue}
@@ -9389,7 +10959,10 @@ public nonisolated struct Strato_Agent_V1_ObservedManifestStatus: Sendable {
   /// Clears the value of `quarantinedEntries`. Subsequent reads from it will return its default value.
   public mutating func clearQuarantinedEntries() {self._quarantinedEntries = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Operator-facing explanation, surfaced on the agent's API resource.
+  /// (The unreadable manifest itself is preserved beside the original on
+  /// the host for post-mortem; the agent logs where.)
+  /// Required:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -9408,12 +10981,16 @@ public nonisolated struct Strato_Agent_V1_ObservedManifestStatus: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// What the site's OVN topology authority observed after reconciling one
+/// logical network. Optional at the report level because a non-authority has no
+/// opinion about shared topology; an empty list is an authoritative opinion
+/// about an empty desired set.
 public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -9424,7 +11001,7 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var observedGeneration: Int64 {
     get {_observedGeneration ?? 0}
     set {_observedGeneration = newValue}
@@ -9434,7 +11011,7 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {self._observedGeneration = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_ObservedNetworkFabricStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -9444,7 +11021,7 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastError: String {
     get {_lastError ?? String()}
     set {_lastError = newValue}
@@ -9454,7 +11031,7 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {self._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_failedGeneration ?? 0}
     set {_failedGeneration = newValue}
@@ -9464,7 +11041,7 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {self._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_failureClassification ?? .unspecified}
     set {_failureClassification = newValue}
@@ -9486,12 +11063,16 @@ public nonisolated struct Strato_Agent_V1_ObservedNetworkState: Sendable {
   fileprivate var _failureClassification: Strato_Agent_V1_ObservedFailureClassification? = nil
 }
 
+/// The result of converging one VM or sandbox port's security-group
+/// membership. `security_group_ids` is the desired set this result belongs to;
+/// the control plane compares it with the current attachment rows before
+/// applying the result so a delayed report cannot bless a newer membership.
 public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var interfaceID: String {
     get {_interfaceID ?? String()}
@@ -9502,7 +11083,7 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   /// Clears the value of `interfaceID`. Subsequent reads from it will return its default value.
   public mutating func clearInterfaceID() {self._interfaceID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var portName: String {
     get {_portName ?? String()}
     set {_portName = newValue}
@@ -9512,7 +11093,7 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   /// Clears the value of `portName`. Subsequent reads from it will return its default value.
   public mutating func clearPortName() {self._portName = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var securityGroupIds: Strato_Agent_V1_ObservedPortMembershipStateSecurityGroupIdsSection {
     get {_securityGroupIds ?? Strato_Agent_V1_ObservedPortMembershipStateSecurityGroupIdsSection()}
@@ -9523,7 +11104,7 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   /// Clears the value of `securityGroupIds`. Subsequent reads from it will return its default value.
   public mutating func clearSecurityGroupIds() {self._securityGroupIds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_ObservedNetworkFabricStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -9533,7 +11114,7 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastError: String {
     get {_lastError ?? String()}
     set {_lastError = newValue}
@@ -9543,7 +11124,7 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {self._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_failureClassification ?? .unspecified}
     set {_failureClassification = newValue}
@@ -9565,12 +11146,15 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipState: Sendable 
   fileprivate var _failureClassification: Strato_Agent_V1_ObservedFailureClassification? = nil
 }
 
+/// One sandbox's state as actually observed on an agent. Field semantics match
+/// `ObservedVMState` (see the doc comments there for the generation/error
+/// contract); `exit_code` is the sandbox-specific addition.
 public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var sandboxID: String {
     get {_storage._sandboxID ?? String()}
@@ -9581,7 +11165,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `sandboxID`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxID() {_uniqueStorage()._sandboxID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_SandboxStatus {
     get {_storage._status ?? .unspecified}
     set {_uniqueStorage()._status = newValue}
@@ -9591,7 +11175,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {_uniqueStorage()._status = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The desired-state generation this observation reflects (0 if none yet).
+  /// Required:
   public var observedGeneration: Int64 {
     get {_storage._observedGeneration ?? 0}
     set {_uniqueStorage()._observedGeneration = newValue}
@@ -9601,7 +11186,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {_uniqueStorage()._observedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Human-readable convergence stage (e.g. "pulling image") while the agent
+  /// is still working toward a newer generation. Progress only.
+  /// Optional:
   public var convergencePhase: String {
     get {_storage._convergencePhase ?? String()}
     set {_uniqueStorage()._convergencePhase = newValue}
@@ -9611,7 +11198,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `convergencePhase`. Subsequent reads from it will return its default value.
   public mutating func clearConvergencePhase() {_uniqueStorage()._convergencePhase = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The most recent convergence failure, if the last attempt failed.
+  /// Optional:
   public var lastError: String {
     get {_storage._lastError ?? String()}
     set {_uniqueStorage()._lastError = newValue}
@@ -9621,7 +11209,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {_uniqueStorage()._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The generation whose convergence produced `last_error` (see
+  /// `ObservedVMState.failed_generation` for why the control plane needs it).
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_storage._failedGeneration ?? 0}
     set {_uniqueStorage()._failedGeneration = newValue}
@@ -9631,7 +11221,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {_uniqueStorage()._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Retry semantics for `last_error`; see
+  /// `ObservedVMState.failure_classification`.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_storage._failureClassification ?? .unspecified}
     set {_uniqueStorage()._failureClassification = newValue}
@@ -9641,7 +11233,11 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `failureClassification`. Subsequent reads from it will return its default value.
   public mutating func clearFailureClassification() {_uniqueStorage()._failureClassification = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Exit code of the workload once it has ended (`status == .exited`), as
+  /// reported by the guest agent over vsock. Absence while running, when the
+  /// sandbox was stopped by request rather than by the workload ending, or
+  /// when the guest could not report one.
+  /// Optional:
   public var exitCode: Int64 {
     get {_storage._exitCode ?? 0}
     set {_uniqueStorage()._exitCode = newValue}
@@ -9651,7 +11247,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `exitCode`. Subsequent reads from it will return its default value.
   public mutating func clearExitCode() {_uniqueStorage()._exitCode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Last host-side contention sample for this sandbox.
+  /// Optional:
   public var resourceTelemetry: Strato_Agent_V1_WorkloadResourceTelemetry {
     get {_storage._resourceTelemetry ?? Strato_Agent_V1_WorkloadResourceTelemetry()}
     set {_uniqueStorage()._resourceTelemetry = newValue}
@@ -9661,7 +11258,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `resourceTelemetry`. Subsequent reads from it will return its default value.
   public mutating func clearResourceTelemetry() {_uniqueStorage()._resourceTelemetry = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var idleActivity: Strato_Agent_V1_SandboxIdleActivityReport {
     get {_storage._idleActivity ?? Strato_Agent_V1_SandboxIdleActivityReport()}
     set {_uniqueStorage()._idleActivity = newValue}
@@ -9671,7 +11268,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `idleActivity`. Subsequent reads from it will return its default value.
   public mutating func clearIdleActivity() {_uniqueStorage()._idleActivity = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var suspension: Strato_Agent_V1_SandboxSuspensionEvidence {
     get {_storage._suspension ?? Strato_Agent_V1_SandboxSuspensionEvidence()}
     set {_uniqueStorage()._suspension = newValue}
@@ -9681,7 +11278,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `suspension`. Subsequent reads from it will return its default value.
   public mutating func clearSuspension() {_uniqueStorage()._suspension = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var suspensionStorageReservedBytes: Int64 {
     get {_storage._suspensionStorageReservedBytes ?? 0}
     set {_uniqueStorage()._suspensionStorageReservedBytes = newValue}
@@ -9691,7 +11288,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   /// Clears the value of `suspensionStorageReservedBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSuspensionStorageReservedBytes() {_uniqueStorage()._suspensionStorageReservedBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Next capture estimate, based on actual local files; absence means unsupported/unavailable.
+  /// Optional:
   public var suspensionStorageEstimateBytes: Int64 {
     get {_storage._suspensionStorageEstimateBytes ?? 0}
     set {_uniqueStorage()._suspensionStorageEstimateBytes = newValue}
@@ -9708,12 +11306,16 @@ public nonisolated struct Strato_Agent_V1_ObservedSandboxState: @unchecked Senda
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// What the site's OVN topology authority observed after reconciling one
+/// security group's port group and ACLs. A group can be realized by more than
+/// one site; each report remains scoped to its reporting authority and the
+/// control plane is responsible for combining those opinions.
 public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var id: String {
     get {_id ?? String()}
@@ -9724,7 +11326,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   /// Clears the value of `id`. Subsequent reads from it will return its default value.
   public mutating func clearID() {self._id = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var observedGeneration: Int64 {
     get {_observedGeneration ?? 0}
     set {_observedGeneration = newValue}
@@ -9734,7 +11336,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {self._observedGeneration = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_ObservedNetworkFabricStatus {
     get {_status ?? .unspecified}
     set {_status = newValue}
@@ -9744,7 +11346,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {self._status = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var lastError: String {
     get {_lastError ?? String()}
     set {_lastError = newValue}
@@ -9754,7 +11356,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {self._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_failedGeneration ?? 0}
     set {_failedGeneration = newValue}
@@ -9764,7 +11366,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {self._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_failureClassification ?? .unspecified}
     set {_failureClassification = newValue}
@@ -9786,12 +11388,33 @@ public nonisolated struct Strato_Agent_V1_ObservedSecurityGroupState: Sendable {
   fileprivate var _failureClassification: Strato_Agent_V1_ObservedFailureClassification? = nil
 }
 
+/// What one capture actually produced, as measured by the agent that wrote it.
+///
+/// This is where the metadata that used to ride `VMCheckpointStatusResponse`
+/// and `SandboxSnapshotStatusResponse` lives now. Moving it onto the observed
+/// report is not just relocation: an RPC response is delivered once and lost if
+/// the socket drops mid-flight, which is why both old paths had to treat a
+/// missing report as a protocol error and mark the row `.error` for a
+/// checkpoint that in fact existed. A report is re-sent on every heartbeat, so
+/// the same facts arrive again until the control plane has them.
+///
+/// Every field is optional and every consumer treats a absence as "unknown, not
+/// zero" — a footprint the agent could not measure must never silently become a
+/// free one in quota accounting.
 public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Total on-disk footprint this artifact adds, **as measured at capture**.
+  /// For a VM checkpoint that is the machine state alone: the disks it lives
+  /// inside are already charged as volume storage (STR-181 made that true),
+  /// and an internal snapshot does not copy them.
+  ///
+  /// Final for the two families that are finished when they are written. For a
+  /// volume snapshot it is an empty overlay's header and `current_size_bytes` is
+  /// the figure to read instead.
+  /// Optional:
   public var sizeBytes: Int64 {
     get {_sizeBytes ?? 0}
     set {_sizeBytes = newValue}
@@ -9801,7 +11424,20 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `sizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSizeBytes() {self._sizeBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The footprint re-measured at *report* time, for an artifact that keeps
+  /// growing after capture (STR-181).
+  ///
+  /// Today that is only a volume snapshot's overlay, which starts as an empty
+  /// qcow2 and grows toward its parent's size as the volume is written.
+  /// `size_bytes` is what the agent measured *at* capture and is frozen there —
+  /// for an overlay it is the header, which is why the control plane ignored
+  /// it. This one is re-read on every report for actual-footprint visibility;
+  /// the storage quota separately keeps the parent-sized bound reserved.
+  ///
+  /// Absence for every other kind, and from any agent that does not re-measure —
+  /// which is what makes the field readable without a version gate. Absence is
+  /// "unknown", never zero.
+  /// Optional:
   public var currentSizeBytes: Int64 {
     get {_currentSizeBytes ?? 0}
     set {_currentSizeBytes = newValue}
@@ -9811,7 +11447,10 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `currentSizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearCurrentSizeBytes() {self._currentSizeBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Where the agent put it, when the artifact is a file or directory the
+  /// agent names. Absence for a VM checkpoint, which lives inside disks it does
+  /// not get to name.
+  /// Optional:
   public var storagePath: String {
     get {_storagePath ?? String()}
     set {_storagePath = newValue}
@@ -9821,7 +11460,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `storagePath`. Subsequent reads from it will return its default value.
   public mutating func clearStoragePath() {self._storagePath = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Host CPU architecture the capture was taken on. Every kind records it:
+  /// no snapshot of machine state restores across architectures.
+  /// Optional:
   public var architecture: Strato_Agent_V1_CPUArchitecture {
     get {_architecture ?? .unspecified}
     set {_architecture = newValue}
@@ -9831,7 +11472,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `architecture`. Subsequent reads from it will return its default value.
   public mutating func clearArchitecture() {self._architecture = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The version of the QEMU that took the checkpoint. A restore needs a
+  /// compatible (in practice: identical) build and machine type.
+  /// Optional:
   public var qemuVersion: String {
     get {_qemuVersion ?? String()}
     set {_qemuVersion = newValue}
@@ -9841,7 +11484,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `qemuVersion`. Subsequent reads from it will return its default value.
   public mutating func clearQemuVersion() {self._qemuVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// `vmm_version` of the Firecracker that took the snapshot.
+  /// Optional:
   public var firecrackerVersion: String {
     get {_firecrackerVersion ?? String()}
     set {_firecrackerVersion = newValue}
@@ -9851,7 +11495,10 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `firecrackerVersion`. Subsequent reads from it will return its default value.
   public mutating func clearFirecrackerVersion() {self._firecrackerVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Version advertised by the guest frozen into this checkpoint. Absence is a
+  /// legacy/unknown artifact retained only so it can be inventoried and
+  /// deleted; restore and fork require the exact current version.
+  /// Optional:
   public var guestControlProtocolVersion: Int64 {
     get {_guestControlProtocolVersion ?? 0}
     set {_guestControlProtocolVersion = newValue}
@@ -9861,7 +11508,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `guestControlProtocolVersion`. Subsequent reads from it will return its default value.
   public mutating func clearGuestControlProtocolVersion() {self._guestControlProtocolVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Version of the fork-safe artifact layout, or absence for legacy/unjailed
+  /// checkpoints that remain eligible for in-place restore only.
+  /// Optional:
   public var forkLayoutVersion: Int64 {
     get {_forkLayoutVersion ?? 0}
     set {_forkLayoutVersion = newValue}
@@ -9871,7 +11520,10 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   /// Clears the value of `forkLayoutVersion`. Subsequent reads from it will return its default value.
   public mutating func clearForkLayoutVersion() {self._forkLayoutVersion = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Firecracker CPU template the checkpointed guest booted with. Absence means
+  /// no template: the snapshot only restores on hosts with an identical CPU
+  /// model.
+  /// Optional:
   public var cpuTemplate: String {
     get {_cpuTemplate ?? String()}
     set {_cpuTemplate = newValue}
@@ -9896,12 +11548,15 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotFacts: Sendable {
   fileprivate var _cpuTemplate: String? = nil
 }
 
+/// One snapshot artifact's state as actually observed on an agent (STR-150).
+/// The convergence metadata matches `ObservedVMState` — see the doc comments
+/// there.
 public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var snapshotID: String {
     get {_storage._snapshotID ?? String()}
@@ -9912,7 +11567,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `snapshotID`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshotID() {_uniqueStorage()._snapshotID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_SnapshotArtifactKind {
     get {_storage._kind ?? .unspecified}
     set {_uniqueStorage()._kind = newValue}
@@ -9922,7 +11577,7 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {_uniqueStorage()._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var parentID: String {
     get {_storage._parentID ?? String()}
@@ -9933,7 +11588,12 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `parentID`. Subsequent reads from it will return its default value.
   public mutating func clearParentID() {_uniqueStorage()._parentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the artifact's bytes exist on this host. A `false` entry is one
+  /// the agent is listing because it is mid-capture or failed with nothing
+  /// written — the mirror of the VM report's in-flight section. *Absence from
+  /// the list* is what confirms a deletion; `present: false` explicitly does
+  /// not.
+  /// Required:
   public var present: Bool {
     get {_storage._present ?? false}
     set {_uniqueStorage()._present = newValue}
@@ -9943,7 +11603,12 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `present`. Subsequent reads from it will return its default value.
   public mutating func clearPresent() {_uniqueStorage()._present = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether this host has finished streaming the artifact to the export
+  /// slots the sync asked for. False when no export was desired, when it has
+  /// not finished, and when the copy was made by some other host — the
+  /// control plane's own upload records are what say an exported copy is
+  /// *complete*; this only says this agent believes it did its half.
+  /// Required:
   public var exported: Bool {
     get {_storage._exported ?? false}
     set {_uniqueStorage()._exported = newValue}
@@ -9953,7 +11618,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `exported`. Subsequent reads from it will return its default value.
   public mutating func clearExported() {_uniqueStorage()._exported = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// What the capture produced. Absence until the artifact exists.
+  /// Optional:
   public var facts: Strato_Agent_V1_ObservedSnapshotFacts {
     get {_storage._facts ?? Strato_Agent_V1_ObservedSnapshotFacts()}
     set {_uniqueStorage()._facts = newValue}
@@ -9963,7 +11629,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `facts`. Subsequent reads from it will return its default value.
   public mutating func clearFacts() {_uniqueStorage()._facts = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The desired-state generation this observation reflects (0 if none yet).
+  /// Required:
   public var observedGeneration: Int64 {
     get {_storage._observedGeneration ?? 0}
     set {_uniqueStorage()._observedGeneration = newValue}
@@ -9973,7 +11640,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {_uniqueStorage()._observedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Human-readable convergence stage ("capturing", "exporting", ...) while
+  /// the agent is still working toward a newer generation. Progress only.
+  /// Optional:
   public var convergencePhase: String {
     get {_storage._convergencePhase ?? String()}
     set {_uniqueStorage()._convergencePhase = newValue}
@@ -9983,7 +11652,8 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `convergencePhase`. Subsequent reads from it will return its default value.
   public mutating func clearConvergencePhase() {_uniqueStorage()._convergencePhase = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The most recent convergence failure, if the last attempt failed.
+  /// Optional:
   public var lastError: String {
     get {_storage._lastError ?? String()}
     set {_uniqueStorage()._lastError = newValue}
@@ -9993,7 +11663,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {_uniqueStorage()._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The generation whose convergence produced `last_error` (see
+  /// `ObservedVMState.failed_generation` for why the control plane needs it).
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_storage._failedGeneration ?? 0}
     set {_uniqueStorage()._failedGeneration = newValue}
@@ -10003,7 +11675,9 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {_uniqueStorage()._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Retry semantics for `last_error`; see
+  /// `ObservedVMState.failure_classification`.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_storage._failureClassification ?? .unspecified}
     set {_uniqueStorage()._failureClassification = newValue}
@@ -10020,12 +11694,24 @@ public nonisolated struct Strato_Agent_V1_ObservedSnapshotState: @unchecked Send
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Agent → control plane: everything the agent actually has, with resources.
+///
+/// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
+/// does not exist on this agent, which is how deletions are confirmed. Sent
+/// immediately after any convergence action and piggybacked on the heartbeat
+/// cadence, so state converges quickly after changes but is also periodically
+/// re-asserted.
+///
+/// `manifest_status` is the one thing that suspends those semantics: an agent
+/// that cannot read its manifest sends the report to carry the condition and
+/// its resource snapshot, and the lists mean nothing (STR-138).
 public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_storage._requestID ?? String()}
     set {_uniqueStorage()._requestID = newValue}
@@ -10035,7 +11721,8 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {_uniqueStorage()._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._timestamp = newValue}
@@ -10045,7 +11732,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {_uniqueStorage()._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var agentID: String {
     get {_storage._agentID ?? String()}
     set {_uniqueStorage()._agentID = newValue}
@@ -10055,7 +11742,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `agentID`. Subsequent reads from it will return its default value.
   public mutating func clearAgentID() {_uniqueStorage()._agentID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vms: Strato_Agent_V1_ObservedStateReportVmsSection {
     get {_storage._vms ?? Strato_Agent_V1_ObservedStateReportVmsSection()}
     set {_uniqueStorage()._vms = newValue}
@@ -10065,7 +11752,11 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `vms`. Subsequent reads from it will return its default value.
   public mutating func clearVms() {_uniqueStorage()._vms = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sandboxes actually present on this agent. Full-list, like `vms`: a
+  /// sandbox missing from the list does not exist, which is how sandbox
+  /// deletions are confirmed. The key is required even when the list is
+  /// empty.
+  /// Required:
   public var sandboxes: Strato_Agent_V1_ObservedStateReportSandboxesSection {
     get {_storage._sandboxes ?? Strato_Agent_V1_ObservedStateReportSandboxesSection()}
     set {_uniqueStorage()._sandboxes = newValue}
@@ -10075,7 +11766,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `sandboxes`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxes() {_uniqueStorage()._sandboxes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resources: Strato_Agent_V1_AgentResources {
     get {_storage._resources ?? Strato_Agent_V1_AgentResources()}
     set {_uniqueStorage()._resources = newValue}
@@ -10085,7 +11776,8 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `resources`. Subsequent reads from it will return its default value.
   public mutating func clearResources() {_uniqueStorage()._resources = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Coherent enforcement/accounting acknowledgement. Absence is unknown.
+  /// Optional:
   public var resourceEnforcement: Strato_Agent_V1_ResourceEnforcementSnapshot {
     get {_storage._resourceEnforcement ?? Strato_Agent_V1_ResourceEnforcementSnapshot()}
     set {_uniqueStorage()._resourceEnforcement = newValue}
@@ -10095,7 +11787,10 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `resourceEnforcement`. Subsequent reads from it will return its default value.
   public mutating func clearResourceEnforcement() {_uniqueStorage()._resourceEnforcement = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Same independently sampled host-resource snapshot carried by the
+  /// heartbeat. It is duplicated here so either periodic path refreshes the
+  /// operator view without doing any probe work itself.
+  /// Optional:
   public var hostResourceTelemetry: Strato_Agent_V1_HostResourceTelemetry {
     get {_storage._hostResourceTelemetry ?? Strato_Agent_V1_HostResourceTelemetry()}
     set {_uniqueStorage()._hostResourceTelemetry = newValue}
@@ -10105,7 +11800,11 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `hostResourceTelemetry`. Subsequent reads from it will return its default value.
   public mutating func clearHostResourceTelemetry() {_uniqueStorage()._hostResourceTelemetry = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
+  /// is desired and something is in the way (issue #434). Absence when no update
+  /// is desired or convergence is proceeding (the agent restarts into the new
+  /// build rather than reporting progress).
+  /// Optional:
   public var agentUpdateStatus: Strato_Agent_V1_ObservedAgentUpdateStatus {
     get {_storage._agentUpdateStatus ?? Strato_Agent_V1_ObservedAgentUpdateStatus()}
     set {_uniqueStorage()._agentUpdateStatus = newValue}
@@ -10115,7 +11814,11 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `agentUpdateStatus`. Subsequent reads from it will return its default value.
   public mutating func clearAgentUpdateStatus() {_uniqueStorage()._agentUpdateStatus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Workloads this agent holds that its last sync did not list (STR-98).
+  /// They also appear in `vms`/`sandboxes` above — the agent really is
+  /// running them — so this list is the agent asking "should these exist?",
+  /// not a second inventory.
+  /// Required:
   public var unrecognized: Strato_Agent_V1_ObservedStateReportUnrecognizedSection {
     get {_storage._unrecognized ?? Strato_Agent_V1_ObservedStateReportUnrecognizedSection()}
     set {_uniqueStorage()._unrecognized = newValue}
@@ -10125,7 +11828,9 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `unrecognized`. Subsequent reads from it will return its default value.
   public mutating func clearUnrecognized() {_uniqueStorage()._unrecognized = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Set when the blast-radius guard refused a sync's teardowns. Absence in the
+  /// steady state.
+  /// Optional:
   public var teardownRefusal: Strato_Agent_V1_ObservedTeardownRefusal {
     get {_storage._teardownRefusal ?? Strato_Agent_V1_ObservedTeardownRefusal()}
     set {_uniqueStorage()._teardownRefusal = newValue}
@@ -10135,7 +11840,11 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `teardownRefusal`. Subsequent reads from it will return its default value.
   public mutating func clearTeardownRefusal() {_uniqueStorage()._teardownRefusal = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Set when the agent's durable workload manifest could not be read in full
+  /// (STR-138). Absence in the steady state. `inventory_complete == false`
+  /// suspends this report's full-list semantics — see
+  /// `ObservedManifestStatus`.
+  /// Optional:
   public var manifestStatus: Strato_Agent_V1_ObservedManifestStatus {
     get {_storage._manifestStatus ?? Strato_Agent_V1_ObservedManifestStatus()}
     set {_uniqueStorage()._manifestStatus = newValue}
@@ -10145,7 +11854,15 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `manifestStatus`. Subsequent reads from it will return its default value.
   public mutating func clearManifestStatus() {_uniqueStorage()._manifestStatus = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Volumes actually present on this agent (STR-148). Full-list, like
+  /// `vms`: a volume missing from the list does not exist here, which is how
+  /// volume deletions are confirmed.
+  ///
+  /// Optional rather than `[]`-defaulted because absence means the current agent
+  /// could not enumerate its volume store. The control plane must read that as
+  /// "unknown", not "every volume on this agent is gone" — which would reap
+  /// terminating volume rows and error live ones.
+  /// Optional:
   public var volumes: Strato_Agent_V1_ObservedStateReportVolumesSection {
     get {_storage._volumes ?? Strato_Agent_V1_ObservedStateReportVolumesSection()}
     set {_uniqueStorage()._volumes = newValue}
@@ -10155,7 +11872,16 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `volumes`. Subsequent reads from it will return its default value.
   public mutating func clearVolumes() {_uniqueStorage()._volumes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Snapshot artifacts actually present on this agent (STR-150). Full-list
+  /// and kind-tagged, like the desired counterpart: an artifact missing from
+  /// this list does not exist here, which is how snapshot deletions are
+  /// confirmed and how the finalizer reap learns a checkpoint's bytes are
+  /// really gone.
+  ///
+  /// `Optional` for `volumes`' reason. Absence means the current agent could not
+  /// enumerate one of its artifact stores, so the control plane must do
+  /// nothing rather than read the absence as "every checkpoint is gone".
+  /// Optional:
   public var snapshots: Strato_Agent_V1_ObservedStateReportSnapshotsSection {
     get {_storage._snapshots ?? Strato_Agent_V1_ObservedStateReportSnapshotsSection()}
     set {_uniqueStorage()._snapshots = newValue}
@@ -10165,7 +11891,9 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `snapshots`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshots() {_uniqueStorage()._snapshots = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Native LB programming and backend health observed by the site's
+  /// topology author. Absence means no opinion, not an empty authoritative set.
+  /// Optional:
   public var loadBalancers: Strato_Agent_V1_ObservedStateReportLoadBalancersSection {
     get {_storage._loadBalancers ?? Strato_Agent_V1_ObservedStateReportLoadBalancersSection()}
     set {_uniqueStorage()._loadBalancers = newValue}
@@ -10175,7 +11903,9 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `loadBalancers`. Subsequent reads from it will return its default value.
   public mutating func clearLoadBalancers() {_uniqueStorage()._loadBalancers = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Logical-switch/router/SNAT/DHCP realization observed by the site's
+  /// topology authority. Absence means this agent has no topology opinion.
+  /// Optional:
   public var networks: Strato_Agent_V1_ObservedStateReportNetworksSection {
     get {_storage._networks ?? Strato_Agent_V1_ObservedStateReportNetworksSection()}
     set {_uniqueStorage()._networks = newValue}
@@ -10185,7 +11915,9 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `networks`. Subsequent reads from it will return its default value.
   public mutating func clearNetworks() {_uniqueStorage()._networks = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Port-group and ACL realization observed by the site's topology
+  /// authority. Absence means this agent has no authority-side opinion.
+  /// Optional:
   public var securityGroups: Strato_Agent_V1_ObservedStateReportSecurityGroupsSection {
     get {_storage._securityGroups ?? Strato_Agent_V1_ObservedStateReportSecurityGroupsSection()}
     set {_uniqueStorage()._securityGroups = newValue}
@@ -10195,7 +11927,10 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `securityGroups`. Subsequent reads from it will return its default value.
   public mutating func clearSecurityGroups() {_uniqueStorage()._securityGroups = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Per-workload port-group membership observed by this agent. Absence means the
+  /// agent did not attempt or cannot identify membership; an empty list is an
+  /// authoritative statement that this sync contained no managed local port.
+  /// Optional:
   public var portMemberships: Strato_Agent_V1_ObservedStateReportPortMembershipsSection {
     get {_storage._portMemberships ?? Strato_Agent_V1_ObservedStateReportPortMembershipsSection()}
     set {_uniqueStorage()._portMemberships = newValue}
@@ -10205,7 +11940,11 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReport: @unchecked Sendab
   /// Clears the value of `portMemberships`. Subsequent reads from it will return its default value.
   public mutating func clearPortMemberships() {_uniqueStorage()._portMemberships = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whole physical disks observed by this agent. A present value is the
+  /// complete current inventory, including an authoritative empty list.
+  /// Absence means enumeration failed or is unsupported and must not be read as
+  /// device absence.
+  /// Optional:
   public var storageDevices: Strato_Agent_V1_ObservedStateReportStorageDevicesSection {
     get {_storage._storageDevices ?? Strato_Agent_V1_ObservedStateReportStorageDevicesSection()}
     set {_uniqueStorage()._storageDevices = newValue}
@@ -10227,7 +11966,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var identity: Strato_Agent_V1_StorageDeviceIdentity {
     get {_identity ?? Strato_Agent_V1_StorageDeviceIdentity()}
     set {_identity = newValue}
@@ -10237,7 +11976,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `identity`. Subsequent reads from it will return its default value.
   public mutating func clearIdentity() {self._identity = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var devicePath: String {
     get {_devicePath ?? String()}
     set {_devicePath = newValue}
@@ -10247,7 +11986,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `devicePath`. Subsequent reads from it will return its default value.
   public mutating func clearDevicePath() {self._devicePath = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sizeBytes: Int64 {
     get {_sizeBytes ?? 0}
     set {_sizeBytes = newValue}
@@ -10257,7 +11996,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `sizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSizeBytes() {self._sizeBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var model: String {
     get {_model ?? String()}
     set {_model = newValue}
@@ -10267,7 +12006,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `model`. Subsequent reads from it will return its default value.
   public mutating func clearModel() {self._model = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var serial: String {
     get {_serial ?? String()}
     set {_serial = newValue}
@@ -10277,7 +12016,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `serial`. Subsequent reads from it will return its default value.
   public mutating func clearSerial() {self._serial = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var wwn: String {
     get {_wwn ?? String()}
     set {_wwn = newValue}
@@ -10287,7 +12026,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `wwn`. Subsequent reads from it will return its default value.
   public mutating func clearWwn() {self._wwn = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var rotational: Bool {
     get {_rotational ?? false}
     set {_rotational = newValue}
@@ -10297,7 +12036,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `rotational`. Subsequent reads from it will return its default value.
   public mutating func clearRotational() {self._rotational = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var state: Strato_Agent_V1_StorageDeviceState {
     get {_state ?? .unspecified}
     set {_state = newValue}
@@ -10307,7 +12046,7 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   /// Clears the value of `state`. Subsequent reads from it will return its default value.
   public mutating func clearState() {self._state = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var uses: Strato_Agent_V1_ObservedStorageDeviceUsesSection {
     get {_uses ?? Strato_Agent_V1_ObservedStorageDeviceUsesSection()}
     set {_uses = newValue}
@@ -10332,12 +12071,20 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDevice: Sendable {
   fileprivate var _uses: Strato_Agent_V1_ObservedStorageDeviceUsesSection? = nil
 }
 
+/// Why an agent refused to converge the teardowns a sync authorized (STR-98
+/// phase 2): the blast-radius guard tripped.
+///
+/// Reported so the refusal reaches operators through the plumbing that already
+/// exists, rather than living only in an agent log nobody is watching. The
+/// agent keeps converging everything else in the sync.
 public nonisolated struct Strato_Agent_V1_ObservedTeardownRefusal: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// The sync whose teardowns were refused, so the refusal can be correlated
+  /// with the control-plane side of the same exchange.
+  /// Required:
   public var syncID: String {
     get {_syncID ?? String()}
     set {_syncID = newValue}
@@ -10347,7 +12094,8 @@ public nonisolated struct Strato_Agent_V1_ObservedTeardownRefusal: Sendable {
   /// Clears the value of `syncID`. Subsequent reads from it will return its default value.
   public mutating func clearSyncID() {self._syncID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// How many tombstoned workloads that sync would have destroyed.
+  /// Required:
   public var requestedTeardowns: Int64 {
     get {_requestedTeardowns ?? 0}
     set {_requestedTeardowns = newValue}
@@ -10357,7 +12105,9 @@ public nonisolated struct Strato_Agent_V1_ObservedTeardownRefusal: Sendable {
   /// Clears the value of `requestedTeardowns`. Subsequent reads from it will return its default value.
   public mutating func clearRequestedTeardowns() {self._requestedTeardowns = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// How many workloads the host holds in total, the denominator of the
+  /// percentage half of the guard.
+  /// Required:
   public var presentWorkloads: Int64 {
     get {_presentWorkloads ?? 0}
     set {_presentWorkloads = newValue}
@@ -10367,7 +12117,8 @@ public nonisolated struct Strato_Agent_V1_ObservedTeardownRefusal: Sendable {
   /// Clears the value of `presentWorkloads`. Subsequent reads from it will return its default value.
   public mutating func clearPresentWorkloads() {self._presentWorkloads = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Human-readable explanation, surfaced on the agent's API resource.
+  /// Required:
   public var reason: String {
     get {_reason ?? String()}
     set {_reason = newValue}
@@ -10387,12 +12138,13 @@ public nonisolated struct Strato_Agent_V1_ObservedTeardownRefusal: Sendable {
   fileprivate var _reason: String? = nil
 }
 
+/// One VM's state as actually observed on an agent.
 public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var vmID: String {
     get {_storage._vmID ?? String()}
@@ -10403,7 +12155,7 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {_uniqueStorage()._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var status: Strato_Agent_V1_VMStatus {
     get {_storage._status ?? .unspecified}
     set {_uniqueStorage()._status = newValue}
@@ -10413,7 +12165,11 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `status`. Subsequent reads from it will return its default value.
   public mutating func clearStatus() {_uniqueStorage()._status = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The desired-state generation this observation reflects: the last
+  /// generation the agent finished converging toward (0 if none yet). The
+  /// control plane records it as `observed_generation` and completes pending
+  /// operations only once the observed generation has caught up.
+  /// Required:
   public var observedGeneration: Int64 {
     get {_storage._observedGeneration ?? 0}
     set {_uniqueStorage()._observedGeneration = newValue}
@@ -10423,7 +12179,11 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {_uniqueStorage()._observedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Set while the agent is still converging this VM toward a newer
+  /// generation — a human-readable stage like "downloading image". Progress
+  /// only: the control plane surfaces it but must not treat the entry as a
+  /// settled observation for operation completion.
+  /// Optional:
   public var convergencePhase: String {
     get {_storage._convergencePhase ?? String()}
     set {_uniqueStorage()._convergencePhase = newValue}
@@ -10433,7 +12193,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `convergencePhase`. Subsequent reads from it will return its default value.
   public mutating func clearConvergencePhase() {_uniqueStorage()._convergencePhase = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The most recent convergence failure for this VM, if the last attempt
+  /// failed. Lets the control plane fail a pending operation with a real
+  /// error instead of waiting for its completion budget to expire.
+  /// Optional:
   public var lastError: String {
     get {_storage._lastError ?? String()}
     set {_uniqueStorage()._lastError = newValue}
@@ -10443,7 +12206,13 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {_uniqueStorage()._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The generation whose convergence produced `last_error`. The control
+  /// plane fails a pending operation on `last_error` only when this matches
+  /// the VM's current generation — otherwise a stale error from a previous
+  /// generation (still carried on heartbeat reports until the new
+  /// generation's work item runs) would fail a brand-new operation before
+  /// the agent ever attempted it.
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_storage._failedGeneration ?? 0}
     set {_uniqueStorage()._failedGeneration = newValue}
@@ -10453,7 +12222,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {_uniqueStorage()._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The agent-side retry category for this failure. Only `.blocked` tells
+  /// the control plane to retain the desired state while surfacing the error;
+  /// absence is the legacy terminal behavior for reports from older agents.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_storage._failureClassification ?? .unspecified}
     set {_uniqueStorage()._failureClassification = newValue}
@@ -10463,7 +12235,14 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `failureClassification`. Subsequent reads from it will return its default value.
   public mutating func clearFailureClassification() {_uniqueStorage()._failureClassification = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// What the QEMU guest agent reported about this VM's guest OS, if the
+  /// agent has a recent successful probe (issue #563). Absence for VMs without
+  /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
+  /// so `Optional` keeps this backward-decodable both ways (an older control
+  /// plane ignores the key; an older agent never sends it, which synthesized
+  /// `Codable` decodes to absence, not a failure). Purely informational: it never
+  /// participates in convergence.
+  /// Optional:
   public var guestInfo: Strato_Agent_V1_GuestInfo {
     get {_storage._guestInfo ?? Strato_Agent_V1_GuestInfo()}
     set {_uniqueStorage()._guestInfo = newValue}
@@ -10473,7 +12252,7 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `guestInfo`. Subsequent reads from it will return its default value.
   public mutating func clearGuestInfo() {_uniqueStorage()._guestInfo = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var guestAgentObservation: Strato_Agent_V1_GuestAgentObservation {
     get {_storage._guestAgentObservation ?? Strato_Agent_V1_GuestAgentObservation()}
     set {_uniqueStorage()._guestAgentObservation = newValue}
@@ -10483,7 +12262,7 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `guestAgentObservation`. Subsequent reads from it will return its default value.
   public mutating func clearGuestAgentObservation() {_uniqueStorage()._guestAgentObservation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var guestConfigObservation: Strato_Agent_V1_GuestConfigObservation {
     get {_storage._guestConfigObservation ?? Strato_Agent_V1_GuestConfigObservation()}
     set {_uniqueStorage()._guestConfigObservation = newValue}
@@ -10493,7 +12272,8 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `guestConfigObservation`. Subsequent reads from it will return its default value.
   public mutating func clearGuestConfigObservation() {_uniqueStorage()._guestConfigObservation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Terminal failure of the guest configuration step, including channel failure without read-back.
+  /// Optional:
   public var guestConfigFailedGeneration: Int64 {
     get {_storage._guestConfigFailedGeneration ?? 0}
     set {_uniqueStorage()._guestConfigFailedGeneration = newValue}
@@ -10503,7 +12283,12 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `guestConfigFailedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearGuestConfigFailedGeneration() {_uniqueStorage()._guestConfigFailedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Guest memory usage from the VM's virtio-balloon device (issue #567).
+  /// Absence for guests without the virtio_balloon driver, still booting, or on
+  /// agents/hypervisors that don't poll it — the same tolerant-both-ways
+  /// `Optional` contract as `guest_info`. Purely informational: it never
+  /// participates in convergence.
+  /// Optional:
   public var memoryStats: Strato_Agent_V1_VMMemoryStats {
     get {_storage._memoryStats ?? Strato_Agent_V1_VMMemoryStats()}
     set {_uniqueStorage()._memoryStats = newValue}
@@ -10513,7 +12298,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `memoryStats`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryStats() {_uniqueStorage()._memoryStats = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Last host-side contention sample for this VM. Every scalar carries
+  /// explicit availability so a backend without a per-workload cgroup or a
+  /// guest without a steal-time source never reports a synthetic zero.
+  /// Optional:
   public var resourceTelemetry: Strato_Agent_V1_WorkloadResourceTelemetry {
     get {_storage._resourceTelemetry ?? Strato_Agent_V1_WorkloadResourceTelemetry()}
     set {_uniqueStorage()._resourceTelemetry = newValue}
@@ -10523,7 +12311,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   /// Clears the value of `resourceTelemetry`. Subsequent reads from it will return its default value.
   public mutating func clearResourceTelemetry() {_uniqueStorage()._resourceTelemetry = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Interface ids present in the agent's durable VM manifest.
+  /// Absence means the reporting agent predates per-NIC reconciliation; an empty
+  /// array is an authoritative networkless VM.
+  /// Optional:
   /// Format: uuid.
   public var appliedNetworkInterfaceIds: Strato_Agent_V1_ObservedVMStateAppliedNetworkInterfaceIdsSection {
     get {_storage._appliedNetworkInterfaceIds ?? Strato_Agent_V1_ObservedVMStateAppliedNetworkInterfaceIdsSection()}
@@ -10541,12 +12332,32 @@ public nonisolated struct Strato_Agent_V1_ObservedVMState: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// One volume's state as actually observed on an agent (ADR 0001 stage 5,
+/// STR-148). Field semantics for the convergence metadata match
+/// `ObservedVMState` — see the doc comments there.
+///
+/// `size_bytes` was deliberately absent until STR-199, on the grounds that
+/// reading a volume's virtual size meant a `qemu-img info` subprocess per
+/// volume per report. That cost is no longer hypothetical *or* avoidable: the
+/// agent's planner needs the same number to decide whether a grow is
+/// outstanding, so it already computes and caches one per volume — every write
+/// path records the size it produced, and the probe fires only for a volume
+/// this process has not seen written. Reporting it adds no work at all.
+///
+/// ADR stage 7 (STR-149) settled the same question for the rest of what
+/// `volume_info` used to return, and settled it the same way: nothing was
+/// added. Format, disk attachment and VM attachment were already here; allocated bytes, the
+/// dirty flag and the encryption flag have no reader, and allocation in
+/// particular moves with every guest write, so it cannot be cached the way
+/// virtual size can and would cost a subprocess per volume per report. A
+/// per-volume usage surface — sampled on its own cadence, off the convergence
+/// path — is the right home for those if a reader ever appears.
 public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var volumeID: String {
     get {_storage._volumeID ?? String()}
@@ -10557,7 +12368,12 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `volumeID`. Subsequent reads from it will return its default value.
   public mutating func clearVolumeID() {_uniqueStorage()._volumeID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether the volume's data exists on this host. A `false` entry is a
+  /// volume the agent is listing because it is mid-create or failed with no
+  /// bytes yet — the mirror of the VM report's in-flight and
+  /// failed-convergence sections. *Absence from the list* is what confirms a
+  /// deletion; `present: false` explicitly does not.
+  /// Required:
   public var present: Bool {
     get {_storage._present ?? false}
     set {_uniqueStorage()._present = newValue}
@@ -10567,7 +12383,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `present`. Subsequent reads from it will return its default value.
   public mutating func clearPresent() {_uniqueStorage()._present = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// How the agent exposes the disk. The agent owns storage layout, so this
+  /// is the only direction the descriptor originates: the control plane
+  /// stores what it is told and never derives one.
+  /// Optional:
   public var attachment: Strato_Agent_V1_DiskAttachment {
     get {_storage._attachment ?? Strato_Agent_V1_DiskAttachment()}
     set {_uniqueStorage()._attachment = newValue}
@@ -10577,7 +12396,19 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `attachment`. Subsequent reads from it will return its default value.
   public mutating func clearAttachment() {_uniqueStorage()._attachment = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The volume's **virtual size on disk** (STR-199) — what `qemu-img info`
+  /// reports, not what anyone asked for.
+  ///
+  /// It exists because the two can disagree for a long time and nothing said
+  /// so. A grow refused while the guest holding the image is running leaves
+  /// the desired size persisted and the file untouched; before this field the
+  /// API answered that volume's size with the number it had failed to reach,
+  /// which reads exactly like a grow that worked.
+  ///
+  /// Absence means **this agent did not say** — for example, a volume
+  /// whose size probe failed. Never "zero bytes", and never a licence to
+  /// clear what a previous report recorded.
+  /// Optional:
   public var sizeBytes: Int64 {
     get {_storage._sizeBytes ?? 0}
     set {_uniqueStorage()._sizeBytes = newValue}
@@ -10587,7 +12418,12 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `sizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSizeBytes() {_uniqueStorage()._sizeBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The VM this volume is attached to, from the agent's *durable attachment
+  /// record* rather than a live hypervisor query. A powered-off guest has no
+  /// live device list, and reporting "detached" for it would plan an attach
+  /// against a dead control channel on every sync and degrade the volume for
+  /// the crime of having a stopped VM.
+  /// Optional:
   /// Format: uuid.
   public var attachedVmID: String {
     get {_storage._attachedVmID ?? String()}
@@ -10598,7 +12434,8 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `attachedVmID`. Subsequent reads from it will return its default value.
   public mutating func clearAttachedVmID() {_uniqueStorage()._attachedVmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The desired-state generation this observation reflects (0 if none yet).
+  /// Required:
   public var observedGeneration: Int64 {
     get {_storage._observedGeneration ?? 0}
     set {_uniqueStorage()._observedGeneration = newValue}
@@ -10608,7 +12445,9 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {_uniqueStorage()._observedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Human-readable convergence stage ("creating", "cloning", ...) while the
+  /// agent is still working toward a newer generation. Progress only.
+  /// Optional:
   public var convergencePhase: String {
     get {_storage._convergencePhase ?? String()}
     set {_uniqueStorage()._convergencePhase = newValue}
@@ -10618,7 +12457,8 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `convergencePhase`. Subsequent reads from it will return its default value.
   public mutating func clearConvergencePhase() {_uniqueStorage()._convergencePhase = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The most recent convergence failure, if the last attempt failed.
+  /// Optional:
   public var lastError: String {
     get {_storage._lastError ?? String()}
     set {_uniqueStorage()._lastError = newValue}
@@ -10628,7 +12468,9 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `lastError`. Subsequent reads from it will return its default value.
   public mutating func clearLastError() {_uniqueStorage()._lastError = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The generation whose convergence produced `last_error` (see
+  /// `ObservedVMState.failed_generation` for why the control plane needs it).
+  /// Optional:
   public var failedGeneration: Int64 {
     get {_storage._failedGeneration ?? 0}
     set {_uniqueStorage()._failedGeneration = newValue}
@@ -10638,7 +12480,9 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `failedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearFailedGeneration() {_uniqueStorage()._failedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Retry semantics for `last_error`; see
+  /// `ObservedVMState.failure_classification`.
+  /// Optional:
   public var failureClassification: Strato_Agent_V1_ObservedFailureClassification {
     get {_storage._failureClassification ?? .unspecified}
     set {_uniqueStorage()._failureClassification = newValue}
@@ -10648,7 +12492,20 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `failureClassification`. Subsequent reads from it will return its default value.
   public mutating func clearFailureClassification() {_uniqueStorage()._failureClassification = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
+  /// not a derivation, and the only thing that distinguishes "capped" from
+  /// "ignored".
+  ///
+  /// The capability gate prevents new work from reaching an agent that has
+  /// never heard of ceilings, while this field proves that a capable agent
+  /// actually read the requested values back. The generation pair alone is
+  /// not sufficient evidence for this mutation.
+  ///
+  /// Absence means **this agent does not report applied limits**. It must never be
+  /// written through as a clear. "Applied, and the answer is uncapped" is spelled
+  /// `VolumeIOLimits(iops_total: absence, bps_total: absence)`: present but empty. So
+  /// unlike the desired side, this one is deliberately *not* normalized.
+  /// Optional:
   public var ioLimits: Strato_Agent_V1_VolumeIOLimits {
     get {_storage._ioLimits ?? Strato_Agent_V1_VolumeIOLimits()}
     set {_uniqueStorage()._ioLimits = newValue}
@@ -10658,7 +12515,9 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `ioLimits`. Subsequent reads from it will return its default value.
   public mutating func clearIoLimits() {_uniqueStorage()._ioLimits = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Block policy this agent actually applied, or an explicit inactive value
+  /// for a detached volume. Absence means no policy observation and must not clear stored facts.
+  /// Optional:
   public var blockPolicy: Strato_Agent_V1_AppliedBlockDevicePolicy {
     get {_storage._blockPolicy ?? Strato_Agent_V1_AppliedBlockDevicePolicy()}
     set {_uniqueStorage()._blockPolicy = newValue}
@@ -10668,7 +12527,10 @@ public nonisolated struct Strato_Agent_V1_ObservedVolumeState: @unchecked Sendab
   /// Clears the value of `blockPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearBlockPolicy() {_uniqueStorage()._blockPolicy = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Measured read + write rate between two live libvirt block-stat samples.
+  /// Optional because a first sample, a stopped domain, or a failed stats
+  /// read has no honest rate to report.
+  /// Optional:
   public var ioObservedRate: Strato_Agent_V1_VolumeIOObservedRate {
     get {_storage._ioObservedRate ?? Strato_Agent_V1_VolumeIOObservedRate()}
     set {_uniqueStorage()._ioObservedRate = newValue}
@@ -10690,7 +12552,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigPackageObservation: Sendabl
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -10700,7 +12562,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigPackageObservation: Sendabl
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var version: String {
     get {_version ?? String()}
     set {_version = newValue}
@@ -10718,12 +12580,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigPackageObservation: Sendabl
   fileprivate var _version: String? = nil
 }
 
+/// One Linux PSI `some` or `full` line.
 public nonisolated struct Strato_Agent_V1_PressureStallSample: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Percentage of wall time stalled over the last 10, 60, and 300 seconds.
+  /// Required:
   public var average10: Double {
     get {_average10 ?? 0}
     set {_average10 = newValue}
@@ -10733,7 +12597,7 @@ public nonisolated struct Strato_Agent_V1_PressureStallSample: Sendable {
   /// Clears the value of `average10`. Subsequent reads from it will return its default value.
   public mutating func clearAverage10() {self._average10 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var average60: Double {
     get {_average60 ?? 0}
     set {_average60 = newValue}
@@ -10743,7 +12607,7 @@ public nonisolated struct Strato_Agent_V1_PressureStallSample: Sendable {
   /// Clears the value of `average60`. Subsequent reads from it will return its default value.
   public mutating func clearAverage60() {self._average60 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var average300: Double {
     get {_average300 ?? 0}
     set {_average300 = newValue}
@@ -10753,7 +12617,8 @@ public nonisolated struct Strato_Agent_V1_PressureStallSample: Sendable {
   /// Clears the value of `average300`. Subsequent reads from it will return its default value.
   public mutating func clearAverage300() {self._average300 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Cumulative stalled time since boot/cgroup creation, in microseconds.
+  /// Required:
   public var totalMicroseconds: Int64 {
     get {_totalMicroseconds ?? 0}
     set {_totalMicroseconds = newValue}
@@ -10773,12 +12638,15 @@ public nonisolated struct Strato_Agent_V1_PressureStallSample: Sendable {
   fileprivate var _totalMicroseconds: Int64? = nil
 }
 
+/// One PSI resource file. `full` is independently optional because CPU PSI
+/// and older kernels may expose only `some` while still providing a valid
+/// signal. A measured all-zero line remains present and distinct from absence.
 public nonisolated struct Strato_Agent_V1_PressureStallTelemetry: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var availability: Strato_Agent_V1_ResourceTelemetryAvailability {
     get {_availability ?? .unspecified}
     set {_availability = newValue}
@@ -10788,7 +12656,7 @@ public nonisolated struct Strato_Agent_V1_PressureStallTelemetry: Sendable {
   /// Clears the value of `availability`. Subsequent reads from it will return its default value.
   public mutating func clearAvailability() {self._availability = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var some: Strato_Agent_V1_PressureStallSample {
     get {_some ?? Strato_Agent_V1_PressureStallSample()}
     set {_some = newValue}
@@ -10798,7 +12666,7 @@ public nonisolated struct Strato_Agent_V1_PressureStallTelemetry: Sendable {
   /// Clears the value of `some`. Subsequent reads from it will return its default value.
   public mutating func clearSome() {self._some = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var full: Strato_Agent_V1_PressureStallSample {
     get {_full ?? Strato_Agent_V1_PressureStallSample()}
     set {_full = newValue}
@@ -10817,12 +12685,18 @@ public nonisolated struct Strato_Agent_V1_PressureStallTelemetry: Sendable {
   fileprivate var _full: Strato_Agent_V1_PressureStallSample? = nil
 }
 
+/// Short-lived credential material for pulling a sandbox's image from a private
+/// registry. Reused across syncs only while safely inside its own expiry, so a
+/// long-lived desired entry never carries an expired credential. Agents use it
+/// for the pull and must never persist it; durable credential storage lives
+/// only on the control plane (issue #414).
 public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Registry host the credential is scoped to, e.g. `ghcr.io`.
+  /// Required:
   public var registry: String {
     get {_registry ?? String()}
     set {_registry = newValue}
@@ -10832,7 +12706,7 @@ public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   /// Clears the value of `registry`. Subsequent reads from it will return its default value.
   public mutating func clearRegistry() {self._registry = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var username: String {
     get {_username ?? String()}
     set {_username = newValue}
@@ -10842,7 +12716,9 @@ public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   /// Clears the value of `username`. Subsequent reads from it will return its default value.
   public mutating func clearUsername() {self._username = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Password or short-lived bearer/identity token, per the registry's
+  /// distribution auth flow.
+  /// Required:
   public var password: String {
     get {_password ?? String()}
     set {_password = newValue}
@@ -10852,7 +12728,9 @@ public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   /// Clears the value of `password`. Subsequent reads from it will return its default value.
   public mutating func clearPassword() {self._password = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// When the material expires, for agent awareness (skip a doomed pull and
+  /// surface a fresh-sync need instead).
+  /// Optional:
   public var expiresAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_expiresAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_expiresAt = newValue}
@@ -10862,7 +12740,12 @@ public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   /// Clears the value of `expiresAt`. Subsequent reads from it will return its default value.
   public mutating func clearExpiresAt() {self._expiresAt = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// When true, `password` is a distribution bearer token the control plane
+  /// already minted: present it directly as `Authorization: Bearer` on
+  /// registry requests. Absence/false means Basic credentials (the agent runs
+  /// the registry's own challenge flow with them). Optional so payloads
+  /// from control planes that predate token minting still decode.
+  /// Required:
   public var bearer: Bool {
     get {_bearer ?? false}
     set {_bearer = newValue}
@@ -10883,12 +12766,14 @@ public nonisolated struct Strato_Agent_V1_RegistryCredential: Sendable {
   fileprivate var _bearer: Bool? = nil
 }
 
+/// Generation-authorized enforcement and accounting captured with the SAME
+/// observed report's net resources. Absence is unknown, never acknowledgement.
 public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var agentBootID: String {
     get {_agentBootID ?? String()}
@@ -10899,7 +12784,7 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable 
   /// Clears the value of `agentBootID`. Subsequent reads from it will return its default value.
   public mutating func clearAgentBootID() {self._agentBootID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sequence: Int64 {
     get {_sequence ?? 0}
     set {_sequence = newValue}
@@ -10909,7 +12794,7 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable 
   /// Clears the value of `sequence`. Subsequent reads from it will return its default value.
   public mutating func clearSequence() {self._sequence = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sampledAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_sampledAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_sampledAt = newValue}
@@ -10919,7 +12804,7 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable 
   /// Clears the value of `sampledAt`. Subsequent reads from it will return its default value.
   public mutating func clearSampledAt() {self._sampledAt = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var inventoryComplete: Bool {
     get {_inventoryComplete ?? false}
     set {_inventoryComplete = newValue}
@@ -10929,7 +12814,7 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable 
   /// Clears the value of `inventoryComplete`. Subsequent reads from it will return its default value.
   public mutating func clearInventoryComplete() {self._inventoryComplete = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var acknowledgements: Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection {
     get {_acknowledgements ?? Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection()}
     set {_acknowledgements = newValue}
@@ -10950,12 +12835,13 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshot: Sendable 
   fileprivate var _acknowledgements: Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection? = nil
 }
 
+/// A boolean capability or state with explicit availability.
 public nonisolated struct Strato_Agent_V1_ResourceTelemetryFlag: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var availability: Strato_Agent_V1_ResourceTelemetryAvailability {
     get {_availability ?? .unspecified}
     set {_availability = newValue}
@@ -10965,7 +12851,7 @@ public nonisolated struct Strato_Agent_V1_ResourceTelemetryFlag: Sendable {
   /// Clears the value of `availability`. Subsequent reads from it will return its default value.
   public mutating func clearAvailability() {self._availability = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var value: Bool {
     get {_value ?? false}
     set {_value = newValue}
@@ -10983,12 +12869,17 @@ public nonisolated struct Strato_Agent_V1_ResourceTelemetryFlag: Sendable {
   fileprivate var _value: Bool? = nil
 }
 
+/// An integer resource signal together with explicit availability.
+///
+/// Counters (faults, reclaim, CPU time) and gauges (bytes) share this wire
+/// shape. Their names document their temporality; keeping one representation
+/// makes absence handling identical everywhere.
 public nonisolated struct Strato_Agent_V1_ResourceTelemetryValue: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var availability: Strato_Agent_V1_ResourceTelemetryAvailability {
     get {_availability ?? .unspecified}
     set {_availability = newValue}
@@ -10998,7 +12889,7 @@ public nonisolated struct Strato_Agent_V1_ResourceTelemetryValue: Sendable {
   /// Clears the value of `availability`. Subsequent reads from it will return its default value.
   public mutating func clearAvailability() {self._availability = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var value: Int64 {
     get {_value ?? 0}
     set {_value = newValue}
@@ -11016,12 +12907,14 @@ public nonisolated struct Strato_Agent_V1_ResourceTelemetryValue: Sendable {
   fileprivate var _value: Int64? = nil
 }
 
+/// Wire 69 policy provenance. Missing provenance remains an explicit/manual
+/// lifecycle request; malformed automatic provenance must never become manual.
 public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var operationID: String {
     get {_operationID ?? String()}
@@ -11032,7 +12925,7 @@ public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Senda
   /// Clears the value of `operationID`. Subsequent reads from it will return its default value.
   public mutating func clearOperationID() {self._operationID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -11042,7 +12935,7 @@ public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Senda
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var activityRevision: Int64 {
     get {_activityRevision ?? 0}
     set {_activityRevision = newValue}
@@ -11052,7 +12945,7 @@ public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Senda
   /// Clears the value of `activityRevision`. Subsequent reads from it will return its default value.
   public mutating func clearActivityRevision() {self._activityRevision = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var admissionToken: String {
     get {_admissionToken ?? String()}
@@ -11063,7 +12956,7 @@ public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Senda
   /// Clears the value of `admissionToken`. Subsequent reads from it will return its default value.
   public mutating func clearAdmissionToken() {self._admissionToken = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var guestProtocolVersion: Int64 {
     get {_guestProtocolVersion ?? 0}
     set {_guestProtocolVersion = newValue}
@@ -11084,12 +12977,15 @@ public nonisolated struct Strato_Agent_V1_SandboxAutomaticSuspensionFence: Senda
   fileprivate var _guestProtocolVersion: Int64? = nil
 }
 
+/// Idle evidence from the separate guest-control protocol (version 5). Guest
+/// JSON uses snake_case keys; the workload relay uses these typed Protobuf
+/// fields. Missing evidence never proves zero activity.
 public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sandboxID: String {
     get {_storage._sandboxID ?? String()}
     set {_uniqueStorage()._sandboxID = newValue}
@@ -11099,7 +12995,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `sandboxID`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxID() {_uniqueStorage()._sandboxID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var nonce: String {
     get {_storage._nonce ?? String()}
     set {_uniqueStorage()._nonce = newValue}
@@ -11109,7 +13005,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `nonce`. Subsequent reads from it will return its default value.
   public mutating func clearNonce() {_uniqueStorage()._nonce = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var probeID: String {
     get {_storage._probeID ?? String()}
@@ -11120,7 +13016,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `probeID`. Subsequent reads from it will return its default value.
   public mutating func clearProbeID() {_uniqueStorage()._probeID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var monitorIncarnation: String {
     get {_storage._monitorIncarnation ?? String()}
@@ -11131,7 +13027,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `monitorIncarnation`. Subsequent reads from it will return its default value.
   public mutating func clearMonitorIncarnation() {_uniqueStorage()._monitorIncarnation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sampleSequence: UInt64 {
     get {_storage._sampleSequence ?? 0}
     set {_uniqueStorage()._sampleSequence = newValue}
@@ -11141,7 +13037,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `sampleSequence`. Subsequent reads from it will return its default value.
   public mutating func clearSampleSequence() {_uniqueStorage()._sampleSequence = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var activityEpoch: UInt64 {
     get {_storage._activityEpoch ?? 0}
     set {_uniqueStorage()._activityEpoch = newValue}
@@ -11151,7 +13047,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `activityEpoch`. Subsequent reads from it will return its default value.
   public mutating func clearActivityEpoch() {_uniqueStorage()._activityEpoch = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var quietForMilliseconds: UInt64 {
     get {_storage._quietForMilliseconds ?? 0}
     set {_uniqueStorage()._quietForMilliseconds = newValue}
@@ -11161,7 +13057,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `quietForMilliseconds`. Subsequent reads from it will return its default value.
   public mutating func clearQuietForMilliseconds() {_uniqueStorage()._quietForMilliseconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var coverage: Strato_Agent_V1_SandboxGuestIdleCoverage {
     get {_storage._coverage ?? .unspecified}
     set {_uniqueStorage()._coverage = newValue}
@@ -11171,7 +13067,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `coverage`. Subsequent reads from it will return its default value.
   public mutating func clearCoverage() {_uniqueStorage()._coverage = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var trusted: Bool {
     get {_storage._trusted ?? false}
     set {_uniqueStorage()._trusted = newValue}
@@ -11181,7 +13077,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `trusted`. Subsequent reads from it will return its default value.
   public mutating func clearTrusted() {_uniqueStorage()._trusted = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   /// Format: uuid.
   public var activeExecSessionIds: Strato_Agent_V1_SandboxGuestIdleActivityActiveExecSessionIdsSection {
     get {_storage._activeExecSessionIds ?? Strato_Agent_V1_SandboxGuestIdleActivityActiveExecSessionIdsSection()}
@@ -11192,7 +13088,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `activeExecSessionIds`. Subsequent reads from it will return its default value.
   public mutating func clearActiveExecSessionIds() {_uniqueStorage()._activeExecSessionIds = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var anonymousExecCount: UInt32 {
     get {_storage._anonymousExecCount ?? 0}
     set {_uniqueStorage()._anonymousExecCount = newValue}
@@ -11202,7 +13098,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `anonymousExecCount`. Subsequent reads from it will return its default value.
   public mutating func clearAnonymousExecCount() {_uniqueStorage()._anonymousExecCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var pendingExecCount: UInt32 {
     get {_storage._pendingExecCount ?? 0}
     set {_uniqueStorage()._pendingExecCount = newValue}
@@ -11212,7 +13108,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `pendingExecCount`. Subsequent reads from it will return its default value.
   public mutating func clearPendingExecCount() {_uniqueStorage()._pendingExecCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var workloadCpuMicroseconds: UInt64 {
     get {_storage._workloadCpuMicroseconds ?? 0}
     set {_uniqueStorage()._workloadCpuMicroseconds = newValue}
@@ -11222,7 +13118,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `workloadCpuMicroseconds`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadCpuMicroseconds() {_uniqueStorage()._workloadCpuMicroseconds = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var workloadReadBytes: UInt64 {
     get {_storage._workloadReadBytes ?? 0}
     set {_uniqueStorage()._workloadReadBytes = newValue}
@@ -11232,7 +13128,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `workloadReadBytes`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadReadBytes() {_uniqueStorage()._workloadReadBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var workloadWriteBytes: UInt64 {
     get {_storage._workloadWriteBytes ?? 0}
     set {_uniqueStorage()._workloadWriteBytes = newValue}
@@ -11242,7 +13138,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `workloadWriteBytes`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadWriteBytes() {_uniqueStorage()._workloadWriteBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var externalSocketCount: UInt32 {
     get {_storage._externalSocketCount ?? 0}
     set {_uniqueStorage()._externalSocketCount = newValue}
@@ -11252,7 +13148,7 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   /// Clears the value of `externalSocketCount`. Subsequent reads from it will return its default value.
   public mutating func clearExternalSocketCount() {_uniqueStorage()._externalSocketCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var nicCount: UInt32 {
     get {_storage._nicCount ?? 0}
     set {_uniqueStorage()._nicCount = newValue}
@@ -11269,12 +13165,14 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivity: @unchecked S
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Ordered, owner-authenticated report. Receipt time is assigned by PostgreSQL;
+/// guest/agent wall clocks do not establish activity freshness.
 public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var agentIncarnation: String {
     get {_storage._agentIncarnation ?? String()}
@@ -11285,7 +13183,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `agentIncarnation`. Subsequent reads from it will return its default value.
   public mutating func clearAgentIncarnation() {_uniqueStorage()._agentIncarnation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var connectionEpoch: String {
     get {_storage._connectionEpoch ?? String()}
@@ -11296,7 +13194,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `connectionEpoch`. Subsequent reads from it will return its default value.
   public mutating func clearConnectionEpoch() {_uniqueStorage()._connectionEpoch = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var residencyEpoch: String {
     get {_storage._residencyEpoch ?? String()}
@@ -11307,7 +13205,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `residencyEpoch`. Subsequent reads from it will return its default value.
   public mutating func clearResidencyEpoch() {_uniqueStorage()._residencyEpoch = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sequence: UInt64 {
     get {_storage._sequence ?? 0}
     set {_uniqueStorage()._sequence = newValue}
@@ -11317,7 +13215,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `sequence`. Subsequent reads from it will return its default value.
   public mutating func clearSequence() {_uniqueStorage()._sequence = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_storage._generation ?? 0}
     set {_uniqueStorage()._generation = newValue}
@@ -11327,7 +13225,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {_uniqueStorage()._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var activityEpoch: UInt64 {
     get {_storage._activityEpoch ?? 0}
     set {_uniqueStorage()._activityEpoch = newValue}
@@ -11337,7 +13235,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `activityEpoch`. Subsequent reads from it will return its default value.
   public mutating func clearActivityEpoch() {_uniqueStorage()._activityEpoch = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Age of the activity evidence at report creation, in milliseconds.
+  /// Required:
   public var evidenceAgeMilliseconds: UInt64 {
     get {_storage._evidenceAgeMilliseconds ?? 0}
     set {_uniqueStorage()._evidenceAgeMilliseconds = newValue}
@@ -11347,7 +13246,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `evidenceAgeMilliseconds`. Subsequent reads from it will return its default value.
   public mutating func clearEvidenceAgeMilliseconds() {_uniqueStorage()._evidenceAgeMilliseconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Time this sandbox has remained resident, in milliseconds.
+  /// Required:
   public var residentForMilliseconds: UInt64 {
     get {_storage._residentForMilliseconds ?? 0}
     set {_uniqueStorage()._residentForMilliseconds = newValue}
@@ -11357,7 +13257,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `residentForMilliseconds`. Subsequent reads from it will return its default value.
   public mutating func clearResidentForMilliseconds() {_uniqueStorage()._residentForMilliseconds = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Guest activity evidence for this residency. Absence cannot authorize idle reclamation.
+  /// Optional:
   public var guest: Strato_Agent_V1_SandboxGuestIdleActivity {
     get {_storage._guest ?? Strato_Agent_V1_SandboxGuestIdleActivity()}
     set {_uniqueStorage()._guest = newValue}
@@ -11367,7 +13268,9 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `guest`. Subsequent reads from it will return its default value.
   public mutating func clearGuest() {_uniqueStorage()._guest = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Complete active exec-session set when known. Absent means unknown; present empty is the proof
+  /// that no sessions are active.
+  /// Optional:
   /// Format: uuid.
   public var activeExecSessionIds: Strato_Agent_V1_SandboxIdleActivityReportActiveExecSessionIdsSection {
     get {_storage._activeExecSessionIds ?? Strato_Agent_V1_SandboxIdleActivityReportActiveExecSessionIdsSection()}
@@ -11378,7 +13281,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `activeExecSessionIds`. Subsequent reads from it will return its default value.
   public mutating func clearActiveExecSessionIds() {_uniqueStorage()._activeExecSessionIds = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Pending command count when known. Absence must not be treated as zero.
+  /// Optional:
   public var pendingCommandCount: Int64 {
     get {_storage._pendingCommandCount ?? 0}
     set {_uniqueStorage()._pendingCommandCount = newValue}
@@ -11388,7 +13292,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `pendingCommandCount`. Subsequent reads from it will return its default value.
   public mutating func clearPendingCommandCount() {_uniqueStorage()._pendingCommandCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Host-side pending command count when known. Explicit zero is required to prove quietness.
+  /// Optional:
   public var hostPendingCommandCount: Int64 {
     get {_storage._hostPendingCommandCount ?? 0}
     set {_uniqueStorage()._hostPendingCommandCount = newValue}
@@ -11398,7 +13303,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `hostPendingCommandCount`. Subsequent reads from it will return its default value.
   public mutating func clearHostPendingCommandCount() {_uniqueStorage()._hostPendingCommandCount = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var controlPlaneActivityRevision: Int64 {
     get {_storage._controlPlaneActivityRevision ?? 0}
     set {_uniqueStorage()._controlPlaneActivityRevision = newValue}
@@ -11408,7 +13313,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `controlPlaneActivityRevision`. Subsequent reads from it will return its default value.
   public mutating func clearControlPlaneActivityRevision() {_uniqueStorage()._controlPlaneActivityRevision = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Whether a snapshot or restore is running. Absence is unknown, not false.
+  /// Optional:
   public var snapshotOrRestoreInProgress: Bool {
     get {_storage._snapshotOrRestoreInProgress ?? false}
     set {_uniqueStorage()._snapshotOrRestoreInProgress = newValue}
@@ -11418,7 +13324,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `snapshotOrRestoreInProgress`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshotOrRestoreInProgress() {_uniqueStorage()._snapshotOrRestoreInProgress = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var idleFenceSupported: Bool {
     get {_storage._idleFenceSupported ?? false}
     set {_uniqueStorage()._idleFenceSupported = newValue}
@@ -11428,7 +13334,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `idleFenceSupported`. Subsequent reads from it will return its default value.
   public mutating func clearIdleFenceSupported() {_uniqueStorage()._idleFenceSupported = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Continuous host-side quiet duration in milliseconds, when known.
+  /// Optional:
   public var hostQuietMilliseconds: UInt64 {
     get {_storage._hostQuietMilliseconds ?? 0}
     set {_uniqueStorage()._hostQuietMilliseconds = newValue}
@@ -11438,7 +13345,7 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   /// Clears the value of `hostQuietMilliseconds`. Subsequent reads from it will return its default value.
   public mutating func clearHostQuietMilliseconds() {_uniqueStorage()._hostQuietMilliseconds = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var policy: Strato_Agent_V1_SandboxIdlePolicy {
     get {_storage._policy ?? Strato_Agent_V1_SandboxIdlePolicy()}
     set {_uniqueStorage()._policy = newValue}
@@ -11455,12 +13362,15 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReport: @unchecked 
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// STR-313 eligibility only. The suspended lifecycle owns checkpoint durability,
+/// stopping, restoration, and artifact retention; this value never performs them.
 public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether automatic idle suspension is enabled. The semantic default is false.
+  /// Required:
   public var enabled: Bool {
     get {_enabled ?? false}
     set {_enabled = newValue}
@@ -11470,7 +13380,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   /// Clears the value of `enabled`. Subsequent reads from it will return its default value.
   public mutating func clearEnabled() {self._enabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required quiet interval in seconds; finite and greater than zero. Semantic default: 300.
+  /// Required:
   public var idleSeconds: Double {
     get {_idleSeconds ?? 0}
     set {_idleSeconds = newValue}
@@ -11480,7 +13391,9 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   /// Clears the value of `idleSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearIdleSeconds() {self._idleSeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Minimum time resident before suspension, in seconds; finite and greater than zero. Semantic
+  /// default: 60.
+  /// Required:
   public var minimumResidencySeconds: Double {
     get {_minimumResidencySeconds ?? 0}
     set {_minimumResidencySeconds = newValue}
@@ -11490,7 +13403,9 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   /// Clears the value of `minimumResidencySeconds`. Subsequent reads from it will return its default value.
   public mutating func clearMinimumResidencySeconds() {self._minimumResidencySeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Maximum age of trusted activity evidence, in seconds; finite and greater than zero. Semantic
+  /// default: 30.
+  /// Required:
   public var maximumEvidenceAgeSeconds: Double {
     get {_maximumEvidenceAgeSeconds ?? 0}
     set {_maximumEvidenceAgeSeconds = newValue}
@@ -11500,7 +13415,8 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   /// Clears the value of `maximumEvidenceAgeSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearMaximumEvidenceAgeSeconds() {self._maximumEvidenceAgeSeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Restore deadline in seconds; finite and greater than zero. Semantic default: 120.
+  /// Required:
   public var restoreTimeoutSeconds: Double {
     get {_restoreTimeoutSeconds ?? 0}
     set {_restoreTimeoutSeconds = newValue}
@@ -11510,7 +13426,9 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   /// Clears the value of `restoreTimeoutSeconds`. Subsequent reads from it will return its default value.
   public mutating func clearRestoreTimeoutSeconds() {self._restoreTimeoutSeconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sandbox identities excluded from automatic suspension. The semantic default is a present empty
+  /// set.
+  /// Required:
   /// Format: uuid.
   public var excludedSandboxIDs: Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection {
     get {_excludedSandboxIDs ?? Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection()}
@@ -11533,12 +13451,15 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicy: Sendable {
   fileprivate var _excludedSandboxIDs: Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection? = nil
 }
 
+/// Agent → control plane: one line of the sandbox workload's stdout/stderr,
+/// destined for Loki (the sandbox counterpart of `VMLogMessage`).
 public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -11548,7 +13469,8 @@ public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -11558,7 +13480,7 @@ public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sandboxID: String {
     get {_sandboxID ?? String()}
     set {_sandboxID = newValue}
@@ -11568,7 +13490,8 @@ public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   /// Clears the value of `sandboxID`. Subsequent reads from it will return its default value.
   public mutating func clearSandboxID() {self._sandboxID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// "stdout" or "stderr".
+  /// Required:
   public var stream: String {
     get {_stream ?? String()}
     set {_stream = newValue}
@@ -11578,7 +13501,8 @@ public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   /// Clears the value of `stream`. Subsequent reads from it will return its default value.
   public mutating func clearStream() {self._stream = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// One output line, decoded as UTF-8 (lossily) with the newline stripped.
+  /// Required:
   public var message: String {
     get {_message ?? String()}
     set {_message = newValue}
@@ -11599,12 +13523,15 @@ public nonisolated struct Strato_Agent_V1_SandboxLogMessage: Sendable {
   fileprivate var _message: String? = nil
 }
 
+/// Where an agent fetches an exported artifact and how it verifies the bytes.
+/// The control plane records size and SHA-256 while streaming the export, so
+/// integrity metadata is not agent-supplied.
 public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_SandboxSnapshotArtifactKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -11614,7 +13541,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Sen
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Control-plane-relative download path
+  /// (`/api/sandboxes/.../snapshots/.../artifacts/<kind>`).
+  /// Required:
   public var downloadURL: String {
     get {_downloadURL ?? String()}
     set {_downloadURL = newValue}
@@ -11624,7 +13553,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Sen
   /// Clears the value of `downloadURL`. Subsequent reads from it will return its default value.
   public mutating func clearDownloadURL() {self._downloadURL = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sizeBytes: Int64 {
     get {_sizeBytes ?? 0}
     set {_sizeBytes = newValue}
@@ -11634,7 +13563,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Sen
   /// Clears the value of `sizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearSizeBytes() {self._sizeBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Lowercase hex SHA-256 of the artifact bytes.
+  /// Required:
   public var sha256: String {
     get {_sha256 ?? String()}
     set {_sha256 = newValue}
@@ -11654,12 +13584,14 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Sen
   fileprivate var _sha256: String? = nil
 }
 
+/// An mTLS upload slot for one snapshot artifact. The control plane hashes and
+/// sizes the stream as it lands in object storage.
 public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_SandboxSnapshotArtifactKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -11669,7 +13601,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: S
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Control-plane-relative upload path (same route as the download,
+  /// method PUT).
+  /// Required:
   public var uploadURL: String {
     get {_uploadURL ?? String()}
     set {_uploadURL = newValue}
@@ -11687,12 +13621,18 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: S
   fileprivate var _uploadURL: String? = nil
 }
 
+/// Reference to the checkpoint artifacts used to create a sandbox fork
+/// (issue #427). The source sandbox id lets an agent holding the artifacts
+/// resolve its host-owned archive directory; when the fork lands on a
+/// *different* agent (issue #428), `artifacts` carries signed download
+/// descriptors for the exported copy — refreshed at sync assembly like image
+/// URLs — and the target agent stages the archive from object storage instead.
 public nonisolated struct Strato_Agent_V1_SandboxSnapshotRef: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var snapshotID: String {
     get {_snapshotID ?? String()}
@@ -11703,7 +13643,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotRef: Sendable {
   /// Clears the value of `snapshotID`. Subsequent reads from it will return its default value.
   public mutating func clearSnapshotID() {self._snapshotID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var sourceSandboxID: String {
     get {_sourceSandboxID ?? String()}
@@ -11714,7 +13654,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotRef: Sendable {
   /// Clears the value of `sourceSandboxID`. Subsequent reads from it will return its default value.
   public mutating func clearSourceSandboxID() {self._sourceSandboxID = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Download descriptors for an exported snapshot, present only when the
+  /// receiving agent is not the one holding the local artifacts.
+  /// Optional:
   public var artifacts: Strato_Agent_V1_SandboxSnapshotRefArtifactsSection {
     get {_artifacts ?? Strato_Agent_V1_SandboxSnapshotRefArtifactsSection()}
     set {_artifacts = newValue}
@@ -11733,12 +13675,21 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotRef: Sendable {
   fileprivate var _artifacts: Strato_Agent_V1_SandboxSnapshotRefArtifactsSection? = nil
 }
 
+/// Description of a sandbox workload — a microVM booted from an OCI image —
+/// sent from the control plane to an agent.
+///
+/// Deliberately distinct from `VMSpec` so the two workload types can diverge:
+/// sandboxes reference OCI images (not the `Image`/`ImageArtifact` model), boot
+/// through Firecracker only (no `HypervisorType`, no firmware/boot source), have
+/// no attachable volumes, and carry at most one NIC. The control plane sends
+/// only what it can legitimately know; rootfs materialization, kernel choice,
+/// and vsock wiring are agent-side concerns.
 public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var admittedReservation: Strato_Agent_V1_WorkloadAdmittedReservation {
     get {_storage._admittedReservation ?? Strato_Agent_V1_WorkloadAdmittedReservation()}
     set {_uniqueStorage()._admittedReservation = newValue}
@@ -11748,7 +13699,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `admittedReservation`. Subsequent reads from it will return its default value.
   public mutating func clearAdmittedReservation() {_uniqueStorage()._admittedReservation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var resourceClass: Strato_Agent_V1_WorkloadResourceClassSnapshot {
     get {_storage._resourceClass ?? Strato_Agent_V1_WorkloadResourceClassSnapshot()}
     set {_uniqueStorage()._resourceClass = newValue}
@@ -11758,7 +13709,10 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `resourceClass`. Subsequent reads from it will return its default value.
   public mutating func clearResourceClass() {_uniqueStorage()._resourceClass = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// OCI image reference as provided by the user, e.g.
+  /// `ghcr.io/acme/worker:v3`. Kept verbatim for guest identity and logging;
+  /// agents converge on `image_digest` when present.
+  /// Required:
   public var image: String {
     get {_storage._image ?? String()}
     set {_uniqueStorage()._image = newValue}
@@ -11768,7 +13722,12 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `image`. Subsequent reads from it will return its default value.
   public mutating func clearImage() {_uniqueStorage()._image = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Manifest digest (`sha256:...`) the reference resolved to, pinned by the
+  /// control plane so convergence is immutable — a re-tagged image never
+  /// changes a sandbox out from under its generation. Absence only from control
+  /// planes that predate tag→digest resolution (issue #414); the agent then
+  /// resolves the tag itself, accepting the mutability.
+  /// Optional:
   public var imageDigest: String {
     get {_storage._imageDigest ?? String()}
     set {_uniqueStorage()._imageDigest = newValue}
@@ -11778,7 +13737,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `imageDigest`. Subsequent reads from it will return its default value.
   public mutating func clearImageDigest() {_uniqueStorage()._imageDigest = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Number of vCPUs.
+  /// Required:
   public var cpus: Int64 {
     get {_storage._cpus ?? 0}
     set {_uniqueStorage()._cpus = newValue}
@@ -11788,7 +13748,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `cpus`. Subsequent reads from it will return its default value.
   public mutating func clearCpus() {_uniqueStorage()._cpus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Guest memory size in bytes.
+  /// Required:
   public var memoryBytes: Int64 {
     get {_storage._memoryBytes ?? 0}
     set {_uniqueStorage()._memoryBytes = newValue}
@@ -11798,7 +13759,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `memoryBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryBytes() {_uniqueStorage()._memoryBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Entrypoint override. Absence means use the image config's entrypoint.
+  /// Optional:
   public var entrypoint: Strato_Agent_V1_SandboxSpecEntrypointSection {
     get {_storage._entrypoint ?? Strato_Agent_V1_SandboxSpecEntrypointSection()}
     set {_uniqueStorage()._entrypoint = newValue}
@@ -11808,7 +13770,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `entrypoint`. Subsequent reads from it will return its default value.
   public mutating func clearEntrypoint() {_uniqueStorage()._entrypoint = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Command (arguments) override. Absence means use the image config's cmd.
+  /// Optional:
   public var cmd: Strato_Agent_V1_SandboxSpecCmdSection {
     get {_storage._cmd ?? Strato_Agent_V1_SandboxSpecCmdSection()}
     set {_uniqueStorage()._cmd = newValue}
@@ -11818,7 +13781,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `cmd`. Subsequent reads from it will return its default value.
   public mutating func clearCmd() {_uniqueStorage()._cmd = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Environment variable overrides, merged over the image config's
+  /// environment by the guest agent (override wins on key collision).
+  /// Required:
   public var env: Strato_Agent_V1_SandboxSpecEnvSection {
     get {_storage._env ?? Strato_Agent_V1_SandboxSpecEnvSection()}
     set {_uniqueStorage()._env = newValue}
@@ -11828,7 +13793,8 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `env`. Subsequent reads from it will return its default value.
   public mutating func clearEnv() {_uniqueStorage()._env = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Working directory override. Absence means use the image config's value.
+  /// Optional:
   public var workingDir: String {
     get {_storage._workingDir ?? String()}
     set {_uniqueStorage()._workingDir = newValue}
@@ -11838,7 +13804,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `workingDir`. Subsequent reads from it will return its default value.
   public mutating func clearWorkingDir() {_uniqueStorage()._workingDir = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The sandbox's single NIC, when networked. Reuses the VM NIC spec so
+  /// agents realize the attachment through the same OVN/user-mode paths.
+  /// Optional:
   public var network: Strato_Agent_V1_NetworkSpec {
     get {_storage._network ?? Strato_Agent_V1_NetworkSpec()}
     set {_uniqueStorage()._network = newValue}
@@ -11848,7 +13816,9 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `network`. Subsequent reads from it will return its default value.
   public mutating func clearNetwork() {_uniqueStorage()._network = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// A ready checkpoint to restore into this new sandbox instead of booting
+  /// its image. Absence requests a fresh boot from the OCI image.
+  /// Optional:
   public var restoreFrom: Strato_Agent_V1_SandboxSnapshotRef {
     get {_storage._restoreFrom ?? Strato_Agent_V1_SandboxSnapshotRef()}
     set {_uniqueStorage()._restoreFrom = newValue}
@@ -11858,7 +13828,13 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   /// Clears the value of `restoreFrom`. Subsequent reads from it will return its default value.
   public mutating func clearRestoreFrom() {_uniqueStorage()._restoreFrom = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Firecracker CPU template the microVM boots with (issue #428), chosen at
+  /// sandbox create time — never at restore time, because the template is
+  /// baked into every checkpoint's guest state and decides where those
+  /// checkpoints can later restore. Absence boots without a template (host CPU
+  /// passthrough); snapshots of such a sandbox only restore on identical
+  /// CPU models. Placement must verify the target can realize the template.
+  /// Optional:
   public var cpuTemplate: String {
     get {_storage._cpuTemplate ?? String()}
     set {_uniqueStorage()._cpuTemplate = newValue}
@@ -11875,12 +13851,13 @@ public nonisolated struct Strato_Agent_V1_SandboxSpec: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Authenticated owner evidence; no filesystem path or arbitrary artifact name crosses the wire.
 public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var checkpointID: String {
     get {_checkpointID ?? String()}
@@ -11891,7 +13868,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   /// Clears the value of `checkpointID`. Subsequent reads from it will return its default value.
   public mutating func clearCheckpointID() {self._checkpointID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var generation: Int64 {
     get {_generation ?? 0}
     set {_generation = newValue}
@@ -11901,7 +13878,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   /// Clears the value of `generation`. Subsequent reads from it will return its default value.
   public mutating func clearGeneration() {self._generation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var storageBytes: Int64 {
     get {_storageBytes ?? 0}
     set {_storageBytes = newValue}
@@ -11911,7 +13888,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   /// Clears the value of `storageBytes`. Subsequent reads from it will return its default value.
   public mutating func clearStorageBytes() {self._storageBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmmDestroyed: Bool {
     get {_vmmDestroyed ?? false}
     set {_vmmDestroyed = newValue}
@@ -11921,7 +13898,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   /// Clears the value of `vmmDestroyed`. Subsequent reads from it will return its default value.
   public mutating func clearVmmDestroyed() {self._vmmDestroyed = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var verified: Bool {
     get {_verified ?? false}
     set {_verified = newValue}
@@ -11931,7 +13908,7 @@ public nonisolated struct Strato_Agent_V1_SandboxSuspensionEvidence: Sendable {
   /// Clears the value of `verified`. Subsequent reads from it will return its default value.
   public mutating func clearVerified() {self._verified = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var restoreDurationMilliseconds: Int64 {
     get {_restoreDurationMilliseconds ?? 0}
     set {_restoreDurationMilliseconds = newValue}
@@ -11958,7 +13935,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigServiceObservation: Sendabl
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var name: String {
     get {_name ?? String()}
     set {_name = newValue}
@@ -11968,7 +13945,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigServiceObservation: Sendabl
   /// Clears the value of `name`. Subsequent reads from it will return its default value.
   public mutating func clearName() {self._name = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var enabled: Bool {
     get {_enabled ?? false}
     set {_enabled = newValue}
@@ -11978,7 +13955,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigServiceObservation: Sendabl
   /// Clears the value of `enabled`. Subsequent reads from it will return its default value.
   public mutating func clearEnabled() {self._enabled = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var activeState: String {
     get {_activeState ?? String()}
     set {_activeState = newValue}
@@ -12002,7 +13979,7 @@ public nonisolated struct Strato_Agent_V1_StorageDeviceIdentity: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_StorageDeviceIdentityKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -12012,7 +13989,7 @@ public nonisolated struct Strato_Agent_V1_StorageDeviceIdentity: Sendable {
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var value: String {
     get {_value ?? String()}
     set {_value = newValue}
@@ -12030,12 +14007,15 @@ public nonisolated struct Strato_Agent_V1_StorageDeviceIdentity: Sendable {
   fileprivate var _value: String? = nil
 }
 
+/// An unsolicited registration, heartbeat, or unregister acknowledgement.
+/// `request_id` is retained for log correlation; no sender awaits it.
 public nonisolated struct Strato_Agent_V1_SuccessMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -12045,7 +14025,8 @@ public nonisolated struct Strato_Agent_V1_SuccessMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -12055,7 +14036,7 @@ public nonisolated struct Strato_Agent_V1_SuccessMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var message: String {
     get {_message ?? String()}
     set {_message = newValue}
@@ -12079,7 +14060,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigSysctlObservation: Sendable
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var key: String {
     get {_key ?? String()}
     set {_key = newValue}
@@ -12089,7 +14070,7 @@ public nonisolated struct Strato_Agent_V1_GuestConfigSysctlObservation: Sendable
   /// Clears the value of `key`. Subsequent reads from it will return its default value.
   public mutating func clearKey() {self._key = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var value: String {
     get {_value ?? String()}
     set {_value = newValue}
@@ -12107,12 +14088,20 @@ public nonisolated struct Strato_Agent_V1_GuestConfigSysctlObservation: Sendable
   fileprivate var _value: String? = nil
 }
 
+/// A workload an agent holds that the last desired-state sync did not list
+/// (STR-98).
+///
+/// The agent **holds** it — running, untouched, adopted into no desired
+/// generation — and reports it here so the control plane can decide. A row
+/// that still exists means an assembler or scoping bug and must never
+/// authorize teardown; no row at all earns a `DesiredWorkloadTombstone` on a
+/// later sync.
 public nonisolated struct Strato_Agent_V1_UnrecognizedWorkload: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_WorkloadKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -12122,7 +14111,7 @@ public nonisolated struct Strato_Agent_V1_UnrecognizedWorkload: Sendable {
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var workloadID: String {
     get {_workloadID ?? String()}
@@ -12133,7 +14122,11 @@ public nonisolated struct Strato_Agent_V1_UnrecognizedWorkload: Sendable {
   /// Clears the value of `workloadID`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadID() {self._workloadID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// The last desired-state generation the agent applied for this workload
+  /// (0 if it never applied one), so the control plane can mint a tombstone
+  /// generation that outranks it rather than one the agent would drop as
+  /// stale.
+  /// Required:
   public var observedGeneration: Int64 {
     get {_observedGeneration ?? 0}
     set {_observedGeneration = newValue}
@@ -12143,7 +14136,10 @@ public nonisolated struct Strato_Agent_V1_UnrecognizedWorkload: Sendable {
   /// Clears the value of `observedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearObservedGeneration() {self._observedGeneration = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// The workload's observed status, persisted onto the control plane's
+  /// `AgentWorkloadClaim` and logged — "holding a *running* VM nothing
+  /// describes" reads very differently from holding a stopped one.
+  /// Optional:
   public var status: String {
     get {_status ?? String()}
     set {_status = newValue}
@@ -12163,12 +14159,14 @@ public nonisolated struct Strato_Agent_V1_UnrecognizedWorkload: Sendable {
   fileprivate var _status: String? = nil
 }
 
+/// VM log message sent from agent to control plane
 public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Message identifier for tracing and logs.
+  /// Required:
   public var requestID: String {
     get {_requestID ?? String()}
     set {_requestID = newValue}
@@ -12178,7 +14176,8 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
   public mutating func clearRequestID() {self._requestID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Sender timestamp for this message.
+  /// Required:
   public var timestamp: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_timestamp ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_timestamp = newValue}
@@ -12188,7 +14187,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `timestamp`. Subsequent reads from it will return its default value.
   public mutating func clearTimestamp() {self._timestamp = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var vmID: String {
     get {_vmID ?? String()}
     set {_vmID = newValue}
@@ -12198,7 +14197,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `vmID`. Subsequent reads from it will return its default value.
   public mutating func clearVmID() {self._vmID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var level: Strato_Agent_V1_VMLogLevel {
     get {_level ?? .unspecified}
     set {_level = newValue}
@@ -12208,7 +14207,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `level`. Subsequent reads from it will return its default value.
   public mutating func clearLevel() {self._level = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var source: Strato_Agent_V1_VMLogSource {
     get {_source ?? .unspecified}
     set {_source = newValue}
@@ -12218,7 +14217,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `source`. Subsequent reads from it will return its default value.
   public mutating func clearSource() {self._source = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var eventType: Strato_Agent_V1_VMEventType {
     get {_eventType ?? .unspecified}
     set {_eventType = newValue}
@@ -12228,7 +14227,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `eventType`. Subsequent reads from it will return its default value.
   public mutating func clearEventType() {self._eventType = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var message: String {
     get {_message ?? String()}
     set {_message = newValue}
@@ -12238,7 +14237,7 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   /// Clears the value of `message`. Subsequent reads from it will return its default value.
   public mutating func clearMessage() {self._message = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var operation: String {
     get {_operation ?? String()}
     set {_operation = newValue}
@@ -12262,12 +14261,26 @@ public nonisolated struct Strato_Agent_V1_VMLogMessage: Sendable {
   fileprivate var _operation: String? = nil
 }
 
+/// Guest memory usage for one VM, as reported by its virtio-balloon device's
+/// guest statistics (issue #567), attached to the VM's `ObservedVMState` on the
+/// agent → control-plane observed-state report.
+///
+/// Best-effort and informational, exactly like `GuestInfo`: the balloon stats
+/// come from the *guest's* virtio_balloon driver, so the whole struct is absent
+/// (`ObservedVMState.memory_stats == absence`) for VMs whose guest lacks the driver,
+/// is still booting, or hasn't answered a stats poll yet — absence must never be
+/// read as "zero memory used". Nothing keys convergence or scheduling on these
+/// values today; they are the observability groundwork for reclaim/overcommit
+/// policy later.
 public nonisolated struct Strato_Agent_V1_VMMemoryStats: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Total memory visible to the guest OS (`stat-total-memory`). This can be
+  /// less than the VM spec's memory grant: firmware reservations come out of
+  /// it, and an inflated balloon shrinks it further.
+  /// Required:
   public var totalBytes: Int64 {
     get {_totalBytes ?? 0}
     set {_totalBytes = newValue}
@@ -12277,7 +14290,11 @@ public nonisolated struct Strato_Agent_V1_VMMemoryStats: Sendable {
   /// Clears the value of `totalBytes`. Subsequent reads from it will return its default value.
   public mutating func clearTotalBytes() {self._totalBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Memory the guest considers available for new allocations without
+  /// swapping (`stat-available-memory`) — free pages plus reclaimable caches.
+  /// The interesting number: `total_bytes - available_bytes` is what the guest
+  /// is actually using.
+  /// Required:
   public var availableBytes: Int64 {
     get {_availableBytes ?? 0}
     set {_availableBytes = newValue}
@@ -12287,7 +14304,18 @@ public nonisolated struct Strato_Agent_V1_VMMemoryStats: Sendable {
   /// Clears the value of `availableBytes`. Subsequent reads from it will return its default value.
   public mutating func clearAvailableBytes() {self._availableBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Memory the balloon currently leaves to the guest (`query-balloon`'s
+  /// `actual`), in bytes — the host-side view of an operator's balloon
+  /// target (issue #567 phase 2). Equal to the VM's memory grant on a VM
+  /// with no target set, and it converges *toward* a newly set target as
+  /// the guest's driver hands pages back, so a value above the target
+  /// mid-inflation is expected, not a fault.
+  ///
+  /// Unlike the `stat-*` fields this comes from QEMU, not the guest, so it
+  /// is reported even for a guest whose driver never loaded. Absence only when
+  /// the VM has no balloon device (created before issue #567) or the query
+  /// failed.
+  /// Optional:
   public var balloonActualBytes: Int64 {
     get {_balloonActualBytes ?? 0}
     set {_balloonActualBytes = newValue}
@@ -12306,12 +14334,21 @@ public nonisolated struct Strato_Agent_V1_VMMemoryStats: Sendable {
   fileprivate var _balloonActualBytes: Int64? = nil
 }
 
+/// Hypervisor-neutral description of a VM, sent from the control plane to an agent.
+///
+/// The spec carries only what the control plane can legitimately know: resource
+/// sizing, the boot source, volumes and networks by reference, and a console
+/// preference. All device-level realization — host paths, tap interface names,
+/// sockets, machine types, queue sizing — is derived by each agent-side
+/// `HypervisorService` when it translates the spec into its driver-native form
+/// (QEMU arguments, Firecracker API calls, ...).
 public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absence is the historical immutable guaranteed policy.
+  /// Optional:
   public var admittedReservation: Strato_Agent_V1_WorkloadAdmittedReservation {
     get {_storage._admittedReservation ?? Strato_Agent_V1_WorkloadAdmittedReservation()}
     set {_uniqueStorage()._admittedReservation = newValue}
@@ -12321,7 +14358,7 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `admittedReservation`. Subsequent reads from it will return its default value.
   public mutating func clearAdmittedReservation() {_uniqueStorage()._admittedReservation = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var resourceClass: Strato_Agent_V1_WorkloadResourceClassSnapshot {
     get {_storage._resourceClass ?? Strato_Agent_V1_WorkloadResourceClassSnapshot()}
     set {_uniqueStorage()._resourceClass = newValue}
@@ -12331,7 +14368,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `resourceClass`. Subsequent reads from it will return its default value.
   public mutating func clearResourceClass() {_uniqueStorage()._resourceClass = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Number of vCPUs the VM boots with.
+  /// Required:
   public var cpus: Int64 {
     get {_storage._cpus ?? 0}
     set {_uniqueStorage()._cpus = newValue}
@@ -12341,7 +14379,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `cpus`. Subsequent reads from it will return its default value.
   public mutating func clearCpus() {_uniqueStorage()._cpus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Maximum number of vCPUs (for hotplug on backends that support it).
+  /// Required:
   public var maxCpus: Int64 {
     get {_storage._maxCpus ?? 0}
     set {_uniqueStorage()._maxCpus = newValue}
@@ -12351,7 +14390,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `maxCpus`. Subsequent reads from it will return its default value.
   public mutating func clearMaxCpus() {_uniqueStorage()._maxCpus = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Guest memory size in bytes.
+  /// Required:
   public var memoryBytes: Int64 {
     get {_storage._memoryBytes ?? 0}
     set {_uniqueStorage()._memoryBytes = newValue}
@@ -12361,7 +14401,11 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `memoryBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryBytes() {_uniqueStorage()._memoryBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Maximum guest memory in bytes (for hot-add on backends that support
+  /// it), mirroring how `max_cpus` bounds vCPU hot-add. Equal to
+  /// `memory_bytes` when the VM was created without headroom, in which case
+  /// no hot-pluggable memory device is realized at all.
+  /// Required:
   public var maxMemoryBytes: Int64 {
     get {_storage._maxMemoryBytes ?? 0}
     set {_uniqueStorage()._maxMemoryBytes = newValue}
@@ -12371,7 +14415,17 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `maxMemoryBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMaxMemoryBytes() {_uniqueStorage()._maxMemoryBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Memory the guest may keep, in bytes, when an operator has asked for
+  /// some of its grant back (issue #567 phase 2). Realized by inflating the
+  /// VM's virtio-balloon device to `memory_bytes - balloon_target_bytes`, which
+  /// lets the host reclaim the difference while the grant — and so the
+  /// quota and scheduler reservation — stays exactly as committed.
+  ///
+  /// Absence means no target: the balloon stays deflated and the guest keeps
+  /// everything. Always at most `memory_bytes`; ballooning cannot hand a guest
+  /// more memory than it was granted (that is `max_memory_bytes` and
+  /// virtio-mem).
+  /// Optional:
   public var balloonTargetBytes: Int64 {
     get {_storage._balloonTargetBytes ?? 0}
     set {_uniqueStorage()._balloonTargetBytes = newValue}
@@ -12381,7 +14435,11 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `balloonTargetBytes`. Subsequent reads from it will return its default value.
   public mutating func clearBalloonTargetBytes() {_uniqueStorage()._balloonTargetBytes = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Disk requirement in bytes — the figure the scheduler gated placement on
+  /// (`vm.disk`), carried so agents can account committed disk without
+  /// deriving it from volumes (which don't carry sizes). Absence means the caller
+  /// has no disk reservation to report.
+  /// Optional:
   public var diskBytes: Int64 {
     get {_storage._diskBytes ?? 0}
     set {_uniqueStorage()._diskBytes = newValue}
@@ -12391,7 +14449,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `diskBytes`. Subsequent reads from it will return its default value.
   public mutating func clearDiskBytes() {_uniqueStorage()._diskBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether guest memory should be file-backed/shared (required by e.g. vhost-user backends).
+  /// Required:
   public var sharedMemory: Bool {
     get {_storage._sharedMemory ?? false}
     set {_uniqueStorage()._sharedMemory = newValue}
@@ -12401,7 +14460,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `sharedMemory`. Subsequent reads from it will return its default value.
   public mutating func clearSharedMemory() {_uniqueStorage()._sharedMemory = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether guest memory should be backed by huge pages.
+  /// Required:
   public var hugepages: Bool {
     get {_storage._hugepages ?? false}
     set {_uniqueStorage()._hugepages = newValue}
@@ -12411,7 +14471,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `hugepages`. Subsequent reads from it will return its default value.
   public mutating func clearHugepages() {_uniqueStorage()._hugepages = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// How the VM boots.
+  /// Required:
   public var boot: Strato_Agent_V1_BootSource {
     get {_storage._boot ?? Strato_Agent_V1_BootSource()}
     set {_uniqueStorage()._boot = newValue}
@@ -12421,7 +14482,9 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `boot`. Subsequent reads from it will return its default value.
   public mutating func clearBoot() {_uniqueStorage()._boot = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Guest machine features that are not resource sizing: Secure Boot and a
+  /// vTPM (issue #565). Absence selects `MachineProfile.default` (both off).
+  /// Optional:
   public var machine: Strato_Agent_V1_MachineProfile {
     get {_storage._machine ?? Strato_Agent_V1_MachineProfile()}
     set {_uniqueStorage()._machine = newValue}
@@ -12431,7 +14494,10 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `machine`. Subsequent reads from it will return its default value.
   public mutating func clearMachine() {_uniqueStorage()._machine = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Whether Strato's in-guest agent is enabled for this VM. The flag is
+  /// default-off and fixes whether the domain gets a virtio-vsock device at
+  /// creation; it is distinct from QEMU's conventional qga channel.
+  /// Required:
   public var guestAgentEnabled: Bool {
     get {_storage._guestAgentEnabled ?? false}
     set {_uniqueStorage()._guestAgentEnabled = newValue}
@@ -12441,7 +14507,9 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `guestAgentEnabled`. Subsequent reads from it will return its default value.
   public mutating func clearGuestAgentEnabled() {_uniqueStorage()._guestAgentEnabled = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Managed volumes to attach, in boot order. Every VM has exactly one boot
+  /// volume; image materialization belongs to that volume's desired state.
+  /// Required:
   public var volumes: Strato_Agent_V1_VMSpecVolumesSection {
     get {_storage._volumes ?? Strato_Agent_V1_VMSpecVolumesSection()}
     set {_uniqueStorage()._volumes = newValue}
@@ -12451,7 +14519,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `volumes`. Subsequent reads from it will return its default value.
   public mutating func clearVolumes() {_uniqueStorage()._volumes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Network interfaces, each referencing a logical network by name.
+  /// Required:
   public var networks: Strato_Agent_V1_VMSpecNetworksSection {
     get {_storage._networks ?? Strato_Agent_V1_VMSpecNetworksSection()}
     set {_uniqueStorage()._networks = newValue}
@@ -12461,7 +14530,8 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `networks`. Subsequent reads from it will return its default value.
   public mutating func clearNetworks() {_uniqueStorage()._networks = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Console preference. Drivers may realize this however their backend allows.
+  /// Optional:
   public var console: Strato_Agent_V1_ConsoleSpec {
     get {_storage._console ?? Strato_Agent_V1_ConsoleSpec()}
     set {_uniqueStorage()._console = newValue}
@@ -12471,7 +14541,10 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `console`. Subsequent reads from it will return its default value.
   public mutating func clearConsole() {_uniqueStorage()._console = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// SSH public keys to authorize for the guest's default user. Injected via
+  /// the backend's guest-provisioning mechanism (cloud-init `ssh_authorized_keys`
+  /// for QEMU disk boot). Empty when the caller provided none.
+  /// Required:
   public var sshAuthorizedKeys: Strato_Agent_V1_VMSpecSshAuthorizedKeysSection {
     get {_storage._sshAuthorizedKeys ?? Strato_Agent_V1_VMSpecSshAuthorizedKeysSection()}
     set {_uniqueStorage()._sshAuthorizedKeys = newValue}
@@ -12481,7 +14554,12 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `sshAuthorizedKeys`. Subsequent reads from it will return its default value.
   public mutating func clearSshAuthorizedKeys() {_uniqueStorage()._sshAuthorizedKeys = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Caller-supplied cloud-init user data, verbatim (any format cloud-init
+  /// dispatches on: `#cloud-config`, `#!` scripts, `#include`, MIME
+  /// multipart, ...). The agent combines it with Strato's own provisioning
+  /// config when it builds the guest-bootstrap media. Absence when the caller
+  /// provided none.
+  /// Optional:
   public var userData: String {
     get {_storage._userData ?? String()}
     set {_uniqueStorage()._userData = newValue}
@@ -12491,7 +14569,12 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   /// Clears the value of `userData`. Subsequent reads from it will return its default value.
   public mutating func clearUserData() {_uniqueStorage()._userData = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Where cloud-init reads the VM's guest-bootstrap documents. The
+  /// initializer retains the historical full seed ISO default for low-level
+  /// compatibility; the control plane explicitly supplies each persisted
+  /// VM's choice. `.imds` leaves only `network-config` and a `seedfrom`
+  /// meta-data stub on that ISO.
+  /// Required:
   public var metadataSource: Strato_Agent_V1_MetadataSource {
     get {_storage._metadataSource ?? .unspecified}
     set {_uniqueStorage()._metadataSource = newValue}
@@ -12508,12 +14591,34 @@ public nonisolated struct Strato_Agent_V1_VMSpec: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Absolute per-volume I/O ceilings (STR-19).
+///
+/// Total-only, deliberately. QEMU and libvirt can both express read/write
+/// splits, burst allowances and bucket sizes; none of them has a caller here
+/// yet, and one knob per dimension is the version that can be explained in a
+/// UI. Optional members can be added later without a version bump.
+///
+/// **The all-absence value and `absence` are two spellings of one fact, and the two
+/// sides of the wire resolve that ambiguity in opposite directions.** Get this
+/// backwards and the bug is invisible until a mixed-version fleet:
+///
+/// - On a **desired** entry, always normalize: an all-absence value must travel as
+///   an absent field, or an agent comparing present-but-empty against absence
+///   re-plans a throttle that is already applied, forever. `normalized(_:_:)`
+///   is the single door every desired producer goes through.
+/// - On an **observed** entry, never normalize. Absence there means *"this agent
+///   does not report applied limits"*; a present-but-empty value means
+///   *"applied, and the answer is uncapped"*. Collapse the two and an agent
+///   that has never heard of ceilings has its silence read as a deliberate
+///   clear — which, with no capability gate on this feature, is the one
+///   misreading that matters.
 public nonisolated struct Strato_Agent_V1_VolumeIOLimits: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Optional: preserves the existing semantic contract.
+  /// Total (read + write) IOPS ceiling. Absence means uncapped in that dimension.
+  /// Optional:
   public var iopsTotal: Int64 {
     get {_iopsTotal ?? 0}
     set {_iopsTotal = newValue}
@@ -12523,7 +14628,9 @@ public nonisolated struct Strato_Agent_V1_VolumeIOLimits: Sendable {
   /// Clears the value of `iopsTotal`. Subsequent reads from it will return its default value.
   public mutating func clearIopsTotal() {self._iopsTotal = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Total (read + write) throughput ceiling in bytes per second. Absence means
+  /// uncapped in that dimension.
+  /// Optional:
   public var bpsTotal: Int64 {
     get {_bpsTotal ?? 0}
     set {_bpsTotal = newValue}
@@ -12541,12 +14648,19 @@ public nonisolated struct Strato_Agent_V1_VolumeIOLimits: Sendable {
   fileprivate var _bpsTotal: Int64? = nil
 }
 
+/// The measured aggregate I/O rate for one attached volume (STR-270).
+///
+/// This is deliberately a rate rather than raw libvirt counters. A QEMU
+/// process resets those counters on every restart, while operators need a
+/// directly comparable value beside the configured and applied ceilings.
+/// Absence on `ObservedVolumeState` means no two live samples were available yet
+/// (including a stopped or newly adopted domain), never zero activity.
 public nonisolated struct Strato_Agent_V1_VolumeIOObservedRate: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var iops: Double {
     get {_iops ?? 0}
     set {_iops = newValue}
@@ -12556,7 +14670,7 @@ public nonisolated struct Strato_Agent_V1_VolumeIOObservedRate: Sendable {
   /// Clears the value of `iops`. Subsequent reads from it will return its default value.
   public mutating func clearIops() {self._iops = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var bytesPerSecond: Double {
     get {_bytesPerSecond ?? 0}
     set {_bytesPerSecond = newValue}
@@ -12574,12 +14688,14 @@ public nonisolated struct Strato_Agent_V1_VolumeIOObservedRate: Sendable {
   fileprivate var _bytesPerSecond: Double? = nil
 }
 
+/// A volume to attach, referenced by identity rather than device realization.
 public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Stable identity of the managed volume this attachment realizes.
+  /// Required:
   /// Format: uuid.
   public var volumeID: String {
     get {_storage._volumeID ?? String()}
@@ -12590,7 +14706,11 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `volumeID`. Subsequent reads from it will return its default value.
   public mutating func clearVolumeID() {_uniqueStorage()._volumeID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Stable device identifier within the VM (e.g. "disk0", "vdb"). Validated
+  /// by its type, so a spec cannot carry a name a hypervisor would refuse
+  /// (STR-129); unique per VM, enforced by the control plane's
+  /// `(vm_id, device_name)` index.
+  /// Required:
   /// Format: device-name.
   public var deviceName: String {
     get {_storage._deviceName ?? String()}
@@ -12601,7 +14721,10 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `deviceName`. Subsequent reads from it will return its default value.
   public mutating func clearDeviceName() {_uniqueStorage()._deviceName = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Storage descriptor previously reported by the owning agent. Absence while
+  /// the volume has not been realized; the receiving agent remains the
+  /// authority and resolves the identity against its current inventory.
+  /// Optional:
   public var attachment: Strato_Agent_V1_DiskAttachment {
     get {_storage._attachment ?? Strato_Agent_V1_DiskAttachment()}
     set {_uniqueStorage()._attachment = newValue}
@@ -12611,7 +14734,7 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `attachment`. Subsequent reads from it will return its default value.
   public mutating func clearAttachment() {_uniqueStorage()._attachment = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var readonly: Bool {
     get {_storage._readonly ?? false}
     set {_uniqueStorage()._readonly = newValue}
@@ -12621,7 +14744,8 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `readonly`. Subsequent reads from it will return its default value.
   public mutating func clearReadonly() {_uniqueStorage()._readonly = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Explicit boot order; volumes are sent pre-sorted, this is informational.
+  /// Optional:
   public var bootOrder: Int64 {
     get {_storage._bootOrder ?? 0}
     set {_uniqueStorage()._bootOrder = newValue}
@@ -12631,7 +14755,13 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `bootOrder`. Subsequent reads from it will return its default value.
   public mutating func clearBootOrder() {_uniqueStorage()._bootOrder = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Absolute I/O ceilings for this disk (STR-19), so a VM realized from its
+  /// own spec boots with the same caps the volume lane would apply.
+  ///
+  /// This list and `DesiredVolumeState` are two projections of one fact, and
+  /// reading a property off only one of them is how they start to disagree —
+  /// the same reason the attachment itself appears in both.
+  /// Optional:
   public var ioLimits: Strato_Agent_V1_VolumeIOLimits {
     get {_storage._ioLimits ?? Strato_Agent_V1_VolumeIOLimits()}
     set {_uniqueStorage()._ioLimits = newValue}
@@ -12641,7 +14771,10 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `ioLimits`. Subsequent reads from it will return its default value.
   public mutating func clearIoLimits() {_uniqueStorage()._ioLimits = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Requested host-cache behavior. Existing callers and manifests decode to
+  /// the conservative mode, so neither optimized mode becomes a default as a
+  /// side effect of introducing the policy.
+  /// Required:
   public var blockMode: Strato_Agent_V1_VolumeBlockMode {
     get {_storage._blockMode ?? .unspecified}
     set {_uniqueStorage()._blockMode = newValue}
@@ -12651,7 +14784,9 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   /// Clears the value of `blockMode`. Subsequent reads from it will return its default value.
   public mutating func clearBlockMode() {_uniqueStorage()._blockMode = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Agent-selected policy persisted in the VM manifest. Control-plane specs
+  /// leave this absent; a QEMU agent fills it after probing the concrete disk.
+  /// Optional:
   public var appliedBlockPolicy: Strato_Agent_V1_AppliedBlockDevicePolicy {
     get {_storage._appliedBlockPolicy ?? Strato_Agent_V1_AppliedBlockDevicePolicy()}
     set {_uniqueStorage()._appliedBlockPolicy = newValue}
@@ -12668,12 +14803,14 @@ public nonisolated struct Strato_Agent_V1_VolumeSpec: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// A durable physical commitment. Growth prices only newly admitted guest/CPU
+/// units; catalog edits cannot reprice the previous grant.
 public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var grantedCpUs: Int64 {
     get {_grantedCpUs ?? 0}
     set {_grantedCpUs = newValue}
@@ -12683,7 +14820,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable 
   /// Clears the value of `grantedCpUs`. Subsequent reads from it will return its default value.
   public mutating func clearGrantedCpUs() {self._grantedCpUs = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var guestCommitmentBytes: Int64 {
     get {_guestCommitmentBytes ?? 0}
     set {_guestCommitmentBytes = newValue}
@@ -12693,7 +14830,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable 
   /// Clears the value of `guestCommitmentBytes`. Subsequent reads from it will return its default value.
   public mutating func clearGuestCommitmentBytes() {self._guestCommitmentBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuMicroUnits: Int64 {
     get {_cpuMicroUnits ?? 0}
     set {_cpuMicroUnits = newValue}
@@ -12703,7 +14840,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable 
   /// Clears the value of `cpuMicroUnits`. Subsequent reads from it will return its default value.
   public mutating func clearCpuMicroUnits() {self._cpuMicroUnits = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var discountedGuestBytes: Int64 {
     get {_discountedGuestBytes ?? 0}
     set {_discountedGuestBytes = newValue}
@@ -12713,7 +14850,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable 
   /// Clears the value of `discountedGuestBytes`. Subsequent reads from it will return its default value.
   public mutating func clearDiscountedGuestBytes() {self._discountedGuestBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backendOverheadBytes: Int64 {
     get {_backendOverheadBytes ?? 0}
     set {_backendOverheadBytes = newValue}
@@ -12734,12 +14871,16 @@ public nonisolated struct Strato_Agent_V1_WorkloadAdmittedReservation: Sendable 
   fileprivate var _backendOverheadBytes: Int64? = nil
 }
 
+/// Certifies successful guarded backend convergence AND exactly-once inclusion
+/// of accountedReservation in this report's capacity arithmetic. File sampling
+/// alone cannot create this acknowledgement; the producer owns generation and
+/// boundary validation. Desired limits describe this applied snapshot/grant.
 public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_WorkloadKind {
     get {_storage._kind ?? .unspecified}
     set {_uniqueStorage()._kind = newValue}
@@ -12749,7 +14890,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {_uniqueStorage()._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var workloadID: String {
     get {_storage._workloadID ?? String()}
@@ -12760,7 +14901,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `workloadID`. Subsequent reads from it will return its default value.
   public mutating func clearWorkloadID() {_uniqueStorage()._workloadID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var appliedGeneration: Int64 {
     get {_storage._appliedGeneration ?? 0}
     set {_uniqueStorage()._appliedGeneration = newValue}
@@ -12770,7 +14911,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `appliedGeneration`. Subsequent reads from it will return its default value.
   public mutating func clearAppliedGeneration() {_uniqueStorage()._appliedGeneration = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var resourceClass: Strato_Agent_V1_WorkloadResourceClassSnapshot {
     get {_storage._resourceClass ?? Strato_Agent_V1_WorkloadResourceClassSnapshot()}
     set {_uniqueStorage()._resourceClass = newValue}
@@ -12780,7 +14921,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `resourceClass`. Subsequent reads from it will return its default value.
   public mutating func clearResourceClass() {_uniqueStorage()._resourceClass = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backend: Strato_Agent_V1_WorkloadResourceClassBackend {
     get {_storage._backend ?? .unspecified}
     set {_uniqueStorage()._backend = newValue}
@@ -12790,7 +14931,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `backend`. Subsequent reads from it will return its default value.
   public mutating func clearBackend() {_uniqueStorage()._backend = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var accountedReservation: Strato_Agent_V1_WorkloadAdmittedReservation {
     get {_storage._accountedReservation ?? Strato_Agent_V1_WorkloadAdmittedReservation()}
     set {_uniqueStorage()._accountedReservation = newValue}
@@ -12800,7 +14941,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `accountedReservation`. Subsequent reads from it will return its default value.
   public mutating func clearAccountedReservation() {_uniqueStorage()._accountedReservation = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var runtimeGuestBytes: Int64 {
     get {_storage._runtimeGuestBytes ?? 0}
     set {_uniqueStorage()._runtimeGuestBytes = newValue}
@@ -12810,7 +14951,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `runtimeGuestBytes`. Subsequent reads from it will return its default value.
   public mutating func clearRuntimeGuestBytes() {_uniqueStorage()._runtimeGuestBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var pageSizeBytes: Int64 {
     get {_storage._pageSizeBytes ?? 0}
     set {_uniqueStorage()._pageSizeBytes = newValue}
@@ -12820,7 +14961,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `pageSizeBytes`. Subsequent reads from it will return its default value.
   public mutating func clearPageSizeBytes() {_uniqueStorage()._pageSizeBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var desiredLimits: Strato_Agent_V1_WorkloadRuntimeLimits {
     get {_storage._desiredLimits ?? Strato_Agent_V1_WorkloadRuntimeLimits()}
     set {_uniqueStorage()._desiredLimits = newValue}
@@ -12830,7 +14971,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `desiredLimits`. Subsequent reads from it will return its default value.
   public mutating func clearDesiredLimits() {_uniqueStorage()._desiredLimits = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var appliedLimits: Strato_Agent_V1_WorkloadRuntimeLimits {
     get {_storage._appliedLimits ?? Strato_Agent_V1_WorkloadRuntimeLimits()}
     set {_uniqueStorage()._appliedLimits = newValue}
@@ -12840,7 +14981,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `appliedLimits`. Subsequent reads from it will return its default value.
   public mutating func clearAppliedLimits() {_uniqueStorage()._appliedLimits = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuQuotaUnlimited: Bool {
     get {_storage._cpuQuotaUnlimited ?? false}
     set {_uniqueStorage()._cpuQuotaUnlimited = newValue}
@@ -12850,7 +14991,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   /// Clears the value of `cpuQuotaUnlimited`. Subsequent reads from it will return its default value.
   public mutating func clearCpuQuotaUnlimited() {_uniqueStorage()._cpuQuotaUnlimited = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ownershipVerified: Bool {
     get {_storage._ownershipVerified ?? false}
     set {_uniqueStorage()._ownershipVerified = newValue}
@@ -12867,12 +15008,13 @@ public nonisolated struct Strato_Agent_V1_WorkloadEnforcementAcknowledgement: @u
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
+/// Monotonic counters from cgroup v2 `memory.events`.
 public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var availability: Strato_Agent_V1_ResourceTelemetryAvailability {
     get {_availability ?? .unspecified}
     set {_availability = newValue}
@@ -12882,7 +15024,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `availability`. Subsequent reads from it will return its default value.
   public mutating func clearAvailability() {self._availability = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var low: Int64 {
     get {_low ?? 0}
     set {_low = newValue}
@@ -12892,7 +15034,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `low`. Subsequent reads from it will return its default value.
   public mutating func clearLow() {self._low = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var high: Int64 {
     get {_high ?? 0}
     set {_high = newValue}
@@ -12902,7 +15044,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `high`. Subsequent reads from it will return its default value.
   public mutating func clearHigh() {self._high = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var max: Int64 {
     get {_max ?? 0}
     set {_max = newValue}
@@ -12912,7 +15054,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `max`. Subsequent reads from it will return its default value.
   public mutating func clearMax() {self._max = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var oom: Int64 {
     get {_oom ?? 0}
     set {_oom = newValue}
@@ -12922,7 +15064,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `oom`. Subsequent reads from it will return its default value.
   public mutating func clearOom() {self._oom = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var oomKill: Int64 {
     get {_oomKill ?? 0}
     set {_oomKill = newValue}
@@ -12932,7 +15074,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadMemoryEventsTelemetry: Sendabl
   /// Clears the value of `oomKill`. Subsequent reads from it will return its default value.
   public mutating func clearOomKill() {self._oomKill = nil}
 
-  /// Optional: preserves the existing semantic contract.
+  /// Optional:
   public var oomGroupKill: Int64 {
     get {_oomGroupKill ?? 0}
     set {_oomGroupKill = newValue}
@@ -12960,7 +15102,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var backend: Strato_Agent_V1_WorkloadResourceClassBackend {
     get {_backend ?? .unspecified}
     set {_backend = newValue}
@@ -12970,7 +15112,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   /// Clears the value of `backend`. Subsequent reads from it will return its default value.
   public mutating func clearBackend() {self._backend = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var controllersDelegated: Bool {
     get {_controllersDelegated ?? false}
     set {_controllersDelegated = newValue}
@@ -12980,7 +15122,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   /// Clears the value of `controllersDelegated`. Subsequent reads from it will return its default value.
   public mutating func clearControllersDelegated() {self._controllersDelegated = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var stableOwnership: Bool {
     get {_stableOwnership ?? false}
     set {_stableOwnership = newValue}
@@ -12990,7 +15132,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   /// Clears the value of `stableOwnership`. Subsequent reads from it will return its default value.
   public mutating func clearStableOwnership() {self._stableOwnership = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var preExecutionEnforcement: Bool {
     get {_preExecutionEnforcement ?? false}
     set {_preExecutionEnforcement = newValue}
@@ -13000,7 +15142,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   /// Clears the value of `preExecutionEnforcement`. Subsequent reads from it will return its default value.
   public mutating func clearPreExecutionEnforcement() {self._preExecutionEnforcement = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var effectiveReadback: Bool {
     get {_effectiveReadback ?? false}
     set {_effectiveReadback = newValue}
@@ -13021,12 +15163,13 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassEnforcement: Send
   fileprivate var _effectiveReadback: Bool? = nil
 }
 
+/// Bounds are configuration limits, not recommendations for safe overcommit.
 public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var kind: Strato_Agent_V1_WorkloadResourceClassKind {
     get {_kind ?? .unspecified}
     set {_kind = newValue}
@@ -13036,7 +15179,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `kind`. Subsequent reads from it will return its default value.
   public mutating func clearKind() {self._kind = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuAllocationRatio: Double {
     get {_cpuAllocationRatio ?? 0}
     set {_cpuAllocationRatio = newValue}
@@ -13046,7 +15189,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `cpuAllocationRatio`. Subsequent reads from it will return its default value.
   public mutating func clearCpuAllocationRatio() {self._cpuAllocationRatio = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryAllocationRatio: Double {
     get {_memoryAllocationRatio ?? 0}
     set {_memoryAllocationRatio = newValue}
@@ -13056,7 +15199,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `memoryAllocationRatio`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryAllocationRatio() {self._memoryAllocationRatio = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuWeight: Int64 {
     get {_cpuWeight ?? 0}
     set {_cpuWeight = newValue}
@@ -13066,7 +15209,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `cpuWeight`. Subsequent reads from it will return its default value.
   public mutating func clearCpuWeight() {self._cpuWeight = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryHighPercent: Int64 {
     get {_memoryHighPercent ?? 0}
     set {_memoryHighPercent = newValue}
@@ -13076,7 +15219,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `memoryHighPercent`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryHighPercent() {self._memoryHighPercent = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var hardLimitPolicy: Strato_Agent_V1_WorkloadHardLimitPolicy {
     get {_hardLimitPolicy ?? .unspecified}
     set {_hardLimitPolicy = newValue}
@@ -13086,7 +15229,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `hardLimitPolicy`. Subsequent reads from it will return its default value.
   public mutating func clearHardLimitPolicy() {self._hardLimitPolicy = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var maxCpuPressure10: Double {
     get {_maxCpuPressure10 ?? 0}
     set {_maxCpuPressure10 = newValue}
@@ -13096,7 +15239,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `maxCpuPressure10`. Subsequent reads from it will return its default value.
   public mutating func clearMaxCpuPressure10() {self._maxCpuPressure10 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var maxMemoryPressure10: Double {
     get {_maxMemoryPressure10 ?? 0}
     set {_maxMemoryPressure10 = newValue}
@@ -13106,7 +15249,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   /// Clears the value of `maxMemoryPressure10`. Subsequent reads from it will return its default value.
   public mutating func clearMaxMemoryPressure10() {self._maxMemoryPressure10 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var maxTelemetryAgeSeconds: Int64 {
     get {_maxTelemetryAgeSeconds ?? 0}
     set {_maxTelemetryAgeSeconds = newValue}
@@ -13131,12 +15274,13 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassPolicy: Sendable 
   fileprivate var _maxTelemetryAgeSeconds: Int64? = nil
 }
 
+/// Immutable admitted policy. Encoding flattens policy and identity into one object.
 public nonisolated struct Strato_Agent_V1_WorkloadResourceClassSnapshot: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var classID: String {
     get {_classID ?? String()}
@@ -13147,7 +15291,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassSnapshot: Sendabl
   /// Clears the value of `classID`. Subsequent reads from it will return its default value.
   public mutating func clearClassID() {self._classID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   /// Format: uuid.
   public var siteID: String {
     get {_siteID ?? String()}
@@ -13158,7 +15302,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassSnapshot: Sendabl
   /// Clears the value of `siteID`. Subsequent reads from it will return its default value.
   public mutating func clearSiteID() {self._siteID = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var revision: Int64 {
     get {_revision ?? 0}
     set {_revision = newValue}
@@ -13168,7 +15312,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassSnapshot: Sendabl
   /// Clears the value of `revision`. Subsequent reads from it will return its default value.
   public mutating func clearRevision() {self._revision = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var policy: Strato_Agent_V1_WorkloadResourceClassPolicy {
     get {_policy ?? Strato_Agent_V1_WorkloadResourceClassPolicy()}
     set {_policy = newValue}
@@ -13188,12 +15332,16 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceClassSnapshot: Sendabl
   fileprivate var _policy: Strato_Agent_V1_WorkloadResourceClassPolicy? = nil
 }
 
+/// Per-VM or per-sandbox contention observations. Every label needed to
+/// attribute this sample (agent, workload id, and kind) lives outside this
+/// value in the owning resource/report, so tenant-controlled names never enter
+/// the telemetry cardinality surface.
 public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var sampledAt: SwiftProtobuf.Google_Protobuf_Timestamp {
     get {_storage._sampledAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
     set {_uniqueStorage()._sampledAt = newValue}
@@ -13203,7 +15351,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `sampledAt`. Subsequent reads from it will return its default value.
   public mutating func clearSampledAt() {_uniqueStorage()._sampledAt = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var health: Strato_Agent_V1_ResourcePressureHealth {
     get {_storage._health ?? .unspecified}
     set {_uniqueStorage()._health = newValue}
@@ -13213,7 +15361,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `health`. Subsequent reads from it will return its default value.
   public mutating func clearHealth() {_uniqueStorage()._health = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cgroupV2: Strato_Agent_V1_ResourceTelemetryAvailability {
     get {_storage._cgroupV2 ?? .unspecified}
     set {_uniqueStorage()._cgroupV2 = newValue}
@@ -13223,7 +15371,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `cgroupV2`. Subsequent reads from it will return its default value.
   public mutating func clearCgroupV2() {_uniqueStorage()._cgroupV2 = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryCurrentBytes: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._memoryCurrentBytes ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._memoryCurrentBytes = newValue}
@@ -13233,7 +15381,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `memoryCurrentBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryCurrentBytes() {_uniqueStorage()._memoryCurrentBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryEvents: Strato_Agent_V1_WorkloadMemoryEventsTelemetry {
     get {_storage._memoryEvents ?? Strato_Agent_V1_WorkloadMemoryEventsTelemetry()}
     set {_uniqueStorage()._memoryEvents = newValue}
@@ -13243,7 +15391,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `memoryEvents`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryEvents() {_uniqueStorage()._memoryEvents = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._memoryPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._memoryPressure = newValue}
@@ -13253,7 +15401,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `memoryPressure`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryPressure() {_uniqueStorage()._memoryPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._cpuPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._cpuPressure = newValue}
@@ -13263,7 +15411,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `cpuPressure`. Subsequent reads from it will return its default value.
   public mutating func clearCpuPressure() {_uniqueStorage()._cpuPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var ioPressure: Strato_Agent_V1_PressureStallTelemetry {
     get {_storage._ioPressure ?? Strato_Agent_V1_PressureStallTelemetry()}
     set {_uniqueStorage()._ioPressure = newValue}
@@ -13273,7 +15421,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `ioPressure`. Subsequent reads from it will return its default value.
   public mutating func clearIoPressure() {_uniqueStorage()._ioPressure = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuUsageMicroseconds: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._cpuUsageMicroseconds ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._cpuUsageMicroseconds = newValue}
@@ -13283,7 +15431,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `cpuUsageMicroseconds`. Subsequent reads from it will return its default value.
   public mutating func clearCpuUsageMicroseconds() {_uniqueStorage()._cpuUsageMicroseconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuThrottledMicroseconds: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._cpuThrottledMicroseconds ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._cpuThrottledMicroseconds = newValue}
@@ -13293,7 +15441,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `cpuThrottledMicroseconds`. Subsequent reads from it will return its default value.
   public mutating func clearCpuThrottledMicroseconds() {_uniqueStorage()._cpuThrottledMicroseconds = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuThrottledPeriodsTotal: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._cpuThrottledPeriodsTotal ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._cpuThrottledPeriodsTotal = newValue}
@@ -13303,7 +15451,10 @@ public nonisolated struct Strato_Agent_V1_WorkloadResourceTelemetry: @unchecked 
   /// Clears the value of `cpuThrottledPeriodsTotal`. Subsequent reads from it will return its default value.
   public mutating func clearCpuThrottledPeriodsTotal() {_uniqueStorage()._cpuThrottledPeriodsTotal = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Guest-reported cumulative steal time. It remains explicitly unavailable
+  /// until a guest metrics source supplies a value; host CPU time is never
+  /// substituted for it.
+  /// Required:
   public var guestStealMicroseconds: Strato_Agent_V1_ResourceTelemetryValue {
     get {_storage._guestStealMicroseconds ?? Strato_Agent_V1_ResourceTelemetryValue()}
     set {_uniqueStorage()._guestStealMicroseconds = newValue}
@@ -13325,7 +15476,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadRuntimeLimits: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryHighBytes: Int64 {
     get {_memoryHighBytes ?? 0}
     set {_memoryHighBytes = newValue}
@@ -13335,7 +15486,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadRuntimeLimits: Sendable {
   /// Clears the value of `memoryHighBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryHighBytes() {self._memoryHighBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var memoryMaxBytes: Int64 {
     get {_memoryMaxBytes ?? 0}
     set {_memoryMaxBytes = newValue}
@@ -13345,7 +15496,7 @@ public nonisolated struct Strato_Agent_V1_WorkloadRuntimeLimits: Sendable {
   /// Clears the value of `memoryMaxBytes`. Subsequent reads from it will return its default value.
   public mutating func clearMemoryMaxBytes() {self._memoryMaxBytes = nil}
 
-  /// Required: preserves the existing semantic contract.
+  /// Required:
   public var cpuWeight: Int64 {
     get {_cpuWeight ?? 0}
     set {_cpuWeight = newValue}
@@ -13364,11 +15515,14 @@ public nonisolated struct Strato_Agent_V1_WorkloadRuntimeLimits: Sendable {
   fileprivate var _cpuWeight: Int64? = nil
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessageDependencyObservationsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_NodeDependencyObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13376,11 +15530,14 @@ public nonisolated struct Strato_Agent_V1_AgentHeartbeatMessageDependencyObserva
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_AgentRegisterMessageHypervisorsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_HypervisorSupport] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13388,11 +15545,14 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessageHypervisorsSection
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_AgentRegisterMessageResourceClassEnforcementSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_WorkloadResourceClassEnforcement] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13400,11 +15560,14 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessageResourceClassEnfor
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_AgentRegisterMessageDependencyObservationsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_NodeDependencyObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13412,11 +15575,14 @@ public nonisolated struct Strato_Agent_V1_AgentRegisterMessageDependencyObservat
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_CephVolumeStorageMonEndpointsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13424,11 +15590,14 @@ public nonisolated struct Strato_Agent_V1_CephVolumeStorageMonEndpointsSection: 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredDNSRecordValuesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13436,11 +15605,14 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSRecordValuesSection: Sendabl
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13448,11 +15620,14 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection: Senda
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredDNSZoneRecordsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredDNSRecord] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13460,11 +15635,14 @@ public nonisolated struct Strato_Agent_V1_DesiredDNSZoneRecordsSection: Sendable
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListenersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredLoadBalancerListener] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13472,11 +15650,14 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerListenersSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackendsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredLoadBalancerBackend] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13484,11 +15665,14 @@ public nonisolated struct Strato_Agent_V1_DesiredLoadBalancerBackendsSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRulesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredNetworkACLRule] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13496,11 +15680,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkACLRulesSection: Sendabl
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkStateDnsServersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13508,11 +15695,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkStateDnsServersSection: 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkStateResolverAddressesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13520,11 +15710,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkStateResolverAddressesSe
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredFloatingIP] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13532,11 +15725,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection:
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkStateLoadBalancersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredLoadBalancer] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13544,11 +15740,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkStateLoadBalancersSectio
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredNetworkACL] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13556,11 +15755,14 @@ public nonisolated struct Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection:
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredRestoreArtifactsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_SandboxSnapshotArtifactDescriptor] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13568,11 +15770,14 @@ public nonisolated struct Strato_Agent_V1_DesiredRestoreArtifactsSection: Sendab
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRulesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredSecurityGroupRule] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13580,11 +15785,14 @@ public nonisolated struct Strato_Agent_V1_DesiredSecurityGroupRulesSection: Send
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredSnapshotExportUploadsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13592,11 +15800,14 @@ public nonisolated struct Strato_Agent_V1_DesiredSnapshotExportUploadsSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageVmsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredVMState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13604,11 +15815,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageVmsSection: Sendabl
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageSandboxesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredSandboxState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13616,11 +15830,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageSandboxesSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageNetworksSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredNetworkState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13628,11 +15845,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageNetworksSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageSecurityGroupsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredSecurityGroup] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13640,11 +15860,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageSecurityGroupsSecti
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageTombstonesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredWorkloadTombstone] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13652,11 +15875,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageTombstonesSection: 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageVolumesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredVolumeState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13664,11 +15890,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageVolumesSection: Sen
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageSnapshotsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredSnapshotState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13676,11 +15905,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageSnapshotsSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageCephCredentialRevocationsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredCephCredentialRevocation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13688,11 +15920,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageCephCredentialRevoc
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DesiredStateMessageDnsZonesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_DesiredDNSZone] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13700,11 +15935,14 @@ public nonisolated struct Strato_Agent_V1_DesiredStateMessageDnsZonesSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_DiskAttachmentRbdMonEndpointsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13712,11 +15950,14 @@ public nonisolated struct Strato_Agent_V1_DiskAttachmentRbdMonEndpointsSection: 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigPackagesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestPackage] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13724,11 +15965,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigPackagesSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigFilesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestFile] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13736,11 +15980,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigFilesSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigServicesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestService] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13748,11 +15995,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigServicesSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigSysctlsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestSysctl] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13760,11 +16010,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigSysctlsSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigObservationPackagesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestConfigPackageObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13772,11 +16025,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservationPackagesSection:
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigObservationFilesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestConfigFileObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13784,11 +16040,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservationFilesSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigObservationServicesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestConfigServiceObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13796,11 +16055,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservationServicesSection:
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestConfigObservationSysctlsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestConfigSysctlObservation] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13808,11 +16070,14 @@ public nonisolated struct Strato_Agent_V1_GuestConfigObservationSysctlsSection: 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestExecStartMessageCommandSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13820,11 +16085,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessageCommandSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestExecStartMessageEnvSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: Dictionary<String,String> = [:]
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13832,11 +16100,14 @@ public nonisolated struct Strato_Agent_V1_GuestExecStartMessageEnvSection: Senda
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestInfoInterfacesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestNetworkInterface] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13844,11 +16115,14 @@ public nonisolated struct Strato_Agent_V1_GuestInfoInterfacesSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_GuestNetworkInterfaceAddressesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_GuestIPAddress] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13856,11 +16130,14 @@ public nonisolated struct Strato_Agent_V1_GuestNetworkInterfaceAddressesSection:
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13868,11 +16145,14 @@ public nonisolated struct Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSec
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_IdentityPolicyAudiencesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13880,11 +16160,14 @@ public nonisolated struct Strato_Agent_V1_IdentityPolicyAudiencesSection: Sendab
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ImageInfoArtifactsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ArtifactInfo] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13892,11 +16175,14 @@ public nonisolated struct Strato_Agent_V1_ImageInfoArtifactsSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_InstanceMetadataNicsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_MetadataNIC] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13904,11 +16190,14 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadataNicsSection: Sendable 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13916,11 +16205,14 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSecti
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_InstanceMetadataTagsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: Dictionary<String,String> = [:]
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13928,11 +16220,14 @@ public nonisolated struct Strato_Agent_V1_InstanceMetadataTagsSection: Sendable 
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_MetadataNICDnsServersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13940,11 +16235,14 @@ public nonisolated struct Strato_Agent_V1_MetadataNICDnsServersSection: Sendable
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_MetadataNICResolverAddressesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13952,11 +16250,14 @@ public nonisolated struct Strato_Agent_V1_MetadataNICResolverAddressesSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_NetworkSpecDnsServersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13964,11 +16265,14 @@ public nonisolated struct Strato_Agent_V1_NetworkSpecDnsServersSection: Sendable
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13976,11 +16280,14 @@ public nonisolated struct Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_NetworkSpecResolverAddressesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -13988,11 +16295,14 @@ public nonisolated struct Strato_Agent_V1_NetworkSpecResolverAddressesSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_NodeDependencyObservationAffectedCapabilitiesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_NodeCapability] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14000,11 +16310,14 @@ public nonisolated struct Strato_Agent_V1_NodeDependencyObservationAffectedCapab
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedLoadBalancerBackend] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14012,11 +16325,14 @@ public nonisolated struct Strato_Agent_V1_ObservedLoadBalancerStateBackendsSecti
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedPortMembershipStateSecurityGroupIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14024,11 +16340,14 @@ public nonisolated struct Strato_Agent_V1_ObservedPortMembershipStateSecurityGro
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportVmsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedVMState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14036,11 +16355,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportVmsSection: Sendabl
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportSandboxesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedSandboxState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14048,11 +16370,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportSandboxesSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportUnrecognizedSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_UnrecognizedWorkload] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14060,11 +16385,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportUnrecognizedSection
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportVolumesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedVolumeState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14072,11 +16400,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportVolumesSection: Sen
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportSnapshotsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedSnapshotState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14084,11 +16415,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportSnapshotsSection: S
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportLoadBalancersSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedLoadBalancerState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14096,11 +16430,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportLoadBalancersSectio
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportNetworksSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedNetworkState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14108,11 +16445,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportNetworksSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportSecurityGroupsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedSecurityGroupState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14120,11 +16460,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportSecurityGroupsSecti
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportPortMembershipsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedPortMembershipState] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14132,11 +16475,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportPortMembershipsSect
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStateReportStorageDevicesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_ObservedStorageDevice] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14144,11 +16490,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStateReportStorageDevicesSecti
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedStorageDeviceUsesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_StorageDeviceUse] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14156,11 +16505,14 @@ public nonisolated struct Strato_Agent_V1_ObservedStorageDeviceUsesSection: Send
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ObservedVMStateAppliedNetworkInterfaceIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14168,11 +16520,14 @@ public nonisolated struct Strato_Agent_V1_ObservedVMStateAppliedNetworkInterface
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_WorkloadEnforcementAcknowledgement] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14180,11 +16535,14 @@ public nonisolated struct Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledge
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivityActiveExecSessionIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14192,11 +16550,14 @@ public nonisolated struct Strato_Agent_V1_SandboxGuestIdleActivityActiveExecSess
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReportActiveExecSessionIdsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14204,11 +16565,14 @@ public nonisolated struct Strato_Agent_V1_SandboxIdleActivityReportActiveExecSes
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14216,11 +16580,14 @@ public nonisolated struct Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSec
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxSnapshotRefArtifactsSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_SandboxSnapshotArtifactDescriptor] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14228,11 +16595,14 @@ public nonisolated struct Strato_Agent_V1_SandboxSnapshotRefArtifactsSection: Se
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxSpecEntrypointSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14240,11 +16610,14 @@ public nonisolated struct Strato_Agent_V1_SandboxSpecEntrypointSection: Sendable
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxSpecCmdSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14252,11 +16625,14 @@ public nonisolated struct Strato_Agent_V1_SandboxSpecCmdSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_SandboxSpecEnvSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: Dictionary<String,String> = [:]
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14264,11 +16640,14 @@ public nonisolated struct Strato_Agent_V1_SandboxSpecEnvSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_VMSpecVolumesSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_VolumeSpec] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14276,11 +16655,14 @@ public nonisolated struct Strato_Agent_V1_VMSpecVolumesSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_VMSpecNetworksSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [Strato_Agent_V1_NetworkSpec] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -14288,11 +16670,14 @@ public nonisolated struct Strato_Agent_V1_VMSpecNetworksSection: Sendable {
   public init() {}
 }
 
+/// Collection presence is separate from its contents; the enclosing field
+/// defines whether absence is permitted.
 public nonisolated struct Strato_Agent_V1_VMSpecSshAuthorizedKeysSection: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
+  /// Collection contents; the enclosing field carries presence.
   public var values: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()

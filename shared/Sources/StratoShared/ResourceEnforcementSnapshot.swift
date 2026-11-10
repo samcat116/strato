@@ -43,31 +43,6 @@ extension Strato_Agent_V1_ResourceEnforcementSnapshot: Codable {
         try container.encode(_jsonAcknowledgements, forKey: .acknowledgements)
     }
 
-    var _jsonAgentBootID: UUID {
-        get { UUID(uuidString: agentBootID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; agentBootID = value.uuidString }
-    }
-    var _jsonSequence: Int64 {
-        get { sequence }
-        set { let value = newValue; sequence = value }
-    }
-    var _jsonSampledAt: Date {
-        get { sampledAt.date }
-        set { let value = newValue; sampledAt = Google_Protobuf_Timestamp(date: value) }
-    }
-    var _jsonInventoryComplete: Bool {
-        get { inventoryComplete }
-        set { let value = newValue; inventoryComplete = value }
-    }
-    var _jsonAcknowledgements: [WorkloadEnforcementAcknowledgement] {
-        get { acknowledgements.values }
-        set {
-            let value = newValue;
-            acknowledgements = Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection.with {
-                $0.values = value
-            }
-        }
-    }
 }
 
 /// Certifies successful guarded backend convergence AND exactly-once inclusion
@@ -140,52 +115,4 @@ extension Strato_Agent_V1_WorkloadEnforcementAcknowledgement: Codable {
         try container.encode(_jsonOwnershipVerified, forKey: .ownershipVerified)
     }
 
-    var _jsonKind: WorkloadKind {
-        get { kind }
-        set { let value = newValue; kind = value }
-    }
-    var _jsonWorkloadId: UUID {
-        get { UUID(uuidString: workloadID) ?? UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) }
-        set { let value = newValue; workloadID = value.uuidString }
-    }
-    var _jsonAppliedGeneration: Int64 {
-        get { appliedGeneration }
-        set { let value = newValue; appliedGeneration = value }
-    }
-    var _jsonResourceClass: WorkloadResourceClassSnapshot {
-        get { resourceClass }
-        set { let value = newValue; resourceClass = value }
-    }
-    var _jsonBackend: WorkloadResourceClassBackend {
-        get { backend }
-        set { let value = newValue; backend = value }
-    }
-    var _jsonAccountedReservation: WorkloadAdmittedReservation {
-        get { accountedReservation }
-        set { let value = newValue; accountedReservation = value }
-    }
-    var _jsonRuntimeGuestBytes: Int64 {
-        get { runtimeGuestBytes }
-        set { let value = newValue; runtimeGuestBytes = value }
-    }
-    var _jsonPageSizeBytes: Int64 {
-        get { pageSizeBytes }
-        set { let value = newValue; pageSizeBytes = value }
-    }
-    var _jsonDesiredLimits: WorkloadRuntimeLimits {
-        get { desiredLimits }
-        set { let value = newValue; desiredLimits = value }
-    }
-    var _jsonAppliedLimits: WorkloadRuntimeLimits {
-        get { appliedLimits }
-        set { let value = newValue; appliedLimits = value }
-    }
-    var _jsonCpuQuotaUnlimited: Bool {
-        get { cpuQuotaUnlimited }
-        set { let value = newValue; cpuQuotaUnlimited = value }
-    }
-    var _jsonOwnershipVerified: Bool {
-        get { ownershipVerified }
-        set { let value = newValue; ownershipVerified = value }
-    }
 }

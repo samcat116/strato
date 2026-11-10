@@ -760,8 +760,8 @@ extension NetworkServiceLinux {
                     networkName: network.name,
                     subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
                     gateway: network.gateway,
-                    dnsServers: network.dnsServers.values, domainName: network.hasDomainName ? network.domainName : nil,
-                    leaseTime: network.hasLeaseTime ? Int(network.leaseTime) : nil,
+                    dnsServers: network.dnsServers.values, domainName: network.optionalDomainName,
+                    leaseTime: network.optionalLeaseTime.map(Int.init),
                     // `== true`, matching how the topology plan reads these
                     // fields: a control plane with no opinion advertises no
                     // route rather than one to an address it never asked to
@@ -776,7 +776,7 @@ extension NetworkServiceLinux {
                 _ = try await ensureDHCPOptions6(
                     networkId: validatedProtocolUUID(network.networkID), networkName: network.name,
                     subnet6: network.subnet6,
-                    dnsServers: network.dnsServers.values, domainName: network.hasDomainName ? network.domainName : nil,
+                    dnsServers: network.dnsServers.values, domainName: network.optionalDomainName,
                     resolverAddresses: network.resolverEnabled == true
                         ? network.resolverAddresses.values : [])
             }
