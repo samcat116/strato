@@ -23,11 +23,11 @@ extension FirecrackerSandboxRuntime {
             guestVersion: guestImage.version,
             arch: guestImage.arch,
             firecrackerFingerprint: firecrackerFingerprint,
-            vcpus: spec.cpus,
+            vcpus: Int(spec.cpus),
             memoryMiB: spec.memoryBytes / (1024 * 1024),
             configCapacityBytes: SandboxConfigDrive.standardBlockImageBytes,
             jailed: jailNewSandboxes,
-            cpuTemplate: spec.cpuTemplate,
+            cpuTemplate: spec.optionalCpuTemplate,
             nicCount: nicCount)
     }
 

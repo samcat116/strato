@@ -128,7 +128,7 @@ struct VolumeMaterializationAdmissionTests {
             desiredStatus: .present,
             generation: 1,
             sizeBytes: 10 * gib,
-            format: DiskFormat.qcow2.rawValue,
+            format: DiskFormat.qcow2.protocolValue,
             source: DesiredVolumeSource(
                 kind: DesiredVolumeSource.image,
                 imageInfo: imageInfo,
@@ -196,7 +196,7 @@ struct VolumeMaterializationAdmissionTests {
             desiredStatus: .present,
             generation: 1,
             sizeBytes: 10 * gib,
-            format: DiskFormat.qcow2.rawValue,
+            format: DiskFormat.qcow2.protocolValue,
             source: DesiredVolumeSource(
                 kind: DesiredVolumeSource.image,
                 imageInfo: imageInfo,

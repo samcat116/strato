@@ -1,21 +1,56 @@
 import Foundation
+import SwiftProtobuf
 
 /// On-disk image formats a file-backed storage layer can produce.
 ///
 /// This is part of the wire contract only for `.file` attachments. Block
 /// devices and native network storage do not acquire a file format merely
 /// because a hypervisor needs to choose a driver for them.
-public enum DiskFormat: String, Codable, Sendable, CaseIterable {
-    case qcow2
-    case raw
+public typealias DiskFormat = Strato_Agent_V1_DiskFormat
+extension Strato_Agent_V1_DiskFormat: Codable {
 
     /// File extension used by the filesystem backend's path layout.
-    public var fileExtension: String { rawValue }
+    public var fileExtension: String { protocolValue }
 
     /// Best-effort inference for historical file attachments that carried only
     /// a path. Unknown extensions preserve the former qcow2 assumption.
     public init(volumePath: String) {
         self = DiskFormat(rawValue: (volumePath as NSString).pathExtension) ?? .qcow2
+    }
+
+    public var protocolValue: String {
+        switch self {
+        case .qcow2: return "qcow2"
+        case .raw: return "raw"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "qcow2": self = .qcow2
+        case "raw": self = .raw
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.qcow2, .raw] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
     }
 }
 
@@ -26,21 +61,119 @@ public enum DiskFormat: String, Codable, Sendable, CaseIterable {
 /// defaults; `direct` asks the agent to use direct I/O only when its live
 /// capability probe succeeds; and `cachedShared` explicitly retains the host
 /// page cache for read-mostly images whose backing pages can be shared.
-public enum VolumeBlockMode: String, Codable, Sendable, CaseIterable {
-    case conservative
-    case direct
-    case cachedShared
+public typealias VolumeBlockMode = Strato_Agent_V1_VolumeBlockMode
+extension Strato_Agent_V1_VolumeBlockMode: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .conservative: return "conservative"
+        case .direct: return "direct"
+        case .cachedShared: return "cachedShared"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "conservative": self = .conservative
+        case "direct": self = .direct
+        case "cachedShared": self = .cachedShared
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.conservative, .direct, .cachedShared] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// A QEMU cache value that an agent has actually selected.
-public enum BlockDeviceCacheMode: String, Codable, Sendable {
-    case none
-    case writeback
+public typealias BlockDeviceCacheMode = Strato_Agent_V1_BlockDeviceCacheMode
+extension Strato_Agent_V1_BlockDeviceCacheMode: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .none: return "none"
+        case .writeback: return "writeback"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "none": self = .none
+        case "writeback": self = .writeback
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// A QEMU asynchronous-I/O engine that an agent has actually selected.
-public enum BlockDeviceIOMode: String, Codable, Sendable {
-    case ioUring = "io_uring"
+public typealias BlockDeviceIOMode = Strato_Agent_V1_BlockDeviceIOMode
+extension Strato_Agent_V1_BlockDeviceIOMode: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .ioUring: return "io_uring"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "io_uring": self = .ioUring
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// The complete block-device policy an agent selected for one attachment.
@@ -49,15 +182,8 @@ public enum BlockDeviceIOMode: String, Codable, Sendable {
 /// the corresponding libvirt XML attribute was deliberately omitted. An
 /// inactive value is the explicit current-agent report for a detached volume;
 /// absence of the whole structure means an older agent did not report policy.
-public struct AppliedBlockDevicePolicy: Codable, Equatable, Sendable {
-    public let active: Bool
-    public let requestedMode: VolumeBlockMode
-    public let cacheMode: BlockDeviceCacheMode?
-    public let ioMode: BlockDeviceIOMode?
-    public let discard: Bool
-    public let nonRotational: Bool
-    public let queueCount: Int?
-    public let fallbackReason: String?
+public typealias AppliedBlockDevicePolicy = Strato_Agent_V1_AppliedBlockDevicePolicy
+extension Strato_Agent_V1_AppliedBlockDevicePolicy: Codable {
 
     public init(
         active: Bool,
@@ -69,19 +195,52 @@ public struct AppliedBlockDevicePolicy: Codable, Equatable, Sendable {
         queueCount: Int? = nil,
         fallbackReason: String? = nil
     ) {
-        self.active = active
-        self.requestedMode = requestedMode
-        self.cacheMode = cacheMode
-        self.ioMode = ioMode
-        self.discard = discard
-        self.nonRotational = nonRotational
-        self.queueCount = queueCount
-        self.fallbackReason = fallbackReason
+        self.init()
+        self._jsonActive = active
+        self._jsonRequestedMode = requestedMode
+        self._jsonCacheMode = cacheMode
+        self._jsonIoMode = ioMode
+        self._jsonDiscard = discard
+        self._jsonNonRotational = nonRotational
+        self._jsonQueueCount = queueCount
+        self._jsonFallbackReason = fallbackReason
     }
 
     public static func inactive(requestedMode: VolumeBlockMode) -> Self {
         Self(active: false, requestedMode: requestedMode)
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case active; case requestedMode; case cacheMode; case ioMode; case discard; case nonRotational; case queueCount;
+        case fallbackReason
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonActive = try container.decode(Bool.self, forKey: .active)
+        self._jsonRequestedMode = try container.decode(VolumeBlockMode.self, forKey: .requestedMode)
+        self._jsonCacheMode = try container.decodeIfPresent(BlockDeviceCacheMode.self, forKey: .cacheMode)
+        self._jsonIoMode = try container.decodeIfPresent(BlockDeviceIOMode.self, forKey: .ioMode)
+        self._jsonDiscard = try container.decode(Bool.self, forKey: .discard)
+        self._jsonNonRotational = try container.decode(Bool.self, forKey: .nonRotational)
+        self._jsonQueueCount = try container.decodeIfPresent(Int.self, forKey: .queueCount)
+        self._jsonFallbackReason = try container.decodeIfPresent(String.self, forKey: .fallbackReason)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonActive, forKey: .active)
+        try container.encode(_jsonRequestedMode, forKey: .requestedMode)
+        try container.encodeIfPresent(_jsonCacheMode, forKey: .cacheMode)
+        try container.encodeIfPresent(_jsonIoMode, forKey: .ioMode)
+        try container.encode(_jsonDiscard, forKey: .discard)
+        try container.encode(_jsonNonRotational, forKey: .nonRotational)
+        try container.encodeIfPresent(_jsonQueueCount, forKey: .queueCount)
+        try container.encodeIfPresent(_jsonFallbackReason, forKey: .fallbackReason)
+    }
+
 }
 
 /// A storage-backend-owned disk reference that a hypervisor can realize.
@@ -89,27 +248,4 @@ public struct AppliedBlockDevicePolicy: Codable, Equatable, Sendable {
 /// The cases are intentionally exhaustive rather than a path plus optional
 /// network coordinates. A caller must choose the correct realization instead
 /// of interpreting one string differently according to pool configuration.
-public enum DiskAttachment: Codable, Equatable, Sendable {
-    /// A regular host file whose image format must be declared to the
-    /// hypervisor.
-    case file(path: String, format: DiskFormat)
-    /// A host block device, such as a krbd or LVM mapping.
-    case blockDevice(path: String)
-    /// A native RADOS Block Device opened by a network-capable hypervisor.
-    ///
-    /// These are canonical, non-secret coordinates. `clusterId` distinguishes
-    /// clusters that happen to use the same pool and image names;
-    /// `credentialId` is also the deterministic libvirt secret UUID; and
-    /// `configPath` points at the durable client configuration materialized on
-    /// every eligible agent. The keyring itself never travels in an attachment.
-    case rbd(
-        pool: String,
-        image: String,
-        namespace: String,
-        user: String,
-        monEndpoints: [String],
-        clusterId: UUID,
-        credentialId: UUID,
-        configPath: String
-    )
-}
+public typealias DiskAttachment = Strato_Agent_V1_DiskAttachment

@@ -39,7 +39,7 @@ struct GuestConfigClientTests {
     @Test func boundedExchangeReturnsFactsAndClosesConnection() async throws {
         let connection = Connection(response())
         let observed = try await client(connection).converge(
-            placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+            placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { true })
         #expect(observed.status == .converged)
         #expect(await connection.closed)
         let writes = await connection.writes
@@ -59,7 +59,7 @@ struct GuestConfigClientTests {
                     """)
             let failure = await #expect(throws: GuestConfigurationFailure.self) {
                 try await client(connection).converge(
-                    placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+                    placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { true })
             }
             #expect(failure?.failureClassification == .waitingOnDependency)
             #expect(failure?.errorDescription?.contains(GuestAgentBootstrap.defaultRelease) == true)
@@ -85,7 +85,7 @@ struct GuestConfigClientTests {
                 if digest == expected {
                     let observation = try await client(connection).converge(
                         placement: placement, config: config, generation: 7, placementIsCurrent: { true })
-                    #expect(observation.files.first?.sha256 == expected)
+                    #expect(observation.files.values.first?.sha256 == expected)
                 } else {
                     await #expect(throws: GuestConfigObservationError.self) {
                         try await client(connection).converge(
@@ -132,7 +132,7 @@ struct GuestConfigClientTests {
             let connection = Connection(invalid)
             await #expect(throws: (any Error).self) {
                 try await client(connection).converge(
-                    placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+                    placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { true })
             }
             #expect(await connection.closed)
         }
@@ -140,13 +140,13 @@ struct GuestConfigClientTests {
     @Test func failureIsAnObservationAndPlacementGuardPreventsWrites() async throws {
         let connection = Connection(response(status: "failed", error: #""package operation budget exhausted""#))
         let observed = try await client(connection).converge(
-            placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+            placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { true })
         #expect(observed.status == .failed)
         #expect(observed.error == "package operation budget exhausted")
         let refused = Connection(response())
         await #expect(throws: VMExecBridgeError.self) {
             try await client(refused).converge(
-                placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { false })
+                placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { false })
         }
         #expect(await refused.writes.isEmpty)
     }
@@ -155,13 +155,13 @@ struct GuestConfigClientTests {
             #"{"type":"error","nonce":"boot","message":"guest configuration convergence busy or unavailable"}"#)
         let error = await #expect(throws: GuestConfigurationFailure.self) {
             try await client(connection).converge(
-                placement: placement, config: GuestConfig(), generation: 7, placementIsCurrent: { true })
+                placement: placement, config: GuestConfig.empty, generation: 7, placementIsCurrent: { true })
         }
         #expect(error?.failureClassification == .waitingOnDependency)
         #expect(await connection.closed)
         let id = UUID()
         let spec = VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil))
-        for config in [nil, GuestConfig()] as [GuestConfig?] {
+        for config in [nil, GuestConfig.empty] as [GuestConfig?] {
             let entry = DesiredVMState(
                 vmId: id, hypervisorType: .qemu, spec: spec, desiredStatus: .running, generation: 8, guestConfig: config
             )

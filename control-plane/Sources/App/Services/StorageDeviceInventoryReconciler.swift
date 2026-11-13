@@ -57,24 +57,24 @@ struct StorageDeviceInventoryReconciler: Sendable {
             var seen = Set<UUID>()
             for item in validated {
                 let device: StorageDevice
-                if let identity = item.observation.identity,
+                if let identity = item.observation.optionalIdentity,
                     let stored = stableByIdentity[identity]
                 {
                     device = stored
-                } else if item.observation.identity == nil,
+                } else if !item.observation.hasIdentity,
                     let stored = presentAnonymousByPath[item.observation.devicePath]
                 {
                     device = stored
                 } else {
                     device = StorageDevice(
                         agentID: agentID,
-                        identityKind: item.observation.identity?.kind,
-                        identityValue: item.observation.identity?.value,
+                        identityKind: item.observation.optionalIdentity?.kind,
+                        identityValue: item.observation.optionalIdentity?.value,
                         devicePath: item.observation.devicePath,
                         sizeBytes: item.observation.sizeBytes,
-                        model: item.observation.model,
-                        serial: item.observation.serial,
-                        wwn: item.observation.wwn,
+                        model: item.observation.optionalModel,
+                        serial: item.observation.optionalSerial,
+                        wwn: item.observation.optionalWwn,
                         rotational: item.observation.rotational,
                         uses: item.uses,
                         state: item.observation.state,
@@ -84,15 +84,15 @@ struct StorageDeviceInventoryReconciler: Sendable {
 
                 device.devicePath = item.observation.devicePath
                 device.sizeBytes = item.observation.sizeBytes
-                device.model = item.observation.model
-                device.serial = item.observation.serial
-                device.wwn = item.observation.wwn
+                device.model = item.observation.optionalModel
+                device.serial = item.observation.optionalSerial
+                device.wwn = item.observation.optionalWwn
                 device.rotational = item.observation.rotational
                 device.uses = item.uses
                 device.state = item.observation.state
                 device.present = true
                 device.lastSeenAt = receivedAt
-                if item.observation.identity == nil {
+                if !item.observation.hasIdentity {
                     device.identityKind = nil
                     device.identityValue = nil
                     device.role = .unassigned
@@ -121,6 +121,9 @@ struct StorageDeviceInventoryReconciler: Sendable {
         result.reserveCapacity(observations.count)
 
         for observation in observations {
+            do { try observation.validateProtocol() } catch {
+                throw StorageDeviceInventoryError.invalidObservation("invalid protocol fields")
+            }
             guard observation.devicePath.hasPrefix("/dev/"), observation.devicePath.count > 5 else {
                 throw StorageDeviceInventoryError.invalidObservation("invalid device path")
             }
@@ -132,17 +135,19 @@ struct StorageDeviceInventoryReconciler: Sendable {
             }
 
             let preferredIdentity = StorageDeviceIdentity.preferred(
-                wwn: observation.wwn,
-                serial: observation.serial)
-            guard observation.identity == preferredIdentity else {
+                wwn: observation.optionalWwn,
+                serial: observation.optionalSerial)
+            guard observation.optionalIdentity == preferredIdentity else {
                 throw StorageDeviceInventoryError.invalidObservation("identity does not match raw facts")
             }
-            if let identity = observation.identity, !identities.insert(identity).inserted {
+            if let identity = observation.optionalIdentity,
+                !identities.insert(identity).inserted
+            {
                 throw StorageDeviceInventoryError.invalidObservation("duplicate stable identity")
             }
 
-            let uniqueUses = Set(observation.uses)
-            guard uniqueUses.count == observation.uses.count else {
+            let uniqueUses = Set(observation.uses.values)
+            guard uniqueUses.count == observation.uses.values.count else {
                 throw StorageDeviceInventoryError.invalidObservation("duplicate device use")
             }
             switch observation.state {
@@ -156,6 +161,8 @@ struct StorageDeviceInventoryReconciler: Sendable {
                 }
             case .faulted:
                 break
+            case .unspecified, .UNRECOGNIZED:
+                throw StorageDeviceInventoryError.invalidObservation("unknown device state")
             case .draining:
                 throw StorageDeviceInventoryError.invalidObservation("agent cannot report draining")
             }
@@ -163,7 +170,7 @@ struct StorageDeviceInventoryReconciler: Sendable {
             result.append(
                 ValidatedObservation(
                     observation: observation,
-                    uses: uniqueUses.sorted { $0.rawValue < $1.rawValue }))
+                    uses: uniqueUses.sorted { $0.protocolValue < $1.protocolValue }))
         }
         return result
     }

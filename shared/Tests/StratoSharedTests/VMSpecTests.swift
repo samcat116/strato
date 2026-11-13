@@ -1,27 +1,27 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("VMSpec wire format")
 struct VMSpecTests {
     @Test func diskBootRoundTrip() throws {
         let spec = VMSpec(cpus: 1, memoryBytes: 536_870_912, boot: .disk(firmware: "/fw/OVMF.fd"))
         let decoded = try roundTrip(spec)
-        guard case .disk(let firmware) = decoded.boot else {
+        guard case .disk(let disk) = decoded.boot.value else {
             Issue.record("expected .disk, got \(decoded.boot)")
             return
         }
-        #expect(firmware == "/fw/OVMF.fd")
+        #expect(disk.firmware == "/fw/OVMF.fd")
     }
 
     @Test func diskBootWithDefaultFirmwareRoundTrip() throws {
         let spec = VMSpec(cpus: 1, memoryBytes: 536_870_912, boot: .disk(firmware: nil))
         let decoded = try roundTrip(spec)
-        guard case .disk(let firmware) = decoded.boot else {
+        guard case .disk(let disk) = decoded.boot.value else {
             Issue.record("expected .disk, got \(decoded.boot)")
             return
         }
-        #expect(firmware == nil)
+        #expect(!disk.hasFirmware)
     }
 
     @Test func directKernelBootRoundTrip() throws {
@@ -32,13 +32,13 @@ struct VMSpecTests {
                 kernel: "/boot/vmlinux", initramfs: "/boot/initrd", cmdline: "console=ttyS0 root=/dev/vda")
         )
         let decoded = try roundTrip(spec)
-        guard case .directKernel(let kernel, let initramfs, let cmdline) = decoded.boot else {
+        guard case .directKernel(let kernel) = decoded.boot.value else {
             Issue.record("expected .directKernel, got \(decoded.boot)")
             return
         }
-        #expect(kernel == "/boot/vmlinux")
-        #expect(initramfs == "/boot/initrd")
-        #expect(cmdline == "console=ttyS0 root=/dev/vda")
+        #expect(kernel.kernel == "/boot/vmlinux")
+        #expect(kernel.initramfs == "/boot/initrd")
+        #expect(kernel.cmdline == "console=ttyS0 root=/dev/vda")
     }
 
     @Test func fullSpecRoundTrip() throws {
@@ -66,48 +66,48 @@ struct VMSpecTests {
             console: ConsoleSpec()
         )
         let decoded = try roundTrip(spec)
-        #expect(decoded.cpus == 4)
-        #expect(decoded.maxCpus == 8)
-        #expect(decoded.memoryBytes == 8_589_934_592)
-        #expect(decoded.sharedMemory)
-        #expect(decoded.hugepages)
+        #expect(decoded._jsonCpus == 4)
+        #expect(decoded._jsonMaxCpus == 8)
+        #expect(decoded._jsonMemoryBytes == 8_589_934_592)
+        #expect(decoded._jsonSharedMemory)
+        #expect(decoded._jsonHugepages)
 
-        #expect(decoded.volumes.count == 2)
-        #expect(decoded.volumes[0].volumeId == Fixtures.uuidA)
-        #expect(decoded.volumes[0].deviceName.rawValue == "disk0")
-        #expect(decoded.volumes[0].attachment == .file(path: "/v/disk0.qcow2", format: .qcow2))
-        #expect(decoded.volumes[0].bootOrder == 0)
-        #expect(decoded.volumes[1].volumeId == Fixtures.uuidB)
-        #expect(decoded.volumes[1].readonly)
-        #expect(decoded.volumes[1].attachment == nil)
+        #expect(decoded._jsonVolumes.count == 2)
+        #expect(decoded._jsonVolumes[0]._jsonVolumeId == Fixtures.uuidA)
+        #expect(decoded._jsonVolumes[0]._jsonDeviceName.rawValue == "disk0")
+        #expect(decoded._jsonVolumes[0]._jsonAttachment == .file(path: "/v/disk0.qcow2", format: .qcow2))
+        #expect(decoded._jsonVolumes[0]._jsonBootOrder == 0)
+        #expect(decoded._jsonVolumes[1]._jsonVolumeId == Fixtures.uuidB)
+        #expect(decoded._jsonVolumes[1]._jsonReadonly)
+        #expect(decoded._jsonVolumes[1]._jsonAttachment == nil)
 
-        #expect(decoded.networks.count == 2)
-        #expect(decoded.networks[0].network == "default")
-        #expect(decoded.networks[0].mtu == 9000)
-        #expect(decoded.networks[1].network == "storage")
-        #expect(decoded.networks[1].macAddress == nil)
+        #expect(decoded._jsonNetworks.count == 2)
+        #expect(decoded._jsonNetworks[0]._jsonNetwork == "default")
+        #expect(decoded._jsonNetworks[0]._jsonMtu == 9000)
+        #expect(decoded._jsonNetworks[1]._jsonNetwork == "storage")
+        #expect(decoded._jsonNetworks[1]._jsonMacAddress == nil)
 
-        #expect(decoded.console != nil)
+        #expect(decoded._jsonConsole != nil)
     }
 
     @Test func minimalSpecRoundTrip() throws {
         let decoded = try roundTrip(VMSpec(cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil)))
-        #expect(decoded.maxCpus == 1)
-        #expect(!decoded.sharedMemory)
-        #expect(!decoded.hugepages)
-        #expect(decoded.volumes.isEmpty)
-        #expect(decoded.networks.isEmpty)
-        #expect(decoded.console == nil)
-        #expect(decoded.diskBytes == nil)
-        #expect(!decoded.guestAgentEnabled)
-        #expect(decoded.metadataSource == .iso)
+        #expect(decoded._jsonMaxCpus == 1)
+        #expect(!decoded._jsonSharedMemory)
+        #expect(!decoded._jsonHugepages)
+        #expect(decoded._jsonVolumes.isEmpty)
+        #expect(decoded._jsonNetworks.isEmpty)
+        #expect(decoded._jsonConsole == nil)
+        #expect(decoded._jsonDiskBytes == nil)
+        #expect(!decoded._jsonGuestAgentEnabled)
+        #expect(decoded._jsonMetadataSource == .iso)
     }
 
     @Test func guestAgentOptInRoundTrips() throws {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
             guestAgentEnabled: true)
-        #expect(try roundTrip(spec).guestAgentEnabled)
+        #expect(try roundTrip(spec)._jsonGuestAgentEnabled)
     }
 
     @Test func specWithoutGuestAgentFlagDefaultsOff() throws {
@@ -116,14 +116,14 @@ struct VMSpecTests {
              "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
              "sshAuthorizedKeys":[]}
             """
-        #expect(try decodeJSON(VMSpec.self, from: json).guestAgentEnabled == false)
+        #expect(try decodeJSON(VMSpec.self, from: json)._jsonGuestAgentEnabled == false)
     }
 
     @Test func metadataSourceRoundTrips() throws {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
             metadataSource: .imds)
-        #expect(try roundTrip(spec).metadataSource == .imds)
+        #expect(try roundTrip(spec)._jsonMetadataSource == .imds)
     }
 
     @Test func specWithoutMetadataSourceDefaultsToISO() throws {
@@ -132,7 +132,7 @@ struct VMSpecTests {
              "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
              "sshAuthorizedKeys":[]}
             """
-        #expect(try decodeJSON(VMSpec.self, from: json).metadataSource == .iso)
+        #expect(try decodeJSON(VMSpec.self, from: json)._jsonMetadataSource == .iso)
     }
 
     @Test func copyHelpersReplaceOnlyTheirOwnedFields() {
@@ -144,31 +144,31 @@ struct VMSpecTests {
             guestAgentEnabled: true, volumes: [volume], networks: [network], metadataSource: .imds)
 
         let withoutVolumes = spec.withVolumes([])
-        #expect(withoutVolumes.volumes.isEmpty)
-        #expect(withoutVolumes.networks == [network])
-        #expect(withoutVolumes.guestAgentEnabled)
+        #expect(withoutVolumes._jsonVolumes.isEmpty)
+        #expect(withoutVolumes._jsonNetworks == [network])
+        #expect(withoutVolumes._jsonGuestAgentEnabled)
 
         let withoutNetworks = spec.withNetworks([])
-        #expect(withoutNetworks.networks.isEmpty)
-        #expect(withoutNetworks.volumes.first?.volumeId == Fixtures.uuidA)
-        #expect(withoutNetworks.metadataSource == .imds)
+        #expect(withoutNetworks._jsonNetworks.isEmpty)
+        #expect(withoutNetworks._jsonVolumes.first?._jsonVolumeId == Fixtures.uuidA)
+        #expect(withoutNetworks._jsonMetadataSource == .imds)
 
         let desired = VMSpec(
             cpus: 2, maxCpus: 4, memoryBytes: 2_048, maxMemoryBytes: 4_096,
             balloonTargetBytes: 1_024, diskBytes: 20, sharedMemory: true,
             boot: .directKernel(kernel: "/different", initramfs: nil, cmdline: nil))
         let resized = spec.withSizing(from: desired)
-        #expect(resized.cpus == 2)
-        #expect(resized.maxCpus == 4)
-        #expect(resized.memoryBytes == 2_048)
-        #expect(resized.maxMemoryBytes == 4_096)
-        #expect(resized.balloonTargetBytes == 1_024)
-        #expect(resized.diskBytes == 20)
-        #expect(!resized.sharedMemory)
-        #expect(resized.volumes.first?.volumeId == Fixtures.uuidA)
-        #expect(resized.networks == [network])
-        #expect(resized.guestAgentEnabled)
-        #expect(resized.metadataSource == .imds)
+        #expect(resized._jsonCpus == 2)
+        #expect(resized._jsonMaxCpus == 4)
+        #expect(resized._jsonMemoryBytes == 2_048)
+        #expect(resized._jsonMaxMemoryBytes == 4_096)
+        #expect(resized._jsonBalloonTargetBytes == 1_024)
+        #expect(resized._jsonDiskBytes == 20)
+        #expect(!resized._jsonSharedMemory)
+        #expect(resized._jsonVolumes.first?._jsonVolumeId == Fixtures.uuidA)
+        #expect(resized._jsonNetworks == [network])
+        #expect(resized._jsonGuestAgentEnabled)
+        #expect(resized._jsonMetadataSource == .imds)
     }
 
     @Test func unknownMetadataSourceFailsDecode() {
@@ -186,7 +186,7 @@ struct VMSpecTests {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, diskBytes: 10_737_418_240, boot: .disk(firmware: nil))
         let decoded = try roundTrip(spec)
-        #expect(decoded.diskBytes == 10_737_418_240)
+        #expect(decoded._jsonDiskBytes == 10_737_418_240)
     }
 
     /// `diskBytes` remains semantic optionality: nil means the caller has no
@@ -198,8 +198,8 @@ struct VMSpecTests {
              "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
-        #expect(decoded.diskBytes == nil)
-        #expect(decoded.cpus == 2)
+        #expect(decoded._jsonDiskBytes == nil)
+        #expect(decoded._jsonCpus == 2)
     }
 
     @Test func maxMemoryBytesRoundTrip() throws {
@@ -207,15 +207,15 @@ struct VMSpecTests {
             cpus: 2, maxCpus: 8, memoryBytes: 1_073_741_824, maxMemoryBytes: 8_589_934_592,
             boot: .disk(firmware: nil))
         let decoded = try roundTrip(spec)
-        #expect(decoded.maxMemoryBytes == 8_589_934_592)
-        #expect(decoded.memoryBytes == 1_073_741_824)
+        #expect(decoded._jsonMaxMemoryBytes == 8_589_934_592)
+        #expect(decoded._jsonMemoryBytes == 1_073_741_824)
     }
 
     /// No headroom requested: the ceiling is the boot size, which is what
     /// tells the agent not to realize a hot-pluggable memory device at all.
     @Test func maxMemoryBytesDefaultsToMemory() throws {
         let spec = VMSpec(cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil))
-        #expect(spec.maxMemoryBytes == 268_435_456)
+        #expect(spec._jsonMaxMemoryBytes == 268_435_456)
     }
 
     /// A ceiling below the boot size is meaningless; it clamps rather than
@@ -223,7 +223,7 @@ struct VMSpecTests {
     @Test func maxMemoryBytesBelowMemoryClamps() throws {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, maxMemoryBytes: 1024, boot: .disk(firmware: nil))
-        #expect(spec.maxMemoryBytes == 268_435_456)
+        #expect(spec._jsonMaxMemoryBytes == 268_435_456)
     }
 
     @Test func currentSpecRequiresMaxMemoryBytes() throws {
@@ -243,14 +243,14 @@ struct VMSpecTests {
             cpus: 2, memoryBytes: 4_294_967_296, balloonTargetBytes: 2_147_483_648,
             boot: .disk(firmware: nil))
         let decoded = try roundTrip(spec)
-        #expect(decoded.balloonTargetBytes == 2_147_483_648)
+        #expect(decoded._jsonBalloonTargetBytes == 2_147_483_648)
     }
 
     /// No target is the default and means "guest keeps its whole grant" — the
     /// state every VM was in before the field existed.
     @Test func balloonTargetDefaultsToNil() throws {
         let spec = VMSpec(cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil))
-        #expect(spec.balloonTargetBytes == nil)
+        #expect(spec._jsonBalloonTargetBytes == nil)
     }
 
     /// A balloon can only take memory away, never hand out more than the
@@ -260,7 +260,7 @@ struct VMSpecTests {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, balloonTargetBytes: 1_073_741_824,
             boot: .disk(firmware: nil))
-        #expect(spec.balloonTargetBytes == 268_435_456)
+        #expect(spec._jsonBalloonTargetBytes == 268_435_456)
     }
 
     /// No balloon target is a current semantic choice, not a compatibility
@@ -272,7 +272,7 @@ struct VMSpecTests {
              "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
-        #expect(decoded.balloonTargetBytes == nil)
+        #expect(decoded._jsonBalloonTargetBytes == nil)
     }
 
     @Test func userDataRoundTrip() throws {
@@ -280,7 +280,7 @@ struct VMSpecTests {
         let spec = VMSpec(
             cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil), userData: payload)
         let decoded = try roundTrip(spec)
-        #expect(decoded.userData == payload)
+        #expect(decoded._jsonUserData == payload)
     }
 
     /// No user data is a current semantic choice.
@@ -291,7 +291,7 @@ struct VMSpecTests {
              "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
-        #expect(decoded.userData == nil)
+        #expect(decoded._jsonUserData == nil)
     }
 
     @Test func dualStackNetworkSpecRoundTrip() throws {
@@ -307,10 +307,10 @@ struct VMSpecTests {
             gateway6: "fd12:3456:789a::1"
         )
         let decoded = try roundTrip(spec)
-        #expect(decoded.ipv6Address == "fd12:3456:789a::100")
-        #expect(decoded.ipv6PrefixLength == 64)
-        #expect(decoded.gateway6 == "fd12:3456:789a::1")
-        #expect(decoded.ipAddress == "10.0.0.5")
+        #expect(decoded._jsonIpv6Address == "fd12:3456:789a::100")
+        #expect(decoded._jsonIpv6PrefixLength == 64)
+        #expect(decoded._jsonGateway6 == "fd12:3456:789a::1")
+        #expect(decoded._jsonIpAddress == "10.0.0.5")
     }
 
     /// A current IPv4-only NIC has no IPv6 values.
@@ -322,15 +322,15 @@ struct VMSpecTests {
              "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
             """
         let decoded = try decodeJSON(NetworkSpec.self, from: json)
-        #expect(decoded.ipv6Address == nil)
-        #expect(decoded.ipv6PrefixLength == nil)
-        #expect(decoded.gateway6 == nil)
-        #expect(decoded.ipAddress == "10.0.0.5")
-        #expect(!decoded.dhcpEnabled)
-        #expect(!decoded.metadataEnabled)
-        #expect(decoded.interfaceId == nil)
-        #expect(decoded.deviceName == nil)
-        #expect(decoded.orderIndex == nil)
+        #expect(decoded._jsonIpv6Address == nil)
+        #expect(decoded._jsonIpv6PrefixLength == nil)
+        #expect(decoded._jsonGateway6 == nil)
+        #expect(decoded._jsonIpAddress == "10.0.0.5")
+        #expect(!decoded._jsonDhcpEnabled)
+        #expect(!decoded._jsonMetadataEnabled)
+        #expect(decoded._jsonInterfaceId == nil)
+        #expect(decoded._jsonDeviceName == nil)
+        #expect(decoded._jsonOrderIndex == nil)
     }
 
     @Test func networkSpecCarriesStableInterfaceIdentity() throws {
@@ -343,9 +343,9 @@ struct VMSpecTests {
             networkId: UUID(),
             macAddress: "52:54:00:00:00:05")
         let decoded = try roundTrip(spec)
-        #expect(decoded.interfaceId == interfaceID)
-        #expect(decoded.deviceName == "net5")
-        #expect(decoded.orderIndex == 5)
+        #expect(decoded._jsonInterfaceId == interfaceID)
+        #expect(decoded._jsonDeviceName == "net5")
+        #expect(decoded._jsonOrderIndex == 5)
     }
 
     @Test func networkSpecCarriesMetadataEnabled() throws {
@@ -353,10 +353,10 @@ struct VMSpecTests {
             {"network":"default","networkId":"\(UUID().uuidString)",
              "ipAddress":"10.0.0.5","dhcpEnabled":false,"dnsServers":[],"metadataEnabled":true}
             """
-        #expect(try decodeJSON(NetworkSpec.self, from: json).metadataEnabled == true)
+        #expect(try decodeJSON(NetworkSpec.self, from: json)._jsonMetadataEnabled == true)
 
         let spec = NetworkSpec(network: "default", networkId: UUID(), metadataEnabled: false)
-        #expect(try roundTrip(spec).metadataEnabled == false)
+        #expect(try roundTrip(spec)._jsonMetadataEnabled == false)
     }
 
     // MARK: - Machine profile (issue #565)
@@ -366,8 +366,8 @@ struct VMSpecTests {
             cpus: 2, memoryBytes: 1 << 32, boot: .disk(firmware: nil),
             machine: MachineProfile(secureBoot: true, tpm: true))
         let decoded = try roundTrip(spec)
-        #expect(decoded.machine?.secureBoot == true)
-        #expect(decoded.machine?.tpm == true)
+        #expect(decoded._jsonMachine?._jsonSecureBoot == true)
+        #expect(decoded._jsonMachine?._jsonTpm == true)
         #expect(decoded.effectiveMachine == MachineProfile(secureBoot: true, tpm: true))
     }
 
@@ -379,10 +379,10 @@ struct VMSpecTests {
              "hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],"sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
-        #expect(decoded.machine == nil)
+        #expect(decoded._jsonMachine == nil)
         #expect(decoded.effectiveMachine == .default)
-        #expect(decoded.effectiveMachine.secureBoot == false)
-        #expect(decoded.effectiveMachine.tpm == false)
+        #expect(decoded.effectiveMachine._jsonSecureBoot == false)
+        #expect(decoded.effectiveMachine._jsonTpm == false)
     }
 
     @Test func currentMachineProfileRequiresBothFlags() {
@@ -398,15 +398,15 @@ struct VMSpecTests {
             cpus: 2, memoryBytes: 1 << 32, boot: .disk(firmware: nil),
             console: ConsoleSpec(graphics: .vnc))
         let decoded = try roundTrip(spec)
-        #expect(decoded.console?.graphics == .vnc)
-        #expect(decoded.console?.effectiveGraphics == .vnc)
+        #expect(decoded._jsonConsole?._jsonGraphics == .vnc)
+        #expect(decoded._jsonConsole?.effectiveGraphics == .vnc)
     }
 
     /// A console spec with no `graphics` key must read as headless rather
     /// than throwing.
     @Test func consoleSpecWithoutGraphicsDecodesToHeadless() throws {
         let decoded = try decodeJSON(ConsoleSpec.self, from: #"{}"#)
-        #expect(decoded.graphics == nil)
+        #expect(decoded._jsonGraphics == nil)
         #expect(decoded.effectiveGraphics == .headless)
     }
 
@@ -480,8 +480,8 @@ struct VMSpecTests {
             ])
 
         let decoded = try roundTrip(spec)
-        #expect(decoded.networks.map(\.network) == ["default", "default"])
-        #expect(decoded.networks.map(\.networkId) == [first, second])
+        #expect(decoded._jsonNetworks.map(\._jsonNetwork) == ["default", "default"])
+        #expect(decoded._jsonNetworks.map(\._jsonNetworkId) == [first, second])
     }
 
     /// An unknown boot-source case from a newer peer must fail loudly (there

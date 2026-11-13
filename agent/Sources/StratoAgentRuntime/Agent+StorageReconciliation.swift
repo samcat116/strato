@@ -75,12 +75,13 @@ extension Agent {
             throw ConvergenceError.unsupported("snapshot capture requires a desired entry")
         }
         try requireWritableSnapshotInventory()
-        let snapshotId = desired.snapshotId.uuidString
-        let parentId = desired.parentId.uuidString
+        let snapshotId = desired.snapshotID
+        let parentId = desired.parentID
 
         let facts: ObservedSnapshotFacts
         let reservedDiskBytes: Int64?
         switch desired.kind {
+        case .unspecified, .UNRECOGNIZED: throw ConvergenceError.unsupported("Unknown snapshot kind")
         case .volumeSnapshot:
             // The backend's snapshot is a qcow2 overlay backed by the volume,
             // and nothing switches a running QEMU's active layer onto it — so a
@@ -89,8 +90,8 @@ extension Agent {
             // The control plane refuses this at admission; the agent refuses it
             // again because a level-triggered entry outlives the request that
             // made it, and the volume may have been attached since.
-            if let holder = desired.capture?.attachedVMId {
-                let holderID = holder.uuidString
+            if desired.hasCapture, desired.capture.hasAttachedVmID {
+                let holderID = desired.capture.attachedVmID
                 guard let service = getHypervisorServiceForVM(vmId: holderID),
                     let status = try? await service.getVMStatus(vmId: holderID),
                     status == .shutdown || status == .created
@@ -100,7 +101,7 @@ extension Agent {
                 }
             }
             let backend = try await requireStorageBackend(
-                volumeId: parentId, volumeStorage: desired.volumeStorage)
+                volumeId: parentId, volumeStorage: desired.optionalVolumeStorage)
             guard let disk = try await backend.inspectVolume(volumeId: parentId) else {
                 // The volume may be mid-create in this very sync; a dependency
                 // wait burns no attempt and retries on the next one.
@@ -109,7 +110,7 @@ extension Agent {
             }
             let parentDesired = desiredVolumeStates[parentId]
             let snapshotStorage = VolumeSnapshotStorageRouting.resolve(
-                desiredStorage: desired.volumeStorage,
+                desiredStorage: desired.optionalVolumeStorage,
                 recordedStorage: nil,
                 currentParentStorage: parentDesired?.storage)
             reservedDiskBytes =
@@ -159,7 +160,7 @@ extension Agent {
             }
             let result = try await runtime.snapshotSandbox(
                 sandboxId: parentId, snapshotId: snapshotId,
-                mode: desired.capture?.sandboxMode ?? .resume)
+                mode: desired.hasCapture && desired.capture.hasSandboxMode ? desired.capture.sandboxMode : .resume)
             facts = ObservedSnapshotFacts(
                 sizeBytes: result.totalSizeBytes,
                 storagePath: result.storagePath,
@@ -170,19 +171,20 @@ extension Agent {
                 cpuTemplate: result.cpuTemplate)
         }
 
-        snapshotRecords[desired.snapshotId] = SnapshotRecord(
-            snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
-            volumeStorage: desired.kind == .volumeSnapshot ? desired.volumeStorage : nil,
+        snapshotRecords[try UUID(protocolString: desired.snapshotID)] = SnapshotRecord(
+            snapshotId: try UUID(protocolString: desired.snapshotID), kind: desired.kind,
+            parentId: try UUID(protocolString: desired.parentID),
+            volumeStorage: desired.kind == .volumeSnapshot && desired.hasVolumeStorage ? desired.volumeStorage : nil,
             reservedDiskBytes: reservedDiskBytes,
             facts: facts)
         guard snapshotRecordStore.save(snapshotRecords) else {
-            snapshotRecords.removeValue(forKey: desired.snapshotId)
+            snapshotRecords.removeValue(forKey: try UUID(protocolString: desired.snapshotID))
             throw ConvergenceError.sourceNotReady("could not durably record captured snapshot")
         }
         logger.info(
             "Snapshot artifact captured",
             metadata: [
-                "kind": .string(desired.kind.rawValue),
+                "kind": .string(desired.kind.protocolValue),
                 "snapshotId": .string(snapshotId),
                 "parentId": .string(parentId),
             ])
@@ -208,7 +210,7 @@ extension Agent {
         let parentId: UUID
         if let desired = item.desiredSnapshot {
             kind = desired.kind
-            parentId = desired.parentId
+            parentId = try UUID(protocolString: desired.parentID)
         } else if let record = snapshotRecords[snapshotId] {
             kind = record.kind
             parentId = record.parentId
@@ -220,11 +222,12 @@ extension Agent {
         // Every backend's deletion is idempotent, so a re-driven delete over
         // bytes that are already gone confirms cleanly rather than failing.
         switch kind {
+        case .unspecified, .UNRECOGNIZED: throw ConvergenceError.unsupported("Unknown snapshot kind")
         case .volumeSnapshot:
             let backend = try await requireStorageBackend(
                 volumeId: parentId.uuidString,
                 volumeStorage: VolumeSnapshotStorageRouting.resolve(
-                    desiredStorage: item.desiredSnapshot?.volumeStorage,
+                    desiredStorage: item.desiredSnapshot.flatMap { $0.optionalVolumeStorage },
                     recordedStorage: snapshotRecords[snapshotId]?.volumeStorage,
                     currentParentStorage: desiredVolumeStates[parentId.uuidString]?.storage))
             try await backend.deleteSnapshot(
@@ -254,7 +257,7 @@ extension Agent {
         logger.info(
             "Snapshot artifact deleted",
             metadata: [
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "snapshotId": .string(snapshotId.uuidString),
                 "parentId": .string(parentId.uuidString),
             ])
@@ -269,7 +272,7 @@ extension Agent {
     /// object at its deterministic key), so a re-driven export after a lost
     /// report converges on the same bytes instead of duplicating them.
     func snapshotReconcileExport(_ item: ReconcileWorkItem) async throws {
-        guard let desired = item.desiredSnapshot, let export = desired.export else {
+        guard let desired = item.desiredSnapshot, desired.hasExport else {
             throw ConvergenceError.unsupported("snapshot export requires an export target")
         }
         try requireWritableSnapshotInventory()
@@ -280,23 +283,24 @@ extension Agent {
             // the control plane degrades the artifact with the reason instead
             // of retrying an impossibility.
             throw ConvergenceError.unsupported(
-                "\(desired.kind.rawValue) artifacts cannot be exported off this host")
+                "\(desired.kind.protocolValue) artifacts cannot be exported off this host")
         }
         guard let runtime = sandboxRuntime else {
             throw ConvergenceError.unsupported("this agent has no sandbox runtime")
         }
+        let export = desired.export
         try await runtime.exportSandboxSnapshot(
-            sandboxId: desired.parentId.uuidString, snapshotId: desired.snapshotId.uuidString,
-            uploads: export.uploads)
+            sandboxId: desired.parentID, snapshotId: desired.snapshotID,
+            uploads: export.uploads.values)
 
-        snapshotRecords[desired.snapshotId]?.exported = true
+        snapshotRecords[try UUID(protocolString: desired.snapshotID)]?.exported = true
         persistSnapshotRecords()
         logger.info(
             "Snapshot artifact exported",
             metadata: [
-                "snapshotId": .string(desired.snapshotId.uuidString),
-                "parentId": .string(desired.parentId.uuidString),
-                "artifacts": .stringConvertible(export.uploads.count),
+                "snapshotId": .string(desired.snapshotID),
+                "parentId": .string(desired.parentID),
+                "artifacts": .stringConvertible(export.uploads.values.count),
             ])
     }
 
@@ -430,11 +434,12 @@ extension Agent {
         // exist. A present volume never re-runs it, which is what makes a
         // replayed sync unable to clone over live data.
         let attachment: DiskAttachment
-        switch desired.source?.kind {
+        switch desired.hasSource ? desired.source.kind : DesiredVolumeSource.blank {
         case DesiredVolumeSource.clone:
-            guard let sourceId = desired.source?.sourceVolumeId?.uuidString else {
+            guard desired.source.hasSourceVolumeID else {
                 throw ConvergenceError.unsupported("clone source volume id missing")
             }
+            let sourceId = desired.source.sourceVolumeID
             // The control plane guarantees the source is on this agent, so the
             // path comes from our own inventory rather than the wire.
             guard let sourceDesired = desiredVolumeStates[sourceId] else {
@@ -452,7 +457,7 @@ extension Agent {
                     "source volume \(sourceId) is not present on this agent yet")
             }
             if let holder = recordedVolumeAttachments()[sourceId] {
-                guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
+                guard desired.source.hasSourceVmID && desired.source.sourceVmID == holder.vmId else {
                     throw ConvergenceError.sourceNotReady(
                         "source volume \(sourceId) is attached to VM \(holder.vmId), but its declared source VM lane has not converged"
                     )
@@ -468,14 +473,14 @@ extension Agent {
             attachment = try await backend.cloneVolume(
                 sourceVolumeId: sourceId, sourceAttachment: source, targetVolumeId: item.id)
         case DesiredVolumeSource.image:
-            guard let imageInfo = desired.source?.imageInfo,
-                let artifactKind = desired.source?.artifactKind
+            guard desired.source.hasImageInfo, desired.source.hasArtifactKind
             else {
                 throw ConvergenceError.unsupported(
                     "image create strategy requires image info and an artifact kind")
             }
             attachment = try await backend.createVolumeFromImage(
-                volumeId: item.id, imageInfo: imageInfo, format: format, artifactKind: artifactKind)
+                volumeId: item.id, imageInfo: desired.source.imageInfo, format: format,
+                artifactKind: desired.source.artifactKind)
         default:
             attachment = try await backend.createVolume(
                 volumeId: item.id, sizeBytes: desired.sizeBytes, format: format)
@@ -537,7 +542,7 @@ extension Agent {
             metadata: [
                 "volumeId": .string(item.id),
                 "attachment": .string(String(describing: attachment)),
-                "strategy": .string(desired.source?.kind ?? DesiredVolumeSource.blank),
+                "strategy": .string(desired.hasSource ? desired.source.kind : DesiredVolumeSource.blank),
             ])
     }
 
@@ -664,14 +669,15 @@ extension Agent {
     }
 
     func volumeReconcileAttach(_ item: ReconcileWorkItem) async throws {
-        guard let desired = item.desiredVolume, let attachment = desired.attachment else {
+        guard let desired = item.desiredVolume, desired.hasAttachment else {
             throw ConvergenceError.unsupported("volume attach requires a desired attachment")
         }
         let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
         guard let disk = try await backend.inspectVolume(volumeId: item.id) else {
             throw ConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
         }
-        let vmId = attachment.vmId.uuidString
+        let attachment = desired.attachment
+        let vmId = attachment.vmID
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
             // The VM has not been created on this host yet — only ever a race
             // against its own convergence, since the control plane never sends
@@ -693,16 +699,16 @@ extension Agent {
             entry.hypervisorType == .qemu
             ? await selectedQEMUBlockPolicy(
                 for: disk, requestedMode: desired.blockMode,
-                vCPUCount: entry.spec.cpus, backend: backend,
+                vCPUCount: Int(entry.spec.cpus), backend: backend,
                 volumeId: item.id)
             : nil
         let spec = VolumeSpec(
-            volumeId: desired.volumeId,
-            deviceName: attachment.deviceName,
+            volumeId: try UUID(protocolString: desired.volumeID),
+            deviceName: try VolumeDeviceName(validating: attachment.deviceName),
             attachment: disk,
             readonly: attachment.readonly,
-            bootOrder: attachment.bootOrder,
-            ioLimits: desired.ioLimits,
+            bootOrder: attachment.optionalBootOrder.map(Int.init),
+            ioLimits: desired.optionalIoLimits,
             blockMode: desired.blockMode,
             appliedBlockPolicy: blockPolicy)
         // Persist the attachment before calling libvirt so a crash cannot
@@ -727,14 +733,14 @@ extension Agent {
         }
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, attachment: disk,
-            deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly,
+            deviceName: attachment.deviceName, readonly: attachment.readonly,
             blockPolicy: blockPolicy, orderedBootVolumeIds: orderedBootVolumeIds,
-            ioLimits: desired.ioLimits)
+            ioLimits: desired.optionalIoLimits)
 
         // Read the installed attributes, since an idempotent retry may have
         // selected a different fallback than the disk already in libvirt.
         if entry.hypervisorType == .qemu {
-            await recoverBlockPolicy(vmId: vmId, volumeId: desired.volumeId)
+            await recoverBlockPolicy(vmId: vmId, volumeId: try UUID(protocolString: desired.volumeID))
         }
     }
 
@@ -748,18 +754,20 @@ extension Agent {
     /// the same values in the VM manifest so later redefinition, restart, and
     /// adoption cannot resurrect an older throttle.
     func volumeReconcileThrottle(_ item: ReconcileWorkItem) async throws {
-        guard let desired = item.desiredVolume, let desiredAttachment = desired.attachment else {
+        guard let desired = item.desiredVolume, desired.hasAttachment else {
             throw ConvergenceError.unsupported(
                 "volume I/O limits require an attached desired volume")
         }
-        let vmId = desiredAttachment.vmId.uuidString
+        let desiredAttachment = desired.attachment
+        let vmId = desiredAttachment.vmID
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
             throw ConvergenceError.sourceNotReady(
                 "VM \(vmId) is not present on this agent yet")
         }
         guard entry.hypervisorType == .qemu else {
             throw ConvergenceError.unsupported(
-                "per-volume I/O limits are supported only for QEMU VMs; \(vmId) uses \(entry.hypervisorType.rawValue)")
+                "per-volume I/O limits are supported only for QEMU VMs; \(vmId) uses \(entry.hypervisorType.protocolValue)"
+            )
         }
 
         let backend = try await requireStorageBackend(volumeId: item.id, desired: desired)
@@ -773,16 +781,16 @@ extension Agent {
         // inverse order could leave a stale manifest that a later redefine
         // uses to undo the successfully applied live change.
         let spec = VolumeSpec(
-            volumeId: desired.volumeId,
-            deviceName: desiredAttachment.deviceName,
+            volumeId: try UUID(protocolString: desired.volumeID),
+            deviceName: try VolumeDeviceName(validating: desiredAttachment.deviceName),
             attachment: disk,
             readonly: desiredAttachment.readonly,
-            bootOrder: desiredAttachment.bootOrder,
-            ioLimits: desired.ioLimits,
+            bootOrder: desiredAttachment.optionalBootOrder.map(Int.init),
+            ioLimits: desired.optionalIoLimits,
             blockMode: desired.blockMode,
-            appliedBlockPolicy: entry.spec.volumes.first {
-                $0.volumeId == desired.volumeId
-            }?.appliedBlockPolicy)
+            appliedBlockPolicy: entry.spec.volumes.values.first {
+                $0.volumeID == desired.volumeID
+            }.flatMap { $0.optionalAppliedBlockPolicy })
         _ = await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
         guard let service = getHypervisorServiceForVM(vmId: vmId),
@@ -792,7 +800,7 @@ extension Agent {
                 "VM \(vmId) has no libvirt domain to apply volume \(item.id)'s I/O limits to")
         }
         try await service.setDiskIOLimits(
-            vmId: vmId, volumeId: item.id, limits: desired.ioLimits)
+            vmId: vmId, volumeId: item.id, limits: desired.optionalIoLimits)
     }
 
     func detachVolumeFromVM(volumeId: String, vmId: String, deviceName: String) async throws {
@@ -821,7 +829,7 @@ extension Agent {
                 guard case .vmNotFound = error else { throw error }
             }
         }
-        let remaining = entry.spec.volumes.filter { $0.volumeId.uuidString != volumeId }
+        let remaining = entry.spec.volumes.values.filter { $0.volumeID != volumeId }
         let updated = entry.with(spec: entry.spec.withVolumes(remaining))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
@@ -840,7 +848,7 @@ extension Agent {
         _ spec: VolumeSpec, onVM vmId: String, entry: VMManifestEntry
     ) async -> [String] {
         let recording = ManifestVolumeOrder.recording(
-            spec, in: entry.spec.volumes, authoritative: desiredVMVolumeSpecs[vmId])
+            spec, in: entry.spec.volumes.values, authoritative: desiredVMVolumeSpecs[vmId])
         let updated = entry.with(spec: entry.spec.withVolumes(recording.volumes))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
@@ -867,8 +875,8 @@ extension Agent {
         _ spec: VMSpec, vmId: String, hypervisorType: HypervisorType
     ) async throws -> VMSpec {
         var volumes: [VolumeSpec] = []
-        for volume in spec.volumes {
-            let volumeId = volume.volumeId.uuidString
+        for volume in spec.volumes.values {
+            let volumeId = volume.volumeID
             guard let desired = desiredVolumeStates[volumeId] else {
                 throw ConvergenceError.sourceNotReady(
                     "managed volume \(volumeId) for VM \(vmId) has no desired storage configuration")
@@ -885,19 +893,13 @@ extension Agent {
                 hypervisorType == .qemu
                 ? await selectedQEMUBlockPolicy(
                     for: disk, requestedMode: volume.blockMode,
-                    vCPUCount: spec.cpus, backend: backend,
+                    vCPUCount: Int(spec.cpus), backend: backend,
                     volumeId: volumeId)
                 : nil
-            volumes.append(
-                VolumeSpec(
-                    volumeId: volume.volumeId,
-                    deviceName: volume.deviceName,
-                    attachment: disk,
-                    readonly: volume.readonly,
-                    bootOrder: volume.bootOrder,
-                    ioLimits: volume.ioLimits,
-                    blockMode: volume.blockMode,
-                    appliedBlockPolicy: blockPolicy))
+            var realized = volume
+            realized.attachment = disk
+            if let blockPolicy { realized.appliedBlockPolicy = blockPolicy } else { realized.clearAppliedBlockPolicy() }
+            volumes.append(realized)
         }
         return spec.withVolumes(volumes)
     }
@@ -917,12 +919,13 @@ extension Agent {
             requestedMode: requestedMode,
             vCPUCount: vCPUCount,
             capabilities: capabilities)
-        if let reason = policy.fallbackReason {
+        if policy.hasFallbackReason {
+            let reason = policy.fallbackReason
             logger.warning(
                 "QEMU block policy fell back to its supported subset",
                 metadata: [
                     "volumeId": .string(volumeId),
-                    "requestedMode": .string(requestedMode.rawValue),
+                    "requestedMode": .string(requestedMode.protocolValue),
                     "reason": .string(reason),
                 ])
         }
@@ -934,16 +937,18 @@ extension Agent {
     func recoverBlockPolicy(vmId: String, volumeId: UUID) async {
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId],
             entry.hypervisorType == .qemu,
-            let volume = entry.spec.volumes.first(where: { $0.volumeId == volumeId }),
-            volume.appliedBlockPolicy == nil,
+            let volume = entry.spec.volumes.values.first(where: { UUID(uuidString: $0.volumeID) == volumeId }),
+            !volume.hasAppliedBlockPolicy,
             let service = getHypervisorServiceForVM(vmId: vmId)
         else { return }
         do {
             let policy = try await service.diskBlockPolicy(
                 vmId: vmId, volumeId: volumeId.uuidString, requestedMode: volume.blockMode)
             guard let current = managedVMs[vmId] ?? orphanedVMs[vmId],
-                let currentVolume = current.spec.volumes.first(where: { $0.volumeId == volumeId }),
-                currentVolume.appliedBlockPolicy == nil,
+                let currentVolume = current.spec.volumes.values.first(where: {
+                    UUID(uuidString: $0.volumeID) == volumeId
+                }),
+                !currentVolume.hasAppliedBlockPolicy,
                 currentVolume.blockMode == volume.blockMode
             else { return }
             _ = await recordVolumeAttachment(
@@ -959,9 +964,10 @@ extension Agent {
     }
 
     func prepareQEMUStorageAttachments(_ spec: VMSpec) async throws {
-        for volume in spec.volumes {
-            guard let attachment = volume.attachment else { continue }
-            let volumeId = volume.volumeId.uuidString
+        for volume in spec.volumes.values {
+            guard volume.hasAttachment else { continue }
+            let attachment = volume.attachment
+            let volumeId = volume.volumeID
             let backend = try await requireStorageBackend(
                 volumeId: volumeId, desired: desiredVolumeStates[volumeId])
             try await backend.prepareAttachmentForQEMU(attachment)
@@ -973,7 +979,7 @@ extension Agent {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
         }
         guard let service = getHypervisorService(for: desired.hypervisorType) else {
-            throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
+            throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.protocolValue)
         }
         let realizedSpec = try await specWithRealizedVolumeAttachments(
             desired.spec, vmId: item.id, hypervisorType: desired.hypervisorType)
@@ -1023,7 +1029,7 @@ extension Agent {
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: item.id, networks: realizedSpec.networks,
+                vmId: item.id, networks: realizedSpec.networks.values,
                 metadataDenied: creationMetadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
@@ -1031,13 +1037,13 @@ extension Agent {
         }
         do {
             try await service.createVM(
-                vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
+                vmId: item.id, spec: realizedSpec, imageInfo: desired.optionalImageInfo,
                 networkAttachments: attachments,
                 metadata: creationMetadata,
                 vsockCID: lease.cid)
         } catch {
             await networkOrchestrator.teardownAttachments(
-                vmId: item.id, networks: realizedSpec.networks)
+                vmId: item.id, networks: realizedSpec.networks.values)
             vsockCIDs.rollBack(lease)
             throw error
         }
@@ -1085,9 +1091,12 @@ extension Agent {
     func metadataForHypervisorCreate(
         _ desired: DesiredVMState
     ) async -> InstanceMetadata? {
-        guard desired.hypervisorType == .firecracker else { return desired.metadata }
+        guard desired.hypervisorType == .firecracker else {
+            return desired.optionalMetadata
+        }
         guard configuration.metadataServiceEnabled else { return nil }
-        return await metadataStore.metadata(for: desired.vmId)
+        guard let vmID = UUID(uuidString: desired.vmID) else { return nil }
+        return await metadataStore.metadata(for: vmID)
     }
 
     /// Applies a VM's new vCPU/memory sizing (issue #568) and records it in the
@@ -1175,8 +1184,8 @@ extension Agent {
         }
 
         let service = try reconcileService(for: item.id)
-        let current = entry.spec.networks
-        let target = desired.spec.networks
+        let current = entry.spec.networks.values
+        let target = desired.spec.networks.values
         let pairs = VMNetworkInterfaceDiff.between(current: current, desired: target)
 
         // A hot-added NIC is absent from the immutable cloud-init seed created
@@ -1186,7 +1195,7 @@ extension Agent {
         if let addedIndex = pairs.added.first(where: { !target[$0].dhcpEnabled }) {
             let spec = target[addedIndex]
             throw HypervisorServiceError.notSupported(
-                "hot-plugging interface '\(spec.deviceName ?? "net\(spec.orderIndex ?? addedIndex)")' "
+                "hot-plugging interface '\(spec.hasDeviceName ? spec.deviceName : "net\(spec.hasOrderIndex ? Int(spec.orderIndex) : addedIndex)")' "
                     + "on DHCP-disabled network '\(spec.network)'; recreate the VM with this interface, "
                     + "or use a DHCP-enabled network")
         }
@@ -1211,7 +1220,7 @@ extension Agent {
                 vmId: item.id,
                 spec: spec,
                 fallbackIndex: newIndex,
-                metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                metadataDenied: desired.hasMetadata && !desired.metadata.isServiceEnabled)
             do {
                 try await service.attachNetworkInterface(
                     vmId: item.id, spec: spec, attachment: attachment)
@@ -1258,7 +1267,7 @@ extension Agent {
         item: ReconcileWorkItem, desired: DesiredVMState, entry: VMManifestEntry,
         service: any HypervisorService
     ) async throws -> (spec: VMSpec, interfaces: [String]) {
-        let targetSpec = entry.spec.withNetworks(desired.spec.networks)
+        let targetSpec = entry.spec.withNetworks(desired.spec.networks.values)
         let realizedSpec = try await specWithRealizedVolumeAttachments(
             targetSpec, vmId: item.id, hypervisorType: .firecracker)
         let metadata = await metadataForHypervisorCreate(desired)
@@ -1267,8 +1276,8 @@ extension Agent {
         // failure does not run create-time rollback and tear down the live set;
         // the VMM is replaced only after every attachment resolved.
         var attachments: [ResolvedNetworkAttachment] = []
-        attachments.reserveCapacity(realizedSpec.networks.count)
-        for (index, network) in realizedSpec.networks.enumerated() {
+        attachments.reserveCapacity(realizedSpec.networks.values.count)
+        for (index, network) in realizedSpec.networks.values.enumerated() {
             attachments.append(
                 try await networkOrchestrator.prepareAttachment(
                     vmId: item.id, spec: network, fallbackIndex: index,
@@ -1276,7 +1285,7 @@ extension Agent {
         }
 
         try await service.reconfigureMetadataInterfaces(
-            vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
+            vmId: item.id, spec: realizedSpec, imageInfo: desired.optionalImageInfo,
             networkAttachments: attachments, metadata: metadata)
         return (
             realizedSpec,
@@ -1355,7 +1364,7 @@ extension Agent {
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.id, networks: entry.spec.networks)
+                    vmId: item.id, networks: entry.spec.networks.values)
                 return
             }
         }
@@ -1382,7 +1391,7 @@ extension Agent {
         // Tear down the VM's host-side network resources now that the
         // hypervisor session is gone (best-effort; never blocks deletion).
         await networkOrchestrator.teardownAttachments(
-            vmId: item.id, networks: entry.spec.networks)
+            vmId: item.id, networks: entry.spec.networks.values)
 
         managedVMs.removeValue(forKey: item.id)
         orphanedVMs.removeValue(forKey: item.id)

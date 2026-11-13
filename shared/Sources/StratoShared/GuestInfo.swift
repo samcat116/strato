@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 /// What the QEMU guest agent (qga) reported about a running VM's guest OS,
 /// attached to that VM's `ObservedVMState` on the agent → control-plane
@@ -17,80 +18,101 @@ import Foundation
 /// DHCP/SLIRP): only qga can see what the guest actually configured — DHCP
 /// leases, manual changes, IPv6 SLAAC addresses — so these are the sole way
 /// those addresses become visible to the control plane.
-public struct GuestInfo: Codable, Sendable, Equatable {
-    /// Whether the guest agent answered at all during the last probe. `true`
-    /// means a `guest-ping`/`guest-sync` round-trip succeeded within its
-    /// budget; the address/hostname fields are only meaningful when this is
-    /// `true`. A VM with no qga never produces a `GuestInfo` at all, so in
-    /// practice this is `true` on every reported struct — it exists so the
-    /// control plane can still record a positive liveness signal even when the
-    /// follow-up detail queries came back empty.
-    public let qgaAvailable: Bool
-
-    /// The guest OS hostname (`guest-get-host-name`), or nil if the guest could
-    /// not report one.
-    public let hostname: String?
-
-    /// The network interfaces the guest actually has configured
-    /// (`guest-network-get-interfaces`), keyed for the control plane by each
-    /// interface's hardware (MAC) address so it can be matched against the
-    /// VM's `VMNetworkInterface` rows. Empty when the guest reported no
-    /// interfaces or the query failed.
-    public let interfaces: [GuestNetworkInterface]
+public typealias GuestInfo = Strato_Agent_V1_GuestInfo
+extension Strato_Agent_V1_GuestInfo: Codable {
 
     public init(
         qgaAvailable: Bool,
         hostname: String? = nil,
         interfaces: [GuestNetworkInterface] = []
     ) {
-        self.qgaAvailable = qgaAvailable
-        self.hostname = hostname
-        self.interfaces = interfaces
+        self.init()
+        self._jsonQgaAvailable = qgaAvailable
+        self._jsonHostname = hostname
+        self._jsonInterfaces = interfaces
     }
+
+    private enum CodingKeys: String, CodingKey { case qgaAvailable; case hostname; case interfaces }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonQgaAvailable = try container.decode(Bool.self, forKey: .qgaAvailable)
+        self._jsonHostname = try container.decodeIfPresent(String.self, forKey: .hostname)
+        self._jsonInterfaces = try container.decode([GuestNetworkInterface].self, forKey: .interfaces)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonQgaAvailable, forKey: .qgaAvailable)
+        try container.encodeIfPresent(_jsonHostname, forKey: .hostname)
+        try container.encode(_jsonInterfaces, forKey: .interfaces)
+    }
+
 }
 
 /// One network interface as seen *inside the guest* by qga
 /// (`guest-network-get-interfaces`). Distinct from `VMNetworkInterface`, which
 /// is the control plane's own record of the NIC it attached: this is what the
 /// guest OS reports it did with that NIC.
-public struct GuestNetworkInterface: Codable, Sendable, Equatable {
-    /// The guest's name for the interface, e.g. "eth0", "enp0s3", "lo".
-    public let name: String
-
-    /// The interface's hardware (MAC) address, lowercased and colon-separated
-    /// (e.g. "52:54:00:12:34:56"), or nil for interfaces the guest reported
-    /// without one (notably loopback). This is the join key the control plane
-    /// uses to attribute observed addresses to a `VMNetworkInterface`.
-    public let hardwareAddress: String?
-
-    /// The addresses the guest has configured on this interface. Includes
-    /// DHCP/SLAAC/link-local addresses the control plane never allocated, which
-    /// is the whole point — nil-nothing here means the guest reported none.
-    public let addresses: [GuestIPAddress]
+public typealias GuestNetworkInterface = Strato_Agent_V1_GuestNetworkInterface
+extension Strato_Agent_V1_GuestNetworkInterface: Codable {
 
     public init(name: String, hardwareAddress: String? = nil, addresses: [GuestIPAddress] = []) {
-        self.name = name
-        self.hardwareAddress = hardwareAddress
-        self.addresses = addresses
+        self.init()
+        self._jsonName = name
+        self._jsonHardwareAddress = hardwareAddress
+        self._jsonAddresses = addresses
     }
+
+    private enum CodingKeys: String, CodingKey { case name; case hardwareAddress; case addresses }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonHardwareAddress = try container.decodeIfPresent(String.self, forKey: .hardwareAddress)
+        self._jsonAddresses = try container.decode([GuestIPAddress].self, forKey: .addresses)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encodeIfPresent(_jsonHardwareAddress, forKey: .hardwareAddress)
+        try container.encode(_jsonAddresses, forKey: .addresses)
+    }
+
 }
 
 /// One IP address configured inside the guest, as reported by qga.
-public struct GuestIPAddress: Codable, Sendable, Equatable {
-    /// The address family this address belongs to.
-    public let family: IPFamily
-
-    /// The address in its canonical text form (no prefix suffix), e.g.
-    /// "192.168.1.42" or "fe80::5054:ff:fe12:3456".
-    public let address: String
-
-    /// The prefix length (CIDR bits) the guest reported for this address, or
-    /// nil if qga did not supply one.
-    public let prefixLength: Int?
+public typealias GuestIPAddress = Strato_Agent_V1_GuestIPAddress
+extension Strato_Agent_V1_GuestIPAddress: Codable {
 
     public init(family: IPFamily, address: String, prefixLength: Int? = nil) {
-        self.family = family
-        self.address = address
-        self.prefixLength = prefixLength
+        self.init()
+        self._jsonFamily = family
+        self._jsonAddress = address
+        self._jsonPrefixLength = prefixLength
     }
+
+    private enum CodingKeys: String, CodingKey { case family; case address; case prefixLength }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonFamily = try container.decode(IPFamily.self, forKey: .family)
+        self._jsonAddress = try container.decode(String.self, forKey: .address)
+        self._jsonPrefixLength = try container.decodeIfPresent(Int.self, forKey: .prefixLength)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonFamily, forKey: .family)
+        try container.encode(_jsonAddress, forKey: .address)
+        try container.encodeIfPresent(_jsonPrefixLength, forKey: .prefixLength)
+    }
+
 }

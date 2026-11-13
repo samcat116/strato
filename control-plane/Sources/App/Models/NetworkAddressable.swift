@@ -6,7 +6,7 @@ import StratoShared
 /// and wire-spec construction shared by VMs and sandboxes are written once
 /// (issue #597).
 protocol InterfaceAddressRow {
-    /// Address family, stored as `IPFamily.rawValue`.
+    /// Address family, stored as `IPFamily.protocolValue`.
     var family: String { get }
     /// The address in canonical text form (no prefix suffix).
     var address: String { get }
@@ -42,13 +42,13 @@ extension NetworkAddressable {
     /// exists per family (enforced in code, not schema). Requires `addresses`
     /// to be eager-loaded.
     var ipv4Address: AddressRow? {
-        allocatedAddresses.first { $0.family == IPFamily.ipv4.rawValue }
+        allocatedAddresses.first { $0.family == IPFamily.ipv4.protocolValue }
     }
 
     /// The interface's IPv6 address row, when one is allocated. Requires
     /// `addresses` to be eager-loaded.
     var ipv6Address: AddressRow? {
-        allocatedAddresses.first { $0.family == IPFamily.ipv6.rawValue }
+        allocatedAddresses.first { $0.family == IPFamily.ipv6.protocolValue }
     }
 
     /// Dotted-quad netmask derived from the IPv4 address row's prefix, for

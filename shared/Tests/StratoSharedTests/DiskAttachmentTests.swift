@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Disk attachment wire format")
 struct DiskAttachmentTests {
@@ -81,7 +81,7 @@ struct DiskAttachmentTests {
         let observed = ObservedVolumeState(
             volumeId: volumeID, present: true, attachment: attachment, observedGeneration: 4)
 
-        #expect(try roundTrip(spec).attachment == attachment)
-        #expect(try roundTrip(observed).attachment == attachment)
+        #expect(try roundTrip(spec)._jsonAttachment == attachment)
+        #expect(try roundTrip(observed)._jsonAttachment == attachment)
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 /// The wire contract behind `ObservedVolumeState.sizeBytes` (STR-199, v38).
 ///
@@ -25,9 +25,9 @@ struct VolumeObservedSizeWireTests {
             }
             """
         let decoded = try decodeJSON(ObservedVolumeState.self, from: json)
-        #expect(decoded.sizeBytes == nil)
-        #expect(decoded.present)
-        #expect(decoded.observedGeneration == 3)
+        #expect(decoded._jsonSizeBytes == nil)
+        #expect(decoded._jsonPresent)
+        #expect(decoded._jsonObservedGeneration == 3)
     }
 
     /// An explicit null is the same answer as an absent key. Nothing emits one
@@ -42,7 +42,7 @@ struct VolumeObservedSizeWireTests {
               "sizeBytes": null
             }
             """
-        #expect(try decodeJSON(ObservedVolumeState.self, from: json).sizeBytes == nil)
+        #expect(try decodeJSON(ObservedVolumeState.self, from: json)._jsonSizeBytes == nil)
     }
 
     /// A volume the agent could not probe is reported the same way a pre-v38
@@ -52,7 +52,7 @@ struct VolumeObservedSizeWireTests {
         let observed = ObservedVolumeState(
             volumeId: UUID(), present: true, sizeBytes: nil, observedGeneration: 1)
         #expect(try encodedKeys(observed).contains("sizeBytes") == false)
-        #expect(try roundTrip(observed).sizeBytes == nil)
+        #expect(try roundTrip(observed)._jsonSizeBytes == nil)
     }
 
     @Test func areportedSizeSurvivesTheRoundTrip() throws {
@@ -61,6 +61,6 @@ struct VolumeObservedSizeWireTests {
             attachment: .file(path: "/v/volume.qcow2", format: .qcow2),
             sizeBytes: 1 << 30, observedGeneration: 4)
         #expect(try encodedKeys(observed).contains("sizeBytes"))
-        #expect(try roundTrip(observed).sizeBytes == 1 << 30)
+        #expect(try roundTrip(observed)._jsonSizeBytes == 1 << 30)
     }
 }

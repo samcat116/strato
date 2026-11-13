@@ -141,6 +141,31 @@ struct DesiredStateDigestTests {
                     of: message(vms: [], sandboxes: [sandbox(registry: "docker.io")])))
     }
 
+    @Test("Absent and explicitly empty authoritative sections have different digests")
+    func authoritativePresenceChangesDigest() throws {
+        var absent = message(vms: [])
+        absent.clearDnsZones()
+        var empty = absent
+        empty.dnsZones = .init()
+        #expect(try DesiredStateDigest.digest(of: absent) != DesiredStateDigest.digest(of: empty))
+    }
+
+    @Test("Map insertion order does not change the semantic digest")
+    func mapOrderDoesNotChangeDigest() throws {
+        var first = message(
+            vms: [],
+            sandboxes: [
+                DesiredSandboxState(
+                    sandboxId: Self.sandboxID,
+                    spec: SandboxSpec(image: "example/image", cpus: 1, memoryBytes: 1 << 30),
+                    desiredStatus: .running, generation: 1)
+            ])
+        first.sandboxes.values[0].spec.env.values = ["A": "one", "B": "two"]
+        var second = first
+        second.sandboxes.values[0].spec.env.values = ["B": "two", "A": "one"]
+        #expect(try DesiredStateDigest.digest(of: first) == DesiredStateDigest.digest(of: second))
+    }
+
     // MARK: Format
 
     @Test("The ETag is a quoted opaque token")

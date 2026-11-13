@@ -222,8 +222,9 @@ extension CPUArchitecture {
     /// ``CPUArchitecture`` spells it `arm64`; this bridges the two.
     var guestImageArch: String {
         switch self {
-        case .x86_64: return "x86_64"
+        case .x8664: return "x86_64"
         case .arm64: return "aarch64"
+        case .unspecified, .UNRECOGNIZED: return "unknown"
         }
     }
 }

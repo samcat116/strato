@@ -57,10 +57,10 @@ extension SandboxController {
         switch sandbox.status {
         case .running, .stopped, .exited:
             break
-        case .suspended, .starting, .stopping, .error, .unknown:
+        case .suspended, .starting, .stopping, .error, .unknown, .unspecified, .UNRECOGNIZED:
             throw Abort(
                 .conflict,
-                reason: "Sandbox cannot be snapshotted in state '\(sandbox.status.rawValue)'")
+                reason: "Sandbox cannot be snapshotted in state '\(sandbox.status.protocolValue)'")
         }
         // Capture admission: with the imperative frames gone there is no
         // fallback, so an agent that cannot converge a snapshot is refused here

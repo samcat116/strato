@@ -96,7 +96,7 @@ public actor OCIRegistryClient {
             guard let entry = index.manifests.first(where: { $0.platform?.matches(architecture) ?? false })
             else {
                 throw OCIError.noMatchingPlatform(
-                    reference: "\(ref.repository):\(ref.tag)", architecture: architecture.rawValue)
+                    reference: "\(ref.repository):\(ref.tag)", architecture: architecture.protocolValue)
             }
             guard OCIImageReference.isValidDigest(entry.digest) else {
                 throw OCIError.malformedResponse(
@@ -282,7 +282,7 @@ public actor OCIRegistryClient {
         if let credential {
             // A credential already past its expiry can only produce a doomed
             // pull; fail fast and let the next sync deliver fresh material.
-            if let expiresAt = credential.expiresAt, expiresAt <= Date() {
+            if credential.hasExpiresAt, credential.expiresAt.date <= Date() {
                 throw OCIError.credentialExpired(registry: ref.registry)
             }
             if credential.bearer == true {

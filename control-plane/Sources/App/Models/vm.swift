@@ -27,7 +27,7 @@ final class VM: Model, @unchecked Sendable {
     var image: String
 
     // VM status and hypervisor tracking
-    @Enum(key: "status")
+    @ProtocolEnum(key: "status")
     var status: VMStatus
 
     @OptionalField(key: "hypervisor_id")
@@ -43,7 +43,7 @@ final class VM: Model, @unchecked Sendable {
     // purely observed. `generation` bumps on every desired change and
     // `observedGeneration` records the last generation the owning agent
     // confirmed converging to.
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredVMStatus
 
     @Field(key: "generation")
@@ -183,7 +183,7 @@ final class VM: Model, @unchecked Sendable {
     /// default to `.iso`. The schema migration and this model's low-level
     /// initializer retain `.iso` so upgrades and fixture construction never
     /// move an existing VM implicitly.
-    @Enum(key: "metadata_source")
+    @ProtocolEnum(key: "metadata_source")
     var metadataSource: MetadataSource
 
     /// Secret capability used only by an IMDS-backed NoCloud `seedfrom` URL.
@@ -247,7 +247,7 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "balloon_target")
     var balloonTarget: Int64?
 
-    @Enum(key: "hypervisor_type")
+    @ProtocolEnum(key: "hypervisor_type")
     var hypervisorType: HypervisorType
 
     // Project and environment tracking
@@ -562,6 +562,8 @@ extension VM {
             resting = .paused
         case .created, .shutdown, .stopping, .error, .unknown:
             resting = .shutdown
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
         guard desiredStatus != resting else { return false }
         setDesiredStatus(resting)

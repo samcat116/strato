@@ -133,7 +133,7 @@ public actor SandboxImageService {
             ref = parsed
         }
 
-        let key = "\(ref.registry)/\(ref.repository)@\(ref.digest ?? "tag=" + ref.tag)|\(architecture.rawValue)"
+        let key = "\(ref.registry)/\(ref.repository)@\(ref.digest ?? "tag=" + ref.tag)|\(architecture.protocolValue)"
         return try await materializations.run(key: key) { [self] in
             try await self.performMaterialization(
                 ref: ref, credential: credential, architecture: architecture)

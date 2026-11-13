@@ -179,11 +179,11 @@ extension Agent {
             guard bridge.exchangeVersion == 1 else {
                 throw AgentUpdateBridgeResponse.BridgeError.unsupportedExchange
             }
-            if bridge.workloadWireVersion != WireProtocol.currentVersion {
+            if bridge.workloadWireVersion != Int(AgentProtocolCompatibility.major) {
                 // Preserve the established exact-version session on a failed
                 // probe. Only verified skew can withdraw its workload poller.
                 await desiredStatePoller?.stop()
-                let update = try bridge.skewUpdate(agentWireVersion: WireProtocol.currentVersion)
+                let update = try bridge.skewUpdate(agentWireVersion: Int(AgentProtocolCompatibility.major))
                 logger.notice("Wire skew: workload registration refused; using staged update-only assignment")
                 await handleDesiredAgentUpdate(update, reportWorkloadStatus: false, updater: updater)
                 throw AgentError.registrationFailed(
@@ -398,15 +398,10 @@ extension Agent {
             dependencyObservations: dependencyObservations
         )
 
-        if let client = websocketClient {
+        guard let client = websocketClient else { throw WebSocketClientError.notConnected }
+        logger.info("Sending registration message and waiting for the control plane response")
+        let assignedId = try await waitForRegistrationResponse {
             try await client.sendMessage(message)
-        }
-        logger.info("Registration message sent to control plane, waiting for response...")
-
-        // Wait for registration response with timeout
-        let assignedId = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<String, Error>) in
-            self.armRegistrationWait(continuation)
         }
 
         self.assignedAgentID = assignedId
@@ -420,6 +415,27 @@ extension Agent {
         _ = await storageDeviceInventory.refreshForRegistration()
         await sendObservedStateReport()
 
+    }
+
+    /// Arm the wait before sending: a response may arrive while the transport
+    /// actor is still completing its send. Send failures own only this attempt,
+    /// so a delayed failure cannot resume a successor's continuation.
+    func waitForRegistrationResponse(
+        sending send: @escaping @Sendable () async throws -> Void
+    ) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            armRegistrationWait(continuation)
+            let generation = registrationGeneration
+            guard registrationContinuation != nil else { return }
+            Task {
+                do {
+                    try await send()
+                } catch {
+                    guard generation == registrationGeneration else { return }
+                    takeRegistrationContinuation()?.resume(throwing: error)
+                }
+            }
+        }
     }
 
     /// Parks the given continuation as the pending registration wait and arms a
@@ -472,39 +488,49 @@ extension Agent {
     }
 
     /// Handle registration response from control plane
-    func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
-        let controlPlaneProtocolVersion = response.protocolVersion
-        guard controlPlaneProtocolVersion == WireProtocol.currentVersion else {
-            let reason =
-                "Control plane wire protocol version \(controlPlaneProtocolVersion) does not equal this agent's "
-                + "required version \(WireProtocol.currentVersion). Deploy matching control-plane and agent builds."
+    func handleRegistrationResponse(
+        _ response: AgentRegisterResponseMessage, registrationGeneration expectedGeneration: UInt64? = nil
+    ) async {
+        guard expectedGeneration == nil || expectedGeneration == registrationGeneration else { return }
+        let generation = registrationGeneration
+        do {
+            guard response.hasAgreement else { throw AgentProtocolCompatibility.Failure.missingMajor }
+            try AgentProtocolCompatibility.validate(
+                response.agreement, offered: AgentProtocolCompatibility.localOffer)
+        } catch {
+            let reason = "Control plane returned an incompatible Protobuf registration agreement"
             logger.error("Registration rejected: \(reason)")
             if let continuation = takeRegistrationContinuation() {
                 continuation.resume(throwing: AgentError.registrationRejected(reason))
             }
             return
         }
-
-        await startDesiredStatePoller()
-
         guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
             return
         }
-        continuation.resume(returning: response.agentId)
-    }
-
-    /// Start the desired-state long-poll loop — the only sync transport since
-    /// v38 (STR-146 introduced it; the pushed transport went with the skew
-    /// window). Called from every registration response, initial and
-    /// reconnect; `DesiredStatePoller.start()` is idempotent, so a reconnect
-    /// keeps the existing loop and its ETag rather than restarting from a full
-    /// fetch.
-    func startDesiredStatePoller() async {
-        guard desiredStatePoller == nil else {
-            await desiredStatePoller?.start()
+        protocolAgreement = response.agreement
+        await startDesiredStatePoller()
+        guard generation == registrationGeneration,
+            protocolAgreement?.inventorySessionID == response.agreement.inventorySessionID
+        else {
+            continuation.resume(throwing: AgentError.registrationSuperseded)
             return
         }
+        continuation.resume(returning: response.agentID)
+    }
+
+    /// Start a fresh desired-state long-poll loop for this registration's
+    /// negotiated session. Reconnects fetch a complete snapshot before reusing
+    /// conditional requests within the new session.
+    func startDesiredStatePoller() async {
+        guard let agreement = protocolAgreement else { return }
+        // A registration owns its poll session. Never reuse an ETag or closure
+        // captured by the superseded socket's agreement.
+        let previousPoller = desiredStatePoller
+        desiredStatePoller = nil
+        await previousPoller?.stop()
+        guard protocolAgreement?.inventorySessionID == agreement.inventorySessionID else { return }
 
         guard let url = URL(string: controlPlaneHTTPBase + Self.desiredStatePollPath) else {
             logger.error(
@@ -529,19 +555,26 @@ extension Agent {
 
         let poller = DesiredStatePoller(
             fetch: { ifNoneMatch in
-                try await downloader.poll(url: url, ifNoneMatch: ifNoneMatch)
+                try await downloader.poll(
+                    url: url, ifNoneMatch: ifNoneMatch, inventorySessionID: agreement.inventorySessionID)
             },
             deliver: { [weak self] envelope in
                 // Straight onto the ordinary inbound path so the fetched sync
                 // lands on the `.desiredState` serialization lane and inherits
                 // the ordering guarantees the reconciler relies on.
-                await self?.routeInboundMessage(envelope)
+                await self?.routeInboundMessage(envelope, inventorySessionID: agreement.inventorySessionID)
             },
             logger: logger,
-            fullRefetchInterval: configuration.desiredStateFullRefetchInterval
+            fullRefetchInterval: configuration.desiredStateFullRefetchInterval,
+            protocolAgreement: agreement
         )
         desiredStatePoller = poller
         await poller.start()
+        guard protocolAgreement?.inventorySessionID == agreement.inventorySessionID else {
+            if desiredStatePoller === poller { desiredStatePoller = nil }
+            await poller.stop()
+            return
+        }
         logger.info(
             "Desired state is now fetched by long-poll",
             metadata: [
@@ -567,7 +600,7 @@ extension Agent {
     /// reason instead of letting it time out after 30s; the caller (initial start or
     /// the reconnect loop) then surfaces it and retries as appropriate.
     func handleErrorResponse(_ message: ErrorMessage) async {
-        let detailSuffix = message.details.map { " (\($0))" } ?? ""
+        let detailSuffix = message.hasDetails ? " (\(message.details))" : ""
 
         if let continuation = takeRegistrationContinuation() {
             logger.error("Registration failed: \(message.error)\(detailSuffix)")
@@ -591,7 +624,7 @@ extension Agent {
         logger.error(
             "Control plane reported an error: \(message.error)\(detailSuffix)",
             metadata: [
-                "strato.request.id": .string(message.requestId)
+                "strato.request.id": .string(message.requestID)
             ])
     }
 
@@ -634,11 +667,11 @@ extension Agent {
     /// advertised: the mock has no live domain, so hot-attached limits cannot be
     /// applied or observed consistently.
     ///
-    /// Derived from `HypervisorType.allCases`, exactly like the mock registration
+    /// Derived from `HypervisorType.knownCases`, exactly like the mock registration
     /// in `start()`, so the two cannot drift apart and a new backend is simulated
     /// the moment it has an enum case.
     static func simulatedHypervisorSupport() -> [HypervisorSupport] {
-        HypervisorType.allCases.map { type in
+        HypervisorType.knownCases.map { type in
             HypervisorSupport(
                 type: type,
                 available: true,

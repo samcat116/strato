@@ -41,12 +41,13 @@ extension Agent {
         }
         if let fence {
             guard fence.generation == desired.generation, desired.desiredStatus == .suspended,
-                desired.spec.network == nil, fence.guestProtocolVersion == 5
+                !desired.spec.hasNetwork, fence.guestProtocolVersion == 5
             else {
                 throw SandboxSuspensionGuard.GateError.stale
             }
         }
-        if let snapshotId = desired.suspensionAfterSnapshotId {
+        if desired.hasSuspensionAfterSnapshotID {
+            let snapshotId = try UUID(protocolString: desired.suspensionAfterSnapshotID)
             guard !snapshotInventoryUnreadable, let snapshot = snapshotRecords[snapshotId],
                 snapshot.kind == .sandboxSnapshot, snapshot.parentId == UUID(uuidString: item.id)
             else { throw ConvergenceError.sourceNotReady("user checkpoint must be durably captured before suspension") }
@@ -72,7 +73,8 @@ extension Agent {
         let estimate = try await runtime.suspensionStorageEstimate(sandboxId: item.id)
         let previousBytes = entry.sandboxSuspension?.checkpointBytes ?? 0
         let (requiredBytes, overflow) = estimate.addingReportingOverflow(previousBytes)
-        guard !overflow, let budget = desired.suspensionStorageBudgetBytes, budget >= requiredBytes else {
+        guard !overflow, desired.hasSuspensionStorageBudgetBytes, desired.suspensionStorageBudgetBytes >= requiredBytes
+        else {
             throw ConvergenceError.sourceNotReady("internal checkpoint storage has not been admitted")
         }
         let current = SandboxHostReservation.forManifestEntry(entry)
@@ -80,7 +82,7 @@ extension Agent {
         let (stagingBytes, stagingOverflow) = estimate.multipliedReportingOverflow(by: 2)
         guard !stagingOverflow else { throw ConvergenceError.sourceNotReady("checkpoint staging size overflow") }
         let extra = HostReservation(
-            cpus: spec.cpus,
+            cpus: Int(spec.cpus),
             memoryBytes: WorkloadMemoryReservation.sandbox(memoryBytes: spec.memoryBytes).effectiveBytes,
             diskBytes: stagingBytes)
         let raw = await rawHostCapacitySnapshot()
@@ -127,7 +129,9 @@ extension Agent {
     }
 
     func performSandbox(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
-        if step != .shutdown && step != .delete, item.desiredSandbox?.spec.resourceClass?.policy.kind == .burstable {
+        if step != .shutdown && step != .delete, let desired = item.desiredSandbox,
+            desired.spec.hasResourceClass, desired.spec.resourceClass.policy.kind == .burstable
+        {
             throw HypervisorServiceError.invalidConfiguration(
                 "Burstable workloads require verified STR272 runtime enforcement")
         }
@@ -142,7 +146,7 @@ extension Agent {
             try await sandboxReconcileBoot(item)
         case .shutdown:
             if item.desiredSandbox?.desiredStatus == .suspended {
-                if item.desiredSandbox?.automaticSuspensionFence != nil {
+                if item.desiredSandbox?.hasAutomaticSuspensionFence == true {
                     let verdict = try await sandboxReconcileIdleSuspend(item, dependenciesReady: true)
                     guard verdict == .eligible else { throw SandboxSuspensionGuard.GateError.stale }
                 } else {
@@ -178,7 +182,7 @@ extension Agent {
     /// resolved fresh at sync assembly, so an entry that sat in the desired
     /// state for a while still carries usable locators.
     func sandboxReconcileRestore(_ item: ReconcileWorkItem) async throws {
-        guard let desired = item.desiredSandbox, let restore = desired.restore else {
+        guard let desired = item.desiredSandbox, desired.hasRestore else {
             throw SandboxRuntimeError.unsupportedStep("restore work item without a restore nonce")
         }
         // A restore loads the checkpoint resumed, and a resumed guest starts
@@ -188,7 +192,8 @@ extension Agent {
         // it is what covers a namespace a crash sweep removed under the
         // sandbox, or an attachment this agent life never learned because the
         // sandbox was adopted rather than created here.
-        let networks = item.desiredSandbox?.spec.network.map { [$0] } ?? []
+        let restore = desired.restore
+        let networks = desired.spec.hasNetwork ? [desired.spec.network] : []
         let jailUID = (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.jailUID
         let placement =
             networks.isEmpty
@@ -217,8 +222,9 @@ extension Agent {
         }
         defer { if let claim { capacityAdmissionLedger.release(claim) } }
         try await runtime.restoreSandbox(
-            sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
-            artifacts: restore.artifacts, networkAttachments: attachments, expectedGeneration: desired.generation)
+            sandboxId: item.id, snapshotId: restore.snapshotID,
+            artifacts: restore.optionalArtifacts?.values, networkAttachments: attachments,
+            expectedGeneration: desired.generation)
         if entry?.sandboxSuspension != nil {
             entry?.sandboxSuspension = try await runtime.suspensionRecord(sandboxId: item.id)
             if let entry { managedSandboxes[item.id] = entry }
@@ -281,7 +287,7 @@ extension Agent {
         guard let desired = item.desiredSandbox else {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
         }
-        guard desired.suspensionCheckpointId == nil else {
+        guard !desired.hasSuspensionCheckpointID else {
             throw ConvergenceError.sourceNotReady(
                 "durable suspension checkpoint is unavailable on this host; cold recreation is refused")
         }
@@ -344,7 +350,7 @@ extension Agent {
         // cannot realize a sandbox NIC surfaces the permanent reason without
         // leaving any network resources behind, and the deferred claim release
         // covers the refusal.
-        let networks = desired.spec.network.map { [$0] } ?? []
+        let networks = desired.spec.hasNetwork ? [desired.spec.network] : []
         // A network-free sandbox never reaches the placement, so don't refuse an
         // unjailed one over a NIC it doesn't have.
         let placement: NICPlacement
@@ -382,7 +388,8 @@ extension Agent {
         do {
             try await runtime.createSandbox(
                 sandboxId: item.id, spec: desired.spec,
-                registryCredential: desired.registryCredential, networkAttachments: attachments)
+                registryCredential: desired.optionalRegistryCredential,
+                networkAttachments: attachments)
         } catch {
             let released = await rollBackSandboxCreateManifest(
                 sandboxId: item.id, provisionalEntry: provisionalEntry,
@@ -501,7 +508,7 @@ extension Agent {
             guard persistManifest() else {
                 throw SandboxRuntimeError.snapshotIOFailed("could not persist restore reservations")
             }
-            let networks = currentSpec.network.map { [$0] } ?? []
+            let networks = currentSpec.hasNetwork ? [currentSpec.network] : []
             let placement =
                 networks.isEmpty
                 ? NICPlacement.hostNamespace
@@ -560,7 +567,7 @@ extension Agent {
         try await runtime.deleteSandbox(sandboxId: item.id, jailUID: jailUID)
 
         await networkOrchestrator.teardownAttachments(
-            vmId: item.id, networks: entry.sandboxSpec?.network.map { [$0] } ?? [],
+            vmId: item.id, networks: entry.sandboxSpec.map { $0.hasNetwork ? [$0.network] : [] } ?? [],
             placement: sandboxTeardownPlacement(sandboxId: item.id))
 
         // Release in memory before removing the durable record. A crash in
@@ -589,7 +596,7 @@ extension Agent {
     /// from the report does not exist here, which is how the control plane
     /// confirms deletions.
     func sendObservedStateReport() async {
-        guard assignedAgentID != nil, let reconciler else { return }
+        guard assignedAgentID != nil, let agreement = protocolAgreement, let reconciler else { return }
 
         observedReportEpoch += 1
         let epoch = observedReportEpoch
@@ -628,7 +635,7 @@ extension Agent {
                     memoryStats: memoryStatsCache[vmId],
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
-                        in: entry.spec.networks)
+                        in: entry.spec.networks.values)
                 ))
             reported.insert(vmId)
         }
@@ -653,7 +660,7 @@ extension Agent {
                     guestConfigFailedGeneration: facts.guestConfigFailedGeneration,
                     resourceTelemetry: workloadResourceTelemetry[vmId],
                     appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
-                        in: entry.spec.networks)
+                        in: entry.spec.networks.values)
                 ))
             reported.insert(vmId)
         }
@@ -780,6 +787,7 @@ extension Agent {
             return
         }
 
+        guard protocolAgreement?.inventorySessionID == agreement.inventorySessionID else { return }
         do {
             try await websocketClient?.sendMessage(report)
         } catch let error as WebSocketClientError where error.isNotConnected {
@@ -1008,7 +1016,7 @@ extension Agent {
         // deliberately left as the artifact's own id rather than guessed: the
         // control plane only reads `parentId` from an entry it can act on, and
         // an entry with `present: false` is progress, not an inventory.
-        for family in SnapshotArtifactKind.allCases {
+        for family in SnapshotArtifactKind.knownCases {
             let kind = family.workloadKind
             for (snapshotId, _) in await reconciler.inFlightWorkloads(kind: kind)
             where !reported.contains(snapshotId) {
@@ -1072,9 +1080,9 @@ extension Agent {
         var reported = Set<String>()
         let appliedPolicies = Dictionary(
             (Array(managedVMs.values) + Array(orphanedVMs.values))
-                .flatMap(\.spec.volumes)
-                .compactMap { volume in
-                    volume.appliedBlockPolicy.map { (volume.volumeId.uuidString, $0) }
+                .flatMap(\.spec.volumes.values)
+                .compactMap { volume -> (String, AppliedBlockDevicePolicy)? in
+                    volume.hasAppliedBlockPolicy ? (volume.volumeID, volume.appliedBlockPolicy) : nil
                 },
             uniquingKeysWith: { first, _ in first })
 

@@ -63,12 +63,14 @@ extension AgentService {
         let agentKey = identity.key
         let trustDomain = identity.trustDomain
 
-        // Strato deploys the control plane and agents as one wire-contract
-        // unit. Refuse any skew before creating state or starting sync.
-        let protocolVersion = message.protocolVersion
-        guard protocolVersion == WireProtocol.currentVersion else {
+        do {
+            _ = try AgentProtocolCompatibility.negotiate(
+                local: AgentProtocolCompatibility.localOffer, remote: message.protocolOffer,
+                inventorySessionID: inventorySessionID ?? UUID())
+        } catch {
             Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
-            throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
+            throw AgentServiceError.unsupportedProtocolVersion(
+                agentName: agentName, version: Int(message.protocolOffer.major))
         }
 
         let db = app.db
@@ -420,7 +422,7 @@ extension AgentService {
     func updateAgentHeartbeat(
         _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, inventorySession session: UUID?
     ) async throws {
-        guard let agentID = UUID(uuidString: message.agentId), observedInventorySessions[agentKey] == session else {
+        guard let agentID = UUID(uuidString: message.agentID), observedInventorySessions[agentKey] == session else {
             return
         }
         try await InventorySessionFence.withLock(agentID: agentID, on: app.db, logger: app.logger) { db in
@@ -433,12 +435,12 @@ extension AgentService {
         _ message: AgentHeartbeatMessage, fromAgentKey agentKey: String, on db: any Database
     ) async throws {
         let instant = try await ClusterClock.read(on: db)
-        guard let agentUUID = UUID(uuidString: message.agentId),
+        guard let agentUUID = UUID(uuidString: message.agentID),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
             app.logger.warning(
                 "Received heartbeat from unknown agent",
-                metadata: ["strato.agent.claimed.id": .string(message.agentId)])
+                metadata: ["strato.agent.claimed.id": .string(message.agentID)])
             return
         }
 
@@ -446,7 +448,7 @@ extension AgentService {
             app.logger.warning(
                 "Heartbeat claims an agentId not owned by the authenticated connection; ignoring",
                 metadata: [
-                    "strato.agent.claimed.id": .string(message.agentId),
+                    "strato.agent.claimed.id": .string(message.agentID),
                     "strato.agent.claimed.identity": .string(agent.identity.key),
                     "strato.agent.connection.identity": .string(agentKey),
                 ])
@@ -463,8 +465,8 @@ extension AgentService {
         let accepted = try await AgentResourceAdmission.find(agentUUID, on: db)?.state.resources
         if applyPeriodicAgentState(
             accepted ?? message.resources,
-            dependencyObservations: message.dependencyObservations,
-            hostResourceTelemetry: message.hostResourceTelemetry,
+            dependencyObservations: message.dependencyObservations.values,
+            hostResourceTelemetry: message.optionalHostResourceTelemetry,
             to: agent,
             at: instant)
         {
@@ -476,7 +478,7 @@ extension AgentService {
         // cluster-wide, not just to the process holding this socket.
         await refreshAgentPresenceIfNeeded(agentKey: agentKey, on: db)
 
-        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentId)])
+        app.logger.debug("Agent heartbeat updated", metadata: ["strato.agent.id": .string(message.agentID)])
     }
 
     /// Serialize report writes with the operator's durable state transition.
@@ -510,8 +512,8 @@ extension AgentService {
     ) -> Bool {
         guard !agent.administrativelyOffline else { return false }
         var changed = agent.updateAvailableResources(resources)
-        if let accounting = resources.memoryAccounting, let agentID = agent.id?.uuidString {
-            Telemetry.recordHostMemoryAccounting(agentID: agentID, accounting: accounting)
+        if resources.hasMemoryAccounting, let agentID = agent.id?.uuidString {
+            Telemetry.recordHostMemoryAccounting(agentID: agentID, accounting: resources.memoryAccounting)
         }
         let now = instant.date
         if let dependencyObservations {
@@ -532,16 +534,18 @@ extension AgentService {
                     receivedAt: now,
                     at: instant)
                 if previous[observation.id]?.functionalState != observation.functionalState
-                    || previous[observation.id]?.reason?.code != observation.reason?.code
+                    || previous[observation.id].flatMap({ $0.optionalReason?.code })
+                        != observation.optionalReason?.code
                 {
                     app.logger.log(
                         level: observation.functionalState == .unhealthy ? .error : .info,
                         "Agent dependency state changed",
                         metadata: [
                             "strato.agent.name": .string(agent.name),
-                            "dependency": .string(observation.id.rawValue),
-                            "state": .string(observation.functionalState.rawValue),
-                            "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
+                            "dependency": .string(observation.id.protocolValue),
+                            "state": .string(observation.functionalState.protocolValue),
+                            "reasonCode": .string(
+                                observation.hasReason ? observation.reason.code.protocolValue : "none"),
                         ])
                 }
             }
@@ -588,7 +592,7 @@ extension AgentService {
         var seen = Set<NodeDependencyID>()
         let duplicateIDs = Set(
             observations.compactMap { observation in
-                seen.insert(observation.id).inserted ? nil : observation.id.rawValue
+                seen.insert(observation.id).inserted ? nil : observation.id.protocolValue
             }
         ).sorted()
         app.logger.warning(
@@ -612,7 +616,7 @@ extension AgentService {
                 byID[observation.id] = observation
                 continue
             }
-            if observation.checkedAt >= current.checkedAt {
+            if observation.checkedAt.date >= current.checkedAt.date {
                 byID[observation.id] = observation
             }
         }
@@ -702,7 +706,7 @@ extension AgentService {
         var organizationScope = organizationScope
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
-            message.dependencyObservations, agentName: agentName)
+            message.dependencyObservations.values, agentName: agentName)
         let registrationInstant = try await ClusterClock.read(on: db)
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
@@ -915,6 +919,8 @@ extension AgentService {
         }
 
         try await InventorySessionFence.replace(session, agentID: targetAgentID, on: db)
+        try await AgentProtocolSession.persist(
+            message.protocolOffer, agentID: targetAgentID, sessionID: session, on: db)
         try await ResourceAdmissionService.invalidateSession(agentID: targetAgentID, on: db)
         return RegistrationPersistence(
             agent: agent, previousDependencyObservations: previousDependencyObservations,

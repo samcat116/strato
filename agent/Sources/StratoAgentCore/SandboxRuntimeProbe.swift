@@ -110,7 +110,8 @@ public enum SandboxRuntimeProbe {
             return .unavailable("Firecracker was not probed on this host")
         }
         guard firecracker.available else {
-            return .unavailable(firecracker.unavailabilityReason ?? "Firecracker is unavailable")
+            return .unavailable(
+                firecracker.hasUnavailabilityReason ? firecracker.unavailabilityReason : "Firecracker is unavailable")
         }
         guard let guestImagePath, !guestImagePath.isEmpty else {
             return .unavailable("sandbox_guest_image_path is not configured")
@@ -147,7 +148,7 @@ public enum SandboxRuntimeProbe {
     ) -> String? {
         guard networkCapability == .overlay else {
             return "sandbox networking needs network_mode = \"ovn\" with a connected OVN/OVS "
-                + "(this host reports \(networkCapability?.rawValue ?? "no networking capability"))"
+                + "(this host reports \(networkCapability?.protocolValue ?? "no networking capability"))"
         }
         guard jailsNewSandboxes else {
             return "a sandbox NIC lives in the jail's network namespace, and this agent creates "

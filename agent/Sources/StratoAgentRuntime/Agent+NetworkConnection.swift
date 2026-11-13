@@ -76,7 +76,7 @@ extension Agent {
     func refreshRegistrationAfterNetworkRecovery(
         fetchBridge: (@Sendable () async throws -> AgentUpdateBridgeResponse?)? = nil
     ) async {
-        guard assignedAgentID != nil else { return }
+        guard assignedAgentID != nil, protocolAgreement != nil else { return }
         do {
             try await prepareForWorkloadRegistration(fetchBridge: fetchBridge)
             try await registerWithControlPlane()

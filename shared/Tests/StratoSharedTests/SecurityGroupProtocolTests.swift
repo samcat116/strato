@@ -1,7 +1,8 @@
 import Foundation
+import SwiftProtobuf
 import Testing
 
-@testable import StratoShared
+import StratoShared
 
 @Suite("Security Group Protocol Tests")
 struct SecurityGroupProtocolTests {
@@ -38,70 +39,74 @@ struct SecurityGroupProtocolTests {
                 )
             ]
         )
-        let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
+        let decoded = try throughEnvelope(message)
 
-        let groups = try #require(decoded.securityGroups)
+        try #require(decoded.hasSecurityGroups)
+        let groups = decoded.securityGroups.values
         #expect(groups.count == 1)
-        #expect(groups[0].id == groupId)
+        #expect(groups[0].id == groupId.uuidString)
         #expect(groups[0].generation == 3)
-        #expect(groups[0].rules.count == 2)
-        #expect(groups[0].rules[0].id == ruleId)
-        #expect(groups[0].rules[0].direction == "ingress")
-        #expect(groups[0].rules[0].protocolName == "tcp")
-        #expect(groups[0].rules[0].portRangeMin == 443)
-        #expect(groups[0].rules[0].remoteCIDR == "0.0.0.0/0")
-        #expect(groups[0].rules[0].remoteGroupId == nil)
-        #expect(groups[0].rules[1].ethertype == "ipv6")
-        #expect(groups[0].rules[1].remoteGroupId == peerId)
-        #expect(groups[0].rules[1].protocolName == nil)
+        #expect(groups[0].rules.values.count == 2)
+        #expect(groups[0].rules.values[0].id == ruleId.uuidString)
+        #expect(groups[0].rules.values[0].direction == "ingress")
+        #expect(groups[0].rules.values[0].protocolName == "tcp")
+        #expect(groups[0].rules.values[0].portRangeMin == 443)
+        #expect(groups[0].rules.values[0].remoteCidr == "0.0.0.0/0")
+        #expect(!groups[0].rules.values[0].hasRemoteGroupID)
+        #expect(groups[0].rules.values[1].ethertype == "ipv6")
+        #expect(groups[0].rules.values[1].remoteGroupID == peerId.uuidString)
+        #expect(!groups[0].rules.values[1].hasProtocolName)
     }
 
     @Test("A non-authoritative desired message keeps securityGroups nil")
     func securityGroupsSemanticAbsence() throws {
-        // Nil (not []): absence means this sender has no opinion on security
-        // groups, which the agent must not read as "tear down all port groups".
-        let nonAuthoritative = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
-             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[],
-             "cephCredentialRevocations":[]}
-            """
-        let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
-        #expect(decoded.securityGroups == nil)
+        let absent = try throughEnvelope(DesiredStateMessage(syncId: "absent", vms: []))
+        let empty = try throughEnvelope(DesiredStateMessage(syncId: "empty", vms: [], securityGroups: []))
+        #expect(!absent.hasSecurityGroups)
+        #expect(empty.hasSecurityGroups)
+        #expect(empty.securityGroups.values.isEmpty)
     }
 
     @Test("NetworkSpec carries securityGroupIds and tolerates their absence")
     func networkSpecSecurityGroupIds() throws {
         let ids = [UUID(), UUID()]
         let spec = NetworkSpec(network: "default", networkId: UUID(), securityGroupIds: ids)
-        let data = try WireProtocol.makeEncoder().encode(spec)
-        let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
-        #expect(decoded.securityGroupIds == ids)
-
-        // Nil marks the NIC unmanaged: it joins no port groups, including the
-        // drop group.
-        let unmanaged = """
-            {"network":"default","networkId":"\(UUID().uuidString)",
-             "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
-            """
-        let unmanagedDecoded = try WireProtocol.makeDecoder().decode(
-            NetworkSpec.self, from: Data(unmanaged.utf8))
-        #expect(unmanagedDecoded.securityGroupIds == nil)
+        let unmanaged = NetworkSpec(network: "default", networkId: UUID())
+        let empty = NetworkSpec(network: "default", networkId: UUID(), securityGroupIds: [])
+        let message = DesiredStateMessage(
+            syncId: "nics",
+            vms: [
+                DesiredVMState(
+                    vmId: UUID(), hypervisorType: .qemu,
+                    spec: VMSpec(
+                        cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil), networks: [spec, unmanaged, empty]),
+                    desiredStatus: .running, generation: 1)
+            ])
+        let decoded = try throughEnvelope(message)
+        let vm = try #require(decoded.vms.values.first)
+        let nics = vm.spec.networks.values
+        try #require(nics.count == 3)
+        #expect(nics[0].hasSecurityGroupIds)
+        #expect(nics[0].securityGroupIds.values == ids.map(\.uuidString))
+        #expect(!nics[1].hasSecurityGroupIds)
+        #expect(nics[2].hasSecurityGroupIds)
+        #expect(nics[2].securityGroupIds.values.isEmpty)
     }
 
     @Test("A rule's log flag round-trips and is required")
     func ruleLogFlag() throws {
         let logged = DesiredSecurityGroupRule(
             id: UUID(), direction: "ingress", ethertype: "ipv4", log: true)
-        let data = try WireProtocol.makeEncoder().encode(logged)
-        #expect(try WireProtocol.makeDecoder().decode(DesiredSecurityGroupRule.self, from: data).log == true)
-
-        let missingLog = """
-            {"id":"\(UUID().uuidString)","direction":"ingress","ethertype":"ipv4"}
-            """
-        #expect(throws: DecodingError.self) {
-            try WireProtocol.makeDecoder().decode(
-                DesiredSecurityGroupRule.self, from: Data(missingLog.utf8))
-        }
+        var message = DesiredStateMessage(
+            syncId: "log", vms: [], securityGroups: [DesiredSecurityGroup(id: UUID(), generation: 1, rules: [logged])])
+        let decoded = try throughEnvelope(message)
+        let group = try #require(decoded.securityGroups.values.first)
+        let rule = try #require(group.rules.values.first)
+        #expect(rule.hasLog)
+        #expect(rule.log)
+        message.securityGroups.values[0].rules.values[0].clearLog()
+        #expect(throws: (any Error).self) { try WireProtocol.encodeEnvelope(message) }
+        let malformed = try MessageEnvelope(message: message).serializedData()
+        #expect(throws: AgentProtocolDecodeError.self) { try WireProtocol.decodeEnvelope(malformed) }
     }
 }

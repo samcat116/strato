@@ -26,8 +26,8 @@ public struct SandboxCheckpointManifest: Codable, Sendable, Equatable {
     public var hasValidShape: Bool {
         version == 1 && UUID(uuidString: sandboxId) != nil && UUID(uuidString: snapshotId) != nil
             && !identityNonce.isEmpty && !firecrackerVersion.isEmpty && guestControlProtocolVersion > 0
-            && artifacts.count == SandboxSnapshotArtifactKind.allCases.count
-            && Set(artifacts.map(\.kind)) == Set(SandboxSnapshotArtifactKind.allCases)
+            && artifacts.count == SandboxSnapshotArtifactKind.knownCases.count
+            && Set(artifacts.map(\.kind)) == Set(SandboxSnapshotArtifactKind.knownCases)
             && artifacts.allSatisfy {
                 $0.sizeBytes > 0 && $0.sha256.utf8.count == 64
                     && $0.sha256.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
@@ -62,7 +62,7 @@ public struct SandboxCheckpointManifest: Codable, Sendable, Equatable {
         else { throw CheckpointError.invalidManifest }
         let archive = try openDirectory(directory)
         defer { _ = close(archive) }
-        let artifacts = try SandboxSnapshotArtifactKind.allCases.map {
+        let artifacts = try SandboxSnapshotArtifactKind.knownCases.map {
             try inspect(kind: $0, archive: archive, flush: true)
         }
         let manifest = Self(

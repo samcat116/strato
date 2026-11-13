@@ -111,7 +111,7 @@ extension SandboxSnapshot {
     static func artifactTransferPath(
         sandboxId: UUID, snapshotId: UUID, kind: SandboxSnapshotArtifactKind
     ) -> String {
-        "/api/sandboxes/\(sandboxId.uuidString)/snapshots/\(snapshotId.uuidString)/artifacts/\(kind.rawValue)"
+        "/api/sandboxes/\(sandboxId.uuidString)/snapshots/\(snapshotId.uuidString)/artifacts/\(kind.protocolValue)"
     }
 
     /// Download descriptors for this snapshot's exported artifacts:

@@ -82,7 +82,7 @@ struct ImageDownloadMTLSTests {
     private func downloadPath(
         project: Project, image: Image, artifact: ArtifactKind = .diskImage
     ) -> String {
-        "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=\(artifact.rawValue)"
+        "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=\(artifact.protocolValue)"
     }
 
     @Test("An agent SVID identity downloads an image it was assigned")

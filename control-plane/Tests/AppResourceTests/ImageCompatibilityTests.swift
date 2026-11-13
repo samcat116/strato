@@ -26,7 +26,7 @@ struct ImageCompatibilityTests {
             kind: kind,
             format: format,
             architecture: arch,
-            filename: kind.rawValue,
+            filename: kind.protocolValue,
             size: 1,
             checksum: String(repeating: "c", count: 64),
             storagePath: "p"

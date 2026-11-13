@@ -6,6 +6,7 @@ import NIOConcurrencyHelpers
 import NIOCore
 import NIOWebSocket
 import StratoShared
+import SwiftProtobuf
 import Testing
 import Vapor
 
@@ -24,23 +25,22 @@ import AppTestSupport
 @Suite("Agent WebSocket Integration", .serialized, .postgresFixture)
 struct AgentWebSocketIntegrationTests {
 
-    @Test("Recorded command output is excluded from raw trace previews regardless of JSON key order")
-    func recordedCommandStateSuppressesTracePreview() throws {
-        let state = GuestExecRecordedStateMessage(
-            sessionId: UUID().uuidString,
-            revision: 1,
-            status: .running,
-            rawStdout: Data(repeating: 65, count: 1_024),
-            rawStderr: Data(),
-            truncated: false)
-        let envelope = try MessageEnvelope(message: state)
-        let payloadFirstText =
-            #"{"payload":"\#(envelope.payload.base64EncodedString())","type":"guest_exec_recorded_state"}"#
-
-        #expect(!payloadFirstText.prefix(64).contains(MessageType.guestExecRecordedState.rawValue))
-        #expect(
-            AgentWebSocketController.rawTextPreview(
-                for: payloadFirstText, envelopeType: envelope.type) == nil)
+    @Test("Legacy JSON text frames are rejected at the WebSocket boundary")
+    func legacyTextFramesAreRejected() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+            let name = "legacy-text-agent"
+            let org = try await self.makeOrg(app: app)
+            let enrollment = AgentEnrollment(
+                agentName: name, spiffeID: "spiffe://strato.local/agent/" + name,
+                expirationHours: 1, organizationScope: .organization(try org.requireID()))
+            try await enrollment.save(on: app.db)
+            let client = try await AgentTestClient.connect(
+                app: app, port: port, name: name, headers: self.xfccHeaders(agentName: name))
+            client.sendText(#"{"type":"agent_register","payload":"e30="}"#)
+            #expect(try await client.waitForClose() == .unacceptableData)
+            #expect(try await Agent.query(on: app.db).count() == 0)
+        }
     }
 
     /// New agents take their owning organization from their enrollment row.
@@ -259,8 +259,8 @@ struct AgentWebSocketIntegrationTests {
 
             let client = try await AgentTestClient.connect(
                 app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
-            let registerJSON = try encodeRegister(agentName: agentName)
-            client.send(registerJSON)
+            let registrationFrame = try encodeRegister(agentName: agentName)
+            client.send(registrationFrame)
 
             let envelope = try await client.nextEnvelope()
             #expect(envelope.type == .agentRegisterResponse)
@@ -310,10 +310,10 @@ struct AgentWebSocketIntegrationTests {
             // validation is still in flight. Without the controller's pre-auth
             // frame buffer this frame would race ahead of `state.agentName` being
             // set and be dropped, and registration would never complete.
-            let registerJSON = try encodeRegister(agentName: agentName)
+            let registrationFrame = try encodeRegister(agentName: agentName)
             let client = try await AgentTestClient.connect(
                 app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName),
-                sendOnUpgrade: registerJSON)
+                sendOnUpgrade: registrationFrame)
 
             let envelope = try await client.nextEnvelope()
             #expect(envelope.type == .agentRegisterResponse)
@@ -332,8 +332,8 @@ struct AgentWebSocketIntegrationTests {
 
             let org = try await self.makeOrg(app: app)
             for (agentName, version) in [
-                ("agent-legacy", WireProtocol.currentVersion - 1),
-                ("agent-future", WireProtocol.currentVersion + 1),
+                ("agent-legacy", Int(AgentProtocolCompatibility.major) - 1),
+                ("agent-future", Int(AgentProtocolCompatibility.major) + 1),
             ] {
                 let enrollment = AgentEnrollment(
                     agentName: agentName,
@@ -345,11 +345,7 @@ struct AgentWebSocketIntegrationTests {
                 let client = try await AgentTestClient.connect(
                     app: app, port: port, name: agentName,
                     headers: self.xfccHeaders(agentName: agentName))
-                let registration =
-                    version < WireProtocol.currentVersion
-                    ? try encodeRegisterOmittingPhysicalFreeDisk(
-                        agentName: agentName, protocolVersion: version)
-                    : try encodeRegister(agentName: agentName, protocolVersion: version)
+                let registration = try encodeRegister(agentName: agentName, protocolVersion: version)
                 client.send(registration)
 
                 let envelope = try await client.nextEnvelope()
@@ -357,7 +353,7 @@ struct AgentWebSocketIntegrationTests {
 
                 let error = try envelope.decode(as: ErrorMessage.self)
                 #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
-                #expect(error.error.contains("requires exactly v\(WireProtocol.currentVersion)"))
+                #expect(error.error.contains("protocol major"))
 
                 try await client.close()
             }
@@ -388,7 +384,7 @@ struct AgentWebSocketIntegrationTests {
             let error = try envelope.decode(as: ErrorMessage.self)
             #expect(envelope.type == .error)
             #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
-            #expect(error.error.contains("omitted the required wire protocol version"))
+            #expect(error.error.contains("protocol major"))
             #expect(try await Agent.query(on: app.db).count() == 0)
 
             try await client.close()
@@ -601,7 +597,7 @@ private final class AgentTestClient: Sendable {
         port: Int,
         name: String,
         headers: HTTPHeaders,
-        sendOnUpgrade: String? = nil
+        sendOnUpgrade: Data? = nil
     ) async throws -> AgentTestClient {
         let frames = FrameCollector()
 
@@ -621,9 +617,8 @@ private final class AgentTestClient: Sendable {
                     let data = Data(buffer.readableBytesView)
                     Task { await frames.deliver(data) }
                 }
-                ws.onText { _, string in
-                    let data = Data(string.utf8)
-                    Task { await frames.deliver(data) }
+                ws.onText { _, _ in
+                    Issue.record("Agent server sent a text frame instead of binary Protobuf")
                 }
                 if let sendOnUpgrade {
                     ws.send(sendOnUpgrade)
@@ -651,11 +646,12 @@ private final class AgentTestClient: Sendable {
         return AgentTestClient(ws: ws, frames: frames)
     }
 
-    /// Send a text frame. The server accepts both text and binary on the agent
-    /// socket; text keeps the wire payload human-readable in logs.
-    func send(_ text: String) {
-        ws.send(text)
+    /// The agent workload protocol accepts binary Protobuf frames only.
+    func send(_ data: Data) {
+        ws.send(data)
     }
+
+    func sendText(_ text: String) { ws.send(text) }
 
     /// Await the next inbound frame, decoded as a wire envelope, failing the test
     /// if none arrives within the timeout. The timeout is generous: CI runs the
@@ -666,7 +662,7 @@ private final class AgentTestClient: Sendable {
         guard let data = try await withTimeout(timeout, { [frames] in await frames.next() }) else {
             throw TimeoutError()
         }
-        return try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
+        return try WireProtocol.decodeEnvelope(data)
     }
 
     func expectNoEnvelope(for duration: Duration) async throws {
@@ -789,12 +785,13 @@ private func withTimeout<T: Sendable>(
     }
 }
 
-/// Encode an `AgentRegisterMessage` envelope to a JSON string suitable for
-/// sending as a WebSocket text frame.
+/// Encode registration as a binary Protobuf WebSocket frame.
 private func encodeRegister(
     agentName: String,
-    protocolVersion: Int = WireProtocol.currentVersion
-) throws -> String {
+    protocolVersion: Int = Int(AgentProtocolCompatibility.major)
+) throws -> Data {
+    var offer = AgentProtocolCompatibility.localOffer
+    offer.major = UInt32(protocolVersion)
     let message = AgentRegisterMessage(
         agentId: agentName,
         hostname: "test-host",
@@ -807,41 +804,17 @@ private func encodeRegister(
             totalDisk: Int64(100 * 1024 * 1024 * 1024),
             availableDisk: Int64(100 * 1024 * 1024 * 1024)
         ),
-        protocolVersion: protocolVersion
+        protocolOffer: offer
     )
-    let envelope = try MessageEnvelope(message: message)
-    let data = try WireProtocol.makeEncoder().encode(envelope)
-    return String(decoding: data, as: UTF8.self)
+    return try WireProtocol.encodeEnvelope(message)
 }
 
-private func encodeRegisterOmittingProtocolVersion(agentName: String) throws -> String {
+private func encodeRegisterOmittingProtocolVersion(agentName: String) throws -> Data {
     let encoded = try encodeRegister(agentName: agentName)
-    let envelopeData = Data(encoded.utf8)
-    var envelope = try #require(JSONSerialization.jsonObject(with: envelopeData) as? [String: Any])
-    let encodedPayload = try #require(envelope["payload"] as? String)
-    let payload = try #require(Data(base64Encoded: encodedPayload))
-    var registration = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
-    registration.removeValue(forKey: "protocolVersion")
-    let missingVersionPayload = try JSONSerialization.data(withJSONObject: registration)
-    envelope["payload"] = missingVersionPayload.base64EncodedString()
-    return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
-}
-
-private func encodeRegisterOmittingPhysicalFreeDisk(
-    agentName: String, protocolVersion: Int
-) throws -> String {
-    let encoded = try encodeRegister(agentName: agentName, protocolVersion: protocolVersion)
-    let envelopeData = Data(encoded.utf8)
-    var envelope = try #require(JSONSerialization.jsonObject(with: envelopeData) as? [String: Any])
-    let encodedPayload = try #require(envelope["payload"] as? String)
-    let payload = try #require(Data(base64Encoded: encodedPayload))
-    var registration = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
-    var resources = try #require(registration["resources"] as? [String: Any])
-    resources.removeValue(forKey: "physicalFreeDisk")
-    registration["resources"] = resources
-    let legacyPayload = try JSONSerialization.data(withJSONObject: registration)
-    envelope["payload"] = legacyPayload.base64EncodedString()
-    return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
+    var envelope = try Strato_Agent_V1_AgentEnvelope(serializedBytes: encoded)
+    envelope.agentRegisterMessage.protocolOffer.clearMajor()
+    // Deliberately bypass the production encoder to exercise malformed peers.
+    return try envelope.serializedData()
 }
 
 /// Public test certificate only; no infrastructure credential is used.

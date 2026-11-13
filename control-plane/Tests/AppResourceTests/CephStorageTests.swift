@@ -206,7 +206,7 @@ final class CephStorageTests {
                     type: hypervisorType, available: true, accelerated: true)
             ],
             networkCapability: hypervisorType == .firecracker ? .overlay : .userMode,
-            protocolVersion: WireProtocol.currentVersion,
+            protocolOffer: .with { $0.major = UInt32(Int(AgentProtocolCompatibility.major)) },
             metadataServiceCapable: hypervisorType == .firecracker,
             dependencyObservations: (cephCapable
                 ? [
@@ -376,7 +376,7 @@ final class CephStorageTests {
             #expect(revocation.credentialID == projectSecretID)
             let desired = try await fixture.app.desiredStateAssembler.assemble(agentId: agentID)
             #expect(
-                desired.cephCredentialRevocations
+                desired.cephCredentialRevocations.values
                     == [
                         DesiredCephCredentialRevocation(
                             clusterId: clusterID, credentialId: projectSecretID)
@@ -754,15 +754,16 @@ final class CephStorageTests {
                     ]))
 
             let desired = try await fixture.app.desiredStateAssembler.assemble(agentId: capable)
-            let desiredBoot = try #require(desired.volumes.first { $0.volumeId == bootID })
-            guard case .ceph(let storage) = desiredBoot.storage else {
+            let desiredBoot = try #require(desired.volumes.values.first { $0.volumeID == bootID.uuidString })
+            guard case .ceph(let storageValue) = desiredBoot.storage.value else {
                 Issue.record("Firecracker boot volume was not assembled as Ceph storage")
                 return
             }
-            #expect(storage.clusterId == clusterID)
-            #expect(desiredBoot.attachment?.vmId == vmID)
-            let desiredVM = try #require(desired.vms.first { $0.vmId == vmID })
-            #expect(desiredVM.spec.volumes.first?.attachment == attachment)
+            let storage = storageValue.configuration
+            #expect(storage.clusterID == clusterID.uuidString)
+            #expect(desiredBoot.attachment.vmID == vmID.uuidString)
+            let desiredVM = try #require(desired.vms.values.first { $0.vmID == vmID.uuidString })
+            #expect(desiredVM.spec.volumes.values.first?.attachment == attachment)
         }
     }
 
@@ -923,13 +924,14 @@ final class CephStorageTests {
             let initialDesired = try await fixture.app.desiredStateAssembler.assemble(
                 agentId: agentA)
             let desiredVolume = try #require(
-                initialDesired.volumes.first { $0.volumeId == volumeID })
-            guard case .ceph(let desiredStorage) = desiredVolume.storage else {
+                initialDesired.volumes.values.first { $0.volumeID == volumeID.uuidString })
+            guard case .ceph(let desiredStorageValue) = desiredVolume.storage.value else {
                 Issue.record("Ceph volume was not assembled with Ceph storage")
                 return
             }
-            #expect(desiredStorage.credentialId == credentialID)
-            #expect(desiredStorage.credentialId != accessID)
+            let desiredStorage = desiredStorageValue.configuration
+            #expect(desiredStorage.credentialID == credentialID.uuidString)
+            #expect(desiredStorage.credentialID != accessID.uuidString)
 
             // Presence without a valid canonical RBD attachment cannot settle
             // the create: there is nothing safe for a VM spec to consume yet.
@@ -952,11 +954,11 @@ final class CephStorageTests {
                 image: CephVolumeStorage.imageName(volumeId: volumeID),
                 namespace: desiredStorage.namespace,
                 user: String(desiredStorage.clientName.dropFirst("client.".count)),
-                monEndpoints: desiredStorage.monEndpoints,
-                clusterId: desiredStorage.clusterId,
-                credentialId: desiredStorage.credentialId,
+                monEndpoints: desiredStorage.monEndpoints.values,
+                clusterId: try UUID(protocolString: desiredStorage.clusterID),
+                credentialId: try UUID(protocolString: desiredStorage.credentialID),
                 configPath:
-                    "/var/lib/strato/ceph/\(desiredStorage.clusterId.uuidString.lowercased())/\(desiredStorage.credentialId.uuidString.lowercased())/ceph.conf"
+                    "/var/lib/strato/ceph/\(desiredStorage.clusterID.lowercased())/\(desiredStorage.credentialID.lowercased())/ceph.conf"
             )
             let wrongVolumeAttachment = DiskAttachment.rbd(
                 pool: desiredStorage.pool,
@@ -964,11 +966,11 @@ final class CephStorageTests {
                     volumeId: UUID(uuidString: "99999999-8888-4777-8666-555555555555")!),
                 namespace: desiredStorage.namespace,
                 user: String(desiredStorage.clientName.dropFirst("client.".count)),
-                monEndpoints: desiredStorage.monEndpoints,
-                clusterId: desiredStorage.clusterId,
-                credentialId: desiredStorage.credentialId,
+                monEndpoints: desiredStorage.monEndpoints.values,
+                clusterId: try UUID(protocolString: desiredStorage.clusterID),
+                credentialId: try UUID(protocolString: desiredStorage.credentialID),
                 configPath:
-                    "/var/lib/strato/ceph/\(desiredStorage.clusterId.uuidString.lowercased())/\(desiredStorage.credentialId.uuidString.lowercased())/ceph.conf"
+                    "/var/lib/strato/ceph/\(desiredStorage.clusterID.lowercased())/\(desiredStorage.credentialID.lowercased())/ceph.conf"
             )
             await #expect(throws: Abort.self) {
                 try await fixture.app.observedStateApplier.apply(
@@ -1237,11 +1239,12 @@ final class CephStorageTests {
             let snapshotSync = try await fixture.app.desiredStateAssembler.assemble(agentId: agentA)
             let snapshotID = try snapshot.requireID()
             let desiredSnapshot = try #require(
-                snapshotSync.snapshots.first { $0.snapshotId == snapshotID })
-            guard case .ceph(let snapshotStorage) = desiredSnapshot.volumeStorage else {
+                snapshotSync.snapshots.values.first { $0.snapshotID == snapshotID.uuidString })
+            guard case .ceph(let snapshotStorageValue) = desiredSnapshot.volumeStorage.value else {
                 Issue.record("Ceph volume snapshot did not carry its parent storage configuration")
                 return
             }
+            let snapshotStorage = snapshotStorageValue.configuration
             #expect(snapshotStorage.pool == "rbd")
             #expect(snapshotStorage.namespace == "project-a")
             #expect(snapshotStorage.clientName == "client.project-a")

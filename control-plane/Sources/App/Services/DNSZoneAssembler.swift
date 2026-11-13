@@ -366,8 +366,8 @@ extension DNSZoneAssembler {
         for record in records {
             update(record.name)
             update(record.type)
-            withUnsafeBytes(of: UInt32(record.values.count).bigEndian) { hasher.update(data: Data($0)) }
-            for value in record.values { update(value) }
+            withUnsafeBytes(of: UInt32(record.values.values.count).bigEndian) { hasher.update(data: Data($0)) }
+            for value in record.values.values { update(value) }
             withUnsafeBytes(
                 of: UInt32(bitPattern: Int32(truncatingIfNeeded: record.ttl)).bigEndian
             ) {

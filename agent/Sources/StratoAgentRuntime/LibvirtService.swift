@@ -600,7 +600,7 @@ actor LibvirtService: HypervisorService {
         metadata: InstanceMetadata? = nil,
         vsockCID: UInt32? = nil
     ) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         try await perform("create", vmId: vmId) {
             logger.info("Creating libvirt domain", metadata: ["strato.vm.id": .string(vmId)])
 
@@ -644,18 +644,21 @@ actor LibvirtService: HypervisorService {
             var cloudInitISOPath: String?
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
             let needsSeed =
-                spec.guestAgentEnabled || !spec.sshAuthorizedKeys.isEmpty || spec.userData != nil
-                || metadata?.hostname != nil || spec.metadataSource == .imds
+                spec.guestAgentEnabled || !spec.sshAuthorizedKeys.values.isEmpty || spec.hasUserData
+                || metadata?.hasHostname == true || spec.metadataSource == .imds
                 || CloudInitProvisioner.networkConfigYAML(
                     for: networkAttachments, renameInterfaces: spec.metadataSource == .iso) != nil
             if needsSeed {
                 do {
                     _ = try await cloudInitProvisioner.makeNoCloudISO(
-                        at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                        sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                        at: isoPath, vmId: vmId, hostname: metadata.flatMap { $0.optionalHostname },
+                        sshAuthorizedKeys: spec.sshAuthorizedKeys.values,
+                        userData: spec.optionalUserData,
                         guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
                         metadataSource: spec.metadataSource,
-                        noCloudSeedToken: metadata?.noCloudSeedToken,
+                        noCloudSeedToken: metadata.flatMap {
+                            $0.hasNoCloudSeedToken ? UUID(uuidString: $0.noCloudSeedToken) : nil
+                        },
                         networkAttachments: networkAttachments)
                     cloudInitISOPath = isoPath
                 } catch {
@@ -679,11 +682,14 @@ actor LibvirtService: HypervisorService {
                         guestMemoryBytes: spec.memoryBytes, overheadBytes: memoryOverheadBytes)
                     : nil)
             var xml = try DomainXMLBuilder.build(input)
-            if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+            if let limits = try burstableLimits(
+                spec.optionalResourceClass, guestBytes: spec.memoryBytes)
+            {
                 xml =
                     try DomainBurstableTuning.updating(
                         in: xml, limits: limits, pageSize: BurstableCgroupEnforcement.hostPageSizeBytes,
-                        resourceClass: spec.resourceClass, guestGrantBytes: spec.memoryBytes) ?? xml
+                        resourceClass: spec.optionalResourceClass,
+                        guestGrantBytes: spec.memoryBytes) ?? xml
             }
 
             // A VM with enough devices of its own to reach the root-port ceiling
@@ -847,7 +853,7 @@ actor LibvirtService: HypervisorService {
         guard spec.metadataSource == .imds else { return }
 
         try await perform("guest-bootstrap", vmId: vmId) {
-            guard let token = metadata?.noCloudSeedToken else {
+            guard let metadata, metadata.hasNoCloudSeedToken else {
                 throw HypervisorServiceError.invalidConfiguration(
                     "IMDS VM \(vmId) has no NoCloud seed capability in desired metadata")
             }
@@ -866,10 +872,11 @@ actor LibvirtService: HypervisorService {
             let isoPath = VMDirectoryLayout.cloudInitISO(vmDirectory: vmDirectory)
             do {
                 _ = try await cloudInitProvisioner.makeNoCloudISO(
-                    at: isoPath, vmId: vmId, hostname: metadata?.hostname,
-                    sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                    at: isoPath, vmId: vmId, hostname: metadata.optionalHostname,
+                    sshAuthorizedKeys: spec.sshAuthorizedKeys.values, userData: spec.optionalUserData,
                     guestAgentRelease: spec.guestAgentEnabled ? GuestAgentBootstrap.defaultRelease : nil,
-                    metadataSource: spec.metadataSource, noCloudSeedToken: token,
+                    metadataSource: spec.metadataSource,
+                    noCloudSeedToken: try UUID(protocolString: metadata.noCloudSeedToken),
                     networkAttachments: networkAttachments)
             } catch {
                 throw HypervisorServiceError.diskError(
@@ -891,13 +898,16 @@ actor LibvirtService: HypervisorService {
     /// Required boot-time convergence, separate from best-effort widening.
     /// The inactive definition is the source the next QEMU process reads.
     func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         do {
             try await perform("memory-ceiling", vmId: vmId) {
                 let dom = try await domain(vmId)
-                if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+                if let limits = try burstableLimits(
+                    spec.optionalResourceClass, guestBytes: spec.memoryBytes)
+                {
                     try await defineBurstableControls(
-                        dom, vmId: vmId, limits: limits, resourceClass: spec.resourceClass)
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.optionalResourceClass
+                    )
                     return
                 }
                 let desired =
@@ -916,7 +926,9 @@ actor LibvirtService: HypervisorService {
                     try await client.domainDefineXML(xml: xml, deadline: deadline)
                 }
             }
-        } catch  where !memoryControllerAvailable && spec.resourceClass?.policy.kind != .burstable {
+        } catch
+            where !memoryControllerAvailable && (!spec.hasResourceClass || spec.resourceClass.policy.kind != .burstable)
+        {
             // Graceful degradation is deliberate on unsupported hosts. A stale
             // hard limit may remain in the definition, but this host cannot
             // enforce one and the boot must not be held behind its removal.
@@ -1169,8 +1181,8 @@ actor LibvirtService: HypervisorService {
     /// the manifest spec — a define over the VM's existing disks, which is
     /// exactly the right recovery.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
-        let serializesControls = spec.resourceClass?.policy.kind == .burstable
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
+        let serializesControls = (spec.hasResourceClass && spec.resourceClass.policy.kind == .burstable)
         if serializesControls, !burstableOperations.insert(vmId).inserted {
             throw ConvergenceError.blocked("A libvirt resource operation is already in flight for this workload")
         }
@@ -1178,7 +1190,9 @@ actor LibvirtService: HypervisorService {
         do {
             let dom = try await domain(vmId)
             let status = LibvirtDomain.vmStatus(forRawState: try await state(of: dom, vmId: vmId))
-            if let limits = try burstableLimits(spec.resourceClass, guestBytes: spec.memoryBytes) {
+            if let limits = try burstableLimits(
+                spec.optionalResourceClass, guestBytes: spec.memoryBytes)
+            {
                 let persisted = try DomainBurstableTuning.resourceClass(
                     in: try await inactiveDomainXML(dom, vmId: vmId))
                 guard persisted == spec.resourceClass else {
@@ -1189,7 +1203,8 @@ actor LibvirtService: HypervisorService {
                     try verifyBurstableControls(vmId: vmId, limits: limits)
                 } else {
                     try await defineBurstableControls(
-                        dom, vmId: vmId, limits: limits, resourceClass: spec.resourceClass)
+                        dom, vmId: vmId, limits: limits, resourceClass: spec.optionalResourceClass
+                    )
                 }
                 return status
             }
@@ -1203,7 +1218,7 @@ actor LibvirtService: HypervisorService {
             }
             logger.info(
                 "Adopted libvirt domain",
-                metadata: ["strato.vm.id": .string(vmId), "status": .string(status.rawValue)])
+                metadata: ["strato.vm.id": .string(vmId), "status": .string(status.protocolValue)])
             return status
         } catch let error where LibvirtFailure.isDomainMissing(error) {
             throw HypervisorServiceError.adoptionTargetGone(
@@ -1479,7 +1494,7 @@ actor LibvirtService: HypervisorService {
         vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
     ) async throws {
         try await perform("attach-network", vmId: vmId) {
-            guard let configuredMAC = spec.macAddress, let mac = MACAddress(configuredMAC) else {
+            guard spec.hasMacAddress, let mac = MACAddress(spec.macAddress) else {
                 throw HypervisorServiceError.invalidConfiguration(
                     "VM network hot-plug requires a valid stable unicast MAC address")
             }
@@ -1501,7 +1516,7 @@ actor LibvirtService: HypervisorService {
                         dom: dom, xml: xml, flags: flags, deadline: deadline)
                 }
             } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
-                let label = spec.deviceName ?? "network interface"
+                let label = spec.hasDeviceName ? spec.deviceName : "network interface"
                 throw HypervisorServiceError.invalidConfiguration(
                     "VM \(vmId) has no free PCIe root port to attach \(label). A running domain's ports "
                         + "cannot be added to, so this will not succeed on retry: stop and start the VM, "
@@ -1512,7 +1527,7 @@ actor LibvirtService: HypervisorService {
 
     func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws {
         try await perform("detach-network", vmId: vmId) {
-            guard let configuredMAC = spec.macAddress, let mac = MACAddress(configuredMAC) else {
+            guard spec.hasMacAddress, let mac = MACAddress(spec.macAddress) else {
                 throw HypervisorServiceError.invalidConfiguration(
                     "VM network hot-unplug requires a valid stable unicast MAC address")
             }
@@ -1584,7 +1599,7 @@ actor LibvirtService: HypervisorService {
                     ])
             } else {
                 let target = DomainDiskInventory.nextTargetDevice(after: disks)
-                let xml = DomainDeviceXML.hotplugDisk(
+                let xml = try DomainDeviceXML.hotplugDisk(
                     attachment: attachment, target: target, readonly: readonly, volumeId: volumeId,
                     blockPolicy: blockPolicy, ioLimits: ioLimits)
                 let flags = try await deviceFlags(dom, vmId: vmId)
@@ -1762,11 +1777,15 @@ actor LibvirtService: HypervisorService {
         }
 
         let applied = try await readDiskIOLimits(dom: dom, vmId: vmId, target: target)
-        guard applied.iopsTotal == limits?.iopsTotal, applied.bpsTotal == limits?.bpsTotal else {
+        let appliedIOPS = applied.optionalIopsTotal
+        let appliedBPS = applied.optionalBpsTotal
+        let requestedIOPS = limits.flatMap { $0.optionalIopsTotal }
+        let requestedBPS = limits.flatMap { $0.optionalBpsTotal }
+        guard appliedIOPS == requestedIOPS, appliedBPS == requestedBPS else {
             throw HypervisorServiceError.diskError(
                 "libvirt read back volume target \(target) with IOPS/BPS limits "
-                    + "\(String(describing: applied.iopsTotal))/\(String(describing: applied.bpsTotal)); "
-                    + "requested \(String(describing: limits?.iopsTotal))/\(String(describing: limits?.bpsTotal))")
+                    + "\(String(describing: appliedIOPS))/\(String(describing: appliedBPS)); "
+                    + "requested \(String(describing: requestedIOPS))/\(String(describing: requestedBPS))")
         }
     }
 
@@ -1859,7 +1878,7 @@ actor LibvirtService: HypervisorService {
     ///   the guest may ignore, and `domainMemoryStats`' `actualBalloon` on the
     ///   next poll is what says whether memory came back.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
-        try requireBurstableSupport(vmId: vmId, resourceClass: spec.resourceClass)
+        try requireBurstableSupport(vmId: vmId, resourceClass: spec.optionalResourceClass)
         try await perform("resize", vmId: vmId) {
             let dom = try await domain(vmId)
             let info = try await call(
@@ -1884,7 +1903,9 @@ actor LibvirtService: HypervisorService {
                 live && layout.virtioMem != nil
                 ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
 
-            if let target = try burstableLimits(spec.resourceClass, guestBytes: targetGuestMemory) {
+            if let target = try burstableLimits(
+                spec.optionalResourceClass, guestBytes: targetGuestMemory)
+            {
                 if live && layout.virtioMem == nil && targetGuestMemory != currentGuestMemory {
                     throw ConvergenceError.blocked(
                         "Burstable memory changes require guest hotplug support or a stopped VM")
@@ -1929,7 +1950,8 @@ actor LibvirtService: HypervisorService {
                     try await resizeCPUs(dom, vmId: vmId, spec: spec, currentCPUs: Int(info.nrVirtCpu), live: false)
                     try await resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: false)
                 }
-                try await defineBurstableControls(dom, vmId: vmId, limits: target, resourceClass: spec.resourceClass)
+                try await defineBurstableControls(
+                    dom, vmId: vmId, limits: target, resourceClass: spec.optionalResourceClass)
                 if live { await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout) }
                 return
             }
@@ -2077,7 +2099,7 @@ actor LibvirtService: HypervisorService {
     ) async throws {
         guard
             let flags = try LibvirtDomain.vcpuResizeFlags(
-                current: currentCPUs, target: spec.cpus, domainIsLive: live)
+                current: currentCPUs, target: Int(spec.cpus), domainIsLive: live)
         else { return }
         let growing = spec.cpus > currentCPUs
         try await call("libvirt-resize-cpus", vmId: vmId) { client, deadline in
@@ -2231,7 +2253,8 @@ actor LibvirtService: HypervisorService {
         _ dom: Domain, vmId: String, spec: VMSpec, layout: DomainMemoryLayout
     ) async {
         let target = min(
-            spec.balloonTargetBytes ?? spec.memoryBytes, spec.memoryBytes, layout.maximumBytes)
+            spec.hasBalloonTargetBytes ? spec.balloonTargetBytes : spec.memoryBytes, spec.memoryBytes,
+            layout.maximumBytes)
         do {
             try await call("libvirt-balloon-target", vmId: vmId) { client, deadline in
                 try await client.domainSetMemory(
@@ -2674,7 +2697,8 @@ actor LibvirtService: HypervisorService {
     /// one outcome whose consequences land later, on a define this method
     /// cannot see.
     private func resolveFirmware(spec: VMSpec, machine: MachineProfile) -> FirmwareSet? {
-        guard case .disk(let perVMPath) = spec.boot else { return nil }
+        guard case .disk(let disk) = spec.boot.value else { return nil }
+        let perVMPath = disk.optionalFirmware
         switch FirmwareResolver.domainFirmware(
             secureBoot: machine.secureBoot, perVMPath: perVMPath, overrides: firmware)
         {
@@ -2736,11 +2760,12 @@ actor LibvirtService: HypervisorService {
     private func resolveDisks(vmId: String, spec: VMSpec, imageInfo _: ImageInfo?) async throws -> [ResolvedDisk] {
         var disks: [ResolvedDisk] = []
         var seen: [DiskAttachment] = []
-        for volume in spec.volumes {
-            guard let attachment = volume.attachment else {
+        for volume in spec.volumes.values {
+            guard volume.hasAttachment else {
                 throw HypervisorServiceError.diskError(
-                    "managed volume \(volume.volumeId) for VM \(vmId) has no realized disk attachment")
+                    "managed volume \(volume.volumeID) for VM \(vmId) has no realized disk attachment")
             }
+            let attachment = volume.attachment
             guard !seen.contains(attachment) else {
                 throw HypervisorServiceError.diskError(
                     "managed volumes for VM \(vmId) resolve to the same disk attachment \(attachment)")
@@ -2749,24 +2774,30 @@ actor LibvirtService: HypervisorService {
             // Checked here rather than left to libvirt: a define accepts a
             // missing local source and only the *start* fails. Native RBD has
             // no local path to probe and is deliberately left to libvirt.
-            switch attachment {
-            case .file(let path, _), .blockDevice(let path):
+            switch attachment.value {
+            case .file(let file):
+                guard FileManager.default.fileExists(atPath: file.path) else {
+                    throw HypervisorServiceError.diskError("Managed volume file is missing")
+                }
+            case .blockDevice(let device):
+                let path = device.path
                 guard FileManager.default.fileExists(atPath: path) else {
                     throw HypervisorServiceError.diskError(
-                        "volume \(volume.volumeId) for VM \(vmId) has no source at \(path) on this host")
+                        "volume \(volume.volumeID) for VM \(vmId) has no source at \(path) on this host")
                 }
             case .rbd:
                 break
+            case .none: throw HypervisorServiceError.diskError("Missing disk attachment kind")
             }
             disks.append(
                 ResolvedDisk(
                     attachment: attachment, readonly: volume.readonly,
-                    bootOrder: volume.bootOrder,
+                    bootOrder: volume.optionalBootOrder.map(Int.init),
                     // Written into the document as `<serial>`, so a detach can
                     // resolve this disk by managed identity after a restart.
-                    volumeId: volume.volumeId.uuidString,
-                    blockPolicy: volume.appliedBlockPolicy,
-                    ioLimits: volume.ioLimits))
+                    volumeId: volume.volumeID,
+                    blockPolicy: volume.optionalAppliedBlockPolicy,
+                    ioLimits: volume.optionalIoLimits))
         }
 
         if disks.isEmpty {

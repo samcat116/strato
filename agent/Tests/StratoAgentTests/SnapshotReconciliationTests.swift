@@ -68,7 +68,7 @@ struct SnapshotReconciliationTests {
             case .create:
                 artifacts[item.id] = .managed(
                     ObservedSnapshotArtifact(
-                        kind: desired.kind, parentId: desired.parentId,
+                        kind: desired.kind, parentId: try UUID(protocolString: desired.parentID),
                         facts: ObservedSnapshotFacts(sizeBytes: 1024)))
             case .export:
                 guard case .managed(let current)? = artifacts[item.id] else { return }
@@ -287,7 +287,7 @@ struct SnapshotReconciliationTests {
 
         #expect(await actuator.performed.isEmpty)
         let held = await reconciler.unrecognizedWorkloads()
-        #expect(held.map(\.workloadId) == [id])
+        #expect(held.map(\.workloadID) == [id.uuidString])
         #expect(held.first?.kind == .vmCheckpoint)
     }
 

@@ -1,6 +1,15 @@
 import Foundation
 import StratoShared
 
+/// Identity access in the nonthrowing planning protocol is permitted only after
+/// Reconciler.apply validates the complete snapshot, including direct callers.
+public func validatedProtocolUUID(_ raw: String) -> UUID {
+    guard let value = UUID(uuidString: raw) else {
+        preconditionFailure("Reconciliation requires validated protocol identifiers")
+    }
+    return value
+}
+
 // MARK: - Observed presence
 
 /// What this agent knows about one workload when a sync arrives.
@@ -35,7 +44,7 @@ extension WorkloadKind {
     var carriesEdgeNonces: Bool {
         switch self {
         case .vm, .sandbox: return true
-        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return false
+        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot, .unspecified, .UNRECOGNIZED: return false
         }
     }
 }
@@ -138,12 +147,12 @@ public enum VMBootVolumeDependency {
         desiredVolumes: [String: DesiredVolumeState],
         observedVolumes: [String: ObservedVolumeFacts]
     ) -> String? {
-        let bootVolumes = spec.volumes.filter { $0.bootOrder == 0 }
+        let bootVolumes = spec.volumes.values.filter { $0.hasBootOrder && $0.bootOrder == 0 }
         guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
             return "VM \(vmId) does not have exactly one canonical managed boot volume"
         }
 
-        let volumeId = bootVolume.volumeId.uuidString
+        let volumeId = bootVolume.volumeID
         guard let desiredVolume = desiredVolumes[volumeId], desiredVolume.desiredStatus == .present else {
             return "managed boot volume \(volumeId) for VM \(vmId) has no present desired state"
         }
@@ -158,9 +167,9 @@ public enum VMBootVolumeDependency {
             return
                 "managed boot volume \(volumeId) for VM \(vmId) is \(observedSize) bytes; waiting for the admitted \(requestedSize) bytes"
         }
-        guard observed.attachedVMId == vmId, observed.deviceName == bootVolume.deviceName.rawValue else {
+        guard observed.attachedVMId == vmId, observed.deviceName == bootVolume.deviceName else {
             return
-                "managed boot volume \(volumeId) is not yet attached to VM \(vmId) as \(bootVolume.deviceName.rawValue)"
+                "managed boot volume \(volumeId) is not yet attached to VM \(vmId) as \(bootVolume.deviceName)"
         }
         return nil
     }
@@ -186,7 +195,7 @@ public struct VMSizing: Equatable, Sendable {
     /// Whether `spec` asks for a different size than this.
     public func differs(from spec: VMSpec) -> Bool {
         cpus != spec.cpus || memoryBytes != spec.memoryBytes
-            || balloonTargetBytes != spec.balloonTargetBytes
+            || balloonTargetBytes != spec.optionalBalloonTargetBytes
     }
 }
 
@@ -257,7 +266,7 @@ public enum AppliedNetworkInterfaceInventory {
         var ids: [UUID] = []
         ids.reserveCapacity(networks.count)
         for network in networks {
-            guard let id = network.interfaceId else { return nil }
+            guard network.hasInterfaceID, let id = UUID(uuidString: network.interfaceID) else { return nil }
             ids.append(id)
         }
         return ids
@@ -281,15 +290,15 @@ public struct VMNetworkInterfaceDiff: Equatable, Sendable {
             let candidate = desired[desiredIndex]
             let match = unusedCurrent.first { currentIndex in
                 let existing = current[currentIndex]
-                if let desiredID = candidate.interfaceId, let existingID = existing.interfaceId {
-                    return desiredID == existingID
+                if candidate.hasInterfaceID, existing.hasInterfaceID {
+                    return candidate.interfaceID == existing.interfaceID
                 }
-                if let desiredMAC = candidate.macAddress, let existingMAC = existing.macAddress {
-                    return desiredMAC.caseInsensitiveCompare(existingMAC) == .orderedSame
+                if candidate.hasMacAddress, existing.hasMacAddress {
+                    return candidate.macAddress.caseInsensitiveCompare(existing.macAddress) == .orderedSame
                 }
                 return desiredIndex == currentIndex
-                    && (existing.interfaceId == nil && existing.macAddress == nil
-                        || candidate.interfaceId == nil && candidate.macAddress == nil)
+                    && (!existing.hasInterfaceID && !existing.hasMacAddress
+                        || !candidate.hasInterfaceID && !candidate.hasMacAddress)
             }
             if let match {
                 unusedCurrent.remove(match)
@@ -444,13 +453,16 @@ public struct ReconcileWorkItem: Sendable {
         case .sandbox: return ["sandbox/" + id]
         case .volume:
             var keys = ["volume/" + id]
-            if let sourceVolumeId = desiredVolume?.source?.sourceVolumeId?.uuidString {
+            if let desiredVolume, desiredVolume.hasSource, desiredVolume.source.hasSourceVolumeID {
+                let sourceVolumeId = desiredVolume.source.sourceVolumeID
                 keys.append(Self.lane(kind: .volume, id: sourceVolumeId))
             }
-            if let sourceVMId = desiredVolume?.source?.sourceVMId?.uuidString {
+            if let desiredVolume, desiredVolume.hasSource, desiredVolume.source.hasSourceVmID {
+                let sourceVMId = desiredVolume.source.sourceVmID
                 keys.append(sourceVMId)
             }
-            if let attachedVMId = desiredVolume?.attachment?.vmId.uuidString {
+            if let desiredVolume, desiredVolume.hasAttachment {
+                let attachedVMId = desiredVolume.attachment.vmID
                 keys.append(attachedVMId)
             }
             var unique: [String] = []
@@ -459,7 +471,9 @@ public struct ReconcileWorkItem: Sendable {
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
             let own = "snapshot/" + id
             guard let entry = desiredSnapshot else { return [own] }
-            return [own, Self.lane(kind: entry.kind.parentKind, id: entry.parentId.uuidString)]
+            return [own, Self.lane(kind: entry.kind.parentKind, id: entry.parentID)]
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Reconciliation requires a validated workload kind")
         }
     }
 
@@ -472,6 +486,8 @@ public struct ReconcileWorkItem: Sendable {
         case .sandbox: return "sandbox/" + id
         case .volume: return "volume/" + id
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return "snapshot/" + id
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Reconciliation requires a validated workload kind")
         }
     }
 
@@ -783,21 +799,24 @@ extension ReconcilableDesired {
 extension DesiredVMState: ReconcilableDesired {
     static var workloadKind: WorkloadKind { .vm }
     var statusAfterCreate: VMStatus { .created }
-    var workloadId: UUID { vmId }
+    var workloadId: UUID { validatedProtocolUUID(vmID) }
     var wantsAbsent: Bool { desiredStatus == .absent }
     func convergenceSteps(from observed: VMStatus) -> [ReconcileStep] {
         Reconciler.statusSteps(desired: desiredStatus, observed: observed)
     }
     var asTarget: ReconcileTarget { .vm(self) }
-    var edges: DesiredEdges { DesiredEdges(rebootGeneration: rebootGeneration, restore: restore) }
+    var edges: DesiredEdges {
+        DesiredEdges(
+            rebootGeneration: hasRebootGeneration ? rebootGeneration : nil, restore: hasRestore ? restore : nil)
+    }
     var wantsRunning: Bool { desiredStatus == .running }
-    static func describe(_ observed: VMStatus) -> String { observed.rawValue }
+    static func describe(_ observed: VMStatus) -> String { observed.protocolValue }
 }
 
 extension DesiredSandboxState: ReconcilableDesired {
     static var workloadKind: WorkloadKind { .sandbox }
     var statusAfterCreate: SandboxStatus { .stopped }
-    var workloadId: UUID { sandboxId }
+    var workloadId: UUID { validatedProtocolUUID(sandboxID) }
     var wantsAbsent: Bool { desiredStatus == .absent }
     func convergenceSteps(from observed: SandboxStatus) -> [ReconcileStep] {
         Reconciler.sandboxStatusSteps(desired: desiredStatus, observed: observed)
@@ -805,14 +824,14 @@ extension DesiredSandboxState: ReconcilableDesired {
     var asTarget: ReconcileTarget { .sandbox(self) }
     // A sandbox has no reboot nonce: `POST .../restart` is expressed as a fresh
     // desired-running generation, not as an edge (see `SandboxController`).
-    var edges: DesiredEdges { DesiredEdges(restore: restore) }
+    var edges: DesiredEdges { DesiredEdges(restore: hasRestore ? restore : nil) }
     var wantsRunning: Bool { desiredStatus == .running }
-    static func describe(_ observed: SandboxStatus) -> String { observed.rawValue }
+    static func describe(_ observed: SandboxStatus) -> String { observed.protocolValue }
 }
 
 extension DesiredVolumeState: ReconcilableDesired {
     static var workloadKind: WorkloadKind { .volume }
-    var workloadId: UUID { volumeId }
+    var workloadId: UUID { validatedProtocolUUID(volumeID) }
     var wantsAbsent: Bool { desiredStatus == .absent }
     var asTarget: ReconcileTarget { .volume(self) }
 
@@ -868,12 +887,12 @@ struct FamilyScopedSnapshot<Family: SnapshotArtifactFamily>: ReconcilableDesired
     let entry: DesiredSnapshotState
 
     static var workloadKind: WorkloadKind { Family.artifactKind.workloadKind }
-    var workloadId: UUID { entry.snapshotId }
+    var workloadId: UUID { validatedProtocolUUID(entry.snapshotID) }
     var generation: Int64 { entry.generation }
     var wantsAbsent: Bool { entry.desiredStatus == .absent }
     var requiresDeleteWhenUnobserved: Bool {
         guard wantsAbsent, Family.artifactKind == .volumeSnapshot,
-            case .ceph = entry.volumeStorage
+            entry.hasVolumeStorage, case .ceph = entry.volumeStorage.value
         else { return false }
         return true
     }
@@ -882,7 +901,7 @@ struct FamilyScopedSnapshot<Family: SnapshotArtifactFamily>: ReconcilableDesired
     /// A freshly captured artifact exists on this host and nowhere else, so the
     /// only step that can remain after a `.create` is the export.
     var statusAfterCreate: ObservedSnapshotArtifact {
-        ObservedSnapshotArtifact(kind: entry.kind, parentId: entry.parentId, exported: false)
+        ObservedSnapshotArtifact(kind: entry.kind, parentId: validatedProtocolUUID(entry.parentID), exported: false)
     }
 
     func convergenceSteps(from observed: ObservedSnapshotArtifact) -> [ReconcileStep] {

@@ -1,5 +1,5 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("Bounded workload log queue")

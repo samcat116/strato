@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 // MARK: - Desired VM State
 
@@ -9,16 +10,9 @@ import Foundation
 /// Decoding is deliberately strict (no tolerant fallback like `VMStatus`):
 /// misinterpreting a desired status could stop or delete a running VM, so an
 /// unknown value fails the whole sync and the agent keeps its current state.
-/// Adding a case here therefore requires a `WireProtocol` version bump and a
-/// dual-mode rollout.
-public enum DesiredVMStatus: String, Codable, CaseIterable, Sendable {
-    case running = "Running"
-    case shutdown = "Shutdown"
-    case paused = "Paused"
-    /// The VM should not exist on the agent at all (deletion in progress).
-    /// Rows are removed from the control-plane database only after an agent
-    /// confirms absence, so deletes survive restarts on both sides.
-    case absent = "Absent"
+/// Adding an instruction requires a negotiated capability before it is sent.
+public typealias DesiredVMStatus = Strato_Agent_V1_DesiredVMStatus
+extension Strato_Agent_V1_DesiredVMStatus: Codable {
 
     /// Whether an observed status already satisfies this goal, i.e. the
     /// reconciler has nothing to do. `.created` satisfies `.shutdown` because
@@ -34,7 +28,48 @@ public enum DesiredVMStatus: String, Codable, CaseIterable, Sendable {
             return observed == .shutdown || observed == .created
         case .absent:
             return false  // absence is confirmed by omission from the observed set, never by a status
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
+    }
+
+    public var protocolValue: String {
+        switch self {
+        case .running: return "Running"
+        case .shutdown: return "Shutdown"
+        case .paused: return "Paused"
+        case .absent: return "Absent"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "Running": self = .running
+        case "Shutdown": self = .shutdown
+        case "Paused": self = .paused
+        case "Absent": self = .absent
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.running, .shutdown, .paused, .absent] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
     }
 }
 
@@ -52,83 +87,44 @@ public enum DesiredVMStatus: String, Codable, CaseIterable, Sendable {
 /// it, so a replayed or re-driven sync cannot rewind a live guest a second time.
 ///
 /// Absent means "no restore has ever been asked for", never "undo one".
-public struct DesiredRestore: Codable, Sendable, Equatable {
-    /// Monotonic per-workload counter, bumped once per accepted restore request.
-    /// The agent acts when this exceeds the nonce it last applied and recorded.
-    public let generation: Int64
-    /// The artifact to load. Travels with the nonce rather than beside it so a
-    /// nonce can never be attributed to the wrong point in time: two restores of
-    /// different checkpoints are two different values of one field.
-    public let snapshotId: UUID
-    /// Download descriptors for an exported snapshot, present only when the
-    /// workload does not live on the agent that captured it (issue #428).
-    /// Resolved fresh at sync assembly, like `ImageInfo`, so a long-desired
-    /// restore never carries a stale locator.
-    ///
-    /// Sandbox-only: a VM checkpoint lives *inside* the VM's own disks, so it
-    /// cannot move between hosts and a VM restore never carries one. The field
-    /// is shared rather than forked for `DesiredSnapshotState`'s reason — the
-    /// nonce, the guard and the durable record are the same three times over,
-    /// and only the payload differs.
-    public let artifacts: [SandboxSnapshotArtifactDescriptor]?
+public typealias DesiredRestore = Strato_Agent_V1_DesiredRestore
+extension Strato_Agent_V1_DesiredRestore: Codable {
 
     public init(
         generation: Int64,
         snapshotId: UUID,
         artifacts: [SandboxSnapshotArtifactDescriptor]? = nil
     ) {
-        self.generation = generation
-        self.snapshotId = snapshotId
-        self.artifacts = artifacts
+        self.init()
+        self._jsonGeneration = generation
+        self._jsonSnapshotId = snapshotId
+        self._jsonArtifacts = artifacts
     }
+
+    private enum CodingKeys: String, CodingKey { case generation; case snapshotId; case artifacts }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonSnapshotId = try container.decode(UUID.self, forKey: .snapshotId)
+        self._jsonArtifacts = try container.decodeIfPresent(
+            [SandboxSnapshotArtifactDescriptor].self, forKey: .artifacts)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonSnapshotId, forKey: .snapshotId)
+        try container.encodeIfPresent(_jsonArtifacts, forKey: .artifacts)
+    }
+
 }
 
 /// One VM's authoritative desired state, as assembled by the control plane.
-public struct DesiredVMState: Codable, Sendable {
-    public let vmId: UUID
-    /// Which backend should realize this VM. Pinned at scheduling time.
-    public let hypervisorType: HypervisorType
-    public let spec: VMSpec
-    public let desiredStatus: DesiredVMStatus
-    /// Monotonic per-VM counter, bumped by the control plane on every desired
-    /// status or spec change. The agent records the generation it last applied
-    /// and rejects older ones, so replayed or reordered syncs cannot roll a VM
-    /// backward.
-    public let generation: Int64
-    /// Download info for the VM's boot image, so an agent that does not yet
-    /// have the VM can materialize it. Download URLs are control-plane-relative
-    /// paths fetched over SVID mTLS — no signature, so nothing here expires.
-    public let imageInfo: ImageInfo?
-    /// What the VM's link-local metadata service should tell the guest about
-    /// itself (STR-48). Riding the sync is what makes the metadata store
-    /// level-triggered, generation-guarded, and replay-safe without a second
-    /// control loop or transport: an operator's edit lands on the next sync
-    /// instead of requiring the guest to be rebuilt around a new seed ISO.
-    ///
-    /// Nil is authoritative: there is nothing to serve, and an agent holding
-    /// stale metadata must drop it.
-    public let metadata: InstanceMetadata?
-    /// How many times this VM has been asked to reboot (ADR 0001 stage 9,
-    /// STR-151) — the `kubectl rollout restart` nonce, applied to the one VM
-    /// verb that is an edge rather than a state.
-    ///
-    /// A reboot starts and ends `.running`, so `desiredStatus` cannot express
-    /// it and the old `vm_reboot` RPC was fire-and-forget: a socket dropped
-    /// mid-flight lost the reboot silently. Counting it makes it level-triggered
-    /// like everything else — the agent acts when this outranks the nonce it
-    /// durably recorded, and a lost sync costs latency rather than the reboot.
-    ///
-    /// Nil means no reboot has ever been requested and, being a count of
-    /// requests, is never an instruction to undo one.
-    public let rebootGeneration: Int64?
-    /// The checkpoint this VM should have been restored to, as a nonce
-    /// (STR-151). Nil means no restore has ever been requested.
-    public let restore: DesiredRestore?
-    /// Nil means no managed guest intent. Omission never reverses previous guest changes.
-    /// Changes share this VM's generation; no separate guest generation exists.
-    public let guestConfig: GuestConfig?
-    /// Durable control-plane verdict. A matching generation must never reissue guest work after restart.
-    public let guestConfigFailedGeneration: Int64?
+public typealias DesiredVMState = Strato_Agent_V1_DesiredVMState
+extension Strato_Agent_V1_DesiredVMState: Codable {
 
     public init(
         vmId: UUID,
@@ -143,18 +139,58 @@ public struct DesiredVMState: Codable, Sendable {
         guestConfig: GuestConfig? = nil,
         guestConfigFailedGeneration: Int64? = nil
     ) {
-        self.vmId = vmId
-        self.hypervisorType = hypervisorType
-        self.spec = spec
-        self.desiredStatus = desiredStatus
-        self.generation = generation
-        self.imageInfo = imageInfo
-        self.metadata = metadata
-        self.rebootGeneration = rebootGeneration
-        self.restore = restore
-        self.guestConfig = guestConfig
-        self.guestConfigFailedGeneration = guestConfigFailedGeneration
+        self.init()
+        self._jsonVmId = vmId
+        self._jsonHypervisorType = hypervisorType
+        self._jsonSpec = spec
+        self._jsonDesiredStatus = desiredStatus
+        self._jsonGeneration = generation
+        self._jsonImageInfo = imageInfo
+        self._jsonMetadata = metadata
+        self._jsonRebootGeneration = rebootGeneration
+        self._jsonRestore = restore
+        self._jsonGuestConfig = guestConfig
+        self._jsonGuestConfigFailedGeneration = guestConfigFailedGeneration
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case vmId; case hypervisorType; case spec; case desiredStatus; case generation; case imageInfo; case metadata;
+        case rebootGeneration; case restore; case guestConfig; case guestConfigFailedGeneration
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonVmId = try container.decode(UUID.self, forKey: .vmId)
+        self._jsonHypervisorType = try container.decode(HypervisorType.self, forKey: .hypervisorType)
+        self._jsonSpec = try container.decode(VMSpec.self, forKey: .spec)
+        self._jsonDesiredStatus = try container.decode(DesiredVMStatus.self, forKey: .desiredStatus)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonImageInfo = try container.decodeIfPresent(ImageInfo.self, forKey: .imageInfo)
+        self._jsonMetadata = try container.decodeIfPresent(InstanceMetadata.self, forKey: .metadata)
+        self._jsonRebootGeneration = try container.decodeIfPresent(Int64.self, forKey: .rebootGeneration)
+        self._jsonRestore = try container.decodeIfPresent(DesiredRestore.self, forKey: .restore)
+        self._jsonGuestConfig = try container.decodeIfPresent(GuestConfig.self, forKey: .guestConfig)
+        self._jsonGuestConfigFailedGeneration = try container.decodeIfPresent(
+            Int64.self, forKey: .guestConfigFailedGeneration)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonHypervisorType, forKey: .hypervisorType)
+        try container.encode(_jsonSpec, forKey: .spec)
+        try container.encode(_jsonDesiredStatus, forKey: .desiredStatus)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encodeIfPresent(_jsonImageInfo, forKey: .imageInfo)
+        try container.encodeIfPresent(_jsonMetadata, forKey: .metadata)
+        try container.encodeIfPresent(_jsonRebootGeneration, forKey: .rebootGeneration)
+        try container.encodeIfPresent(_jsonRestore, forKey: .restore)
+        try container.encodeIfPresent(_jsonGuestConfig, forKey: .guestConfig)
+        try container.encodeIfPresent(_jsonGuestConfigFailedGeneration, forKey: .guestConfigFailedGeneration)
+    }
+
 }
 
 // MARK: - Desired Sandbox State
@@ -162,33 +198,8 @@ public struct DesiredVMState: Codable, Sendable {
 /// One sandbox's authoritative desired state, as assembled by the control
 /// plane. Mirrors `DesiredVMState` semantics exactly: level-triggered,
 /// generation-guarded, safe to drop or replay.
-public struct DesiredSandboxState: Codable, Sendable {
-    public let sandboxId: UUID
-    public let spec: SandboxSpec
-    public let desiredStatus: DesiredSandboxStatus
-    /// Monotonic per-sandbox counter, bumped by the control plane on every
-    /// desired status or spec change. The agent records the generation it last
-    /// applied and rejects older ones, so replayed or reordered syncs cannot
-    /// roll a sandbox backward.
-    public let generation: Int64
-    /// Pull credential for the spec's image when it lives in a private
-    /// registry, minted fresh at sync assembly (see `RegistryCredential`).
-    /// Nil for public images — zero-configuration public pulls must work.
-    public let registryCredential: RegistryCredential?
-    /// The snapshot this sandbox should have been restored **into itself** from,
-    /// as a nonce (ADR 0001 stage 9, STR-151).
-    ///
-    /// This is an edge applied to a sandbox that already exists — same id, same
-    /// addresses, rewound — and is consulted only while it is present.
-    public let restore: DesiredRestore?
-    /// Total admitted internal checkpoint bytes, including the retained predecessor.
-    public let suspensionStorageBudgetBytes: Int64?
-    public let suspensionAfterSnapshotId: UUID?
-    /// Existing durable guest state must never be replaced by a cold OCI create.
-    public let suspensionCheckpointId: UUID?
-    public let automaticSuspensionFence: SandboxAutomaticSuspensionFence?
-    public let idleControlPlaneRevision: Int64?
-    public let idlePendingCommandCount: Int?
+public typealias DesiredSandboxState = Strato_Agent_V1_DesiredSandboxState
+extension Strato_Agent_V1_DesiredSandboxState: Codable {
 
     public init(
         sandboxId: UUID,
@@ -204,19 +215,66 @@ public struct DesiredSandboxState: Codable, Sendable {
         idleControlPlaneRevision: Int64? = nil,
         idlePendingCommandCount: Int? = nil
     ) {
-        self.sandboxId = sandboxId
-        self.spec = spec
-        self.desiredStatus = desiredStatus
-        self.generation = generation
-        self.registryCredential = registryCredential
-        self.restore = restore
-        self.suspensionStorageBudgetBytes = suspensionStorageBudgetBytes
-        self.suspensionAfterSnapshotId = suspensionAfterSnapshotId
-        self.suspensionCheckpointId = suspensionCheckpointId
-        self.automaticSuspensionFence = automaticSuspensionFence
-        self.idleControlPlaneRevision = idleControlPlaneRevision
-        self.idlePendingCommandCount = idlePendingCommandCount
+        self.init()
+        self._jsonSandboxId = sandboxId
+        self._jsonSpec = spec
+        self._jsonDesiredStatus = desiredStatus
+        self._jsonGeneration = generation
+        self._jsonRegistryCredential = registryCredential
+        self._jsonRestore = restore
+        self._jsonSuspensionStorageBudgetBytes = suspensionStorageBudgetBytes
+        self._jsonSuspensionAfterSnapshotId = suspensionAfterSnapshotId
+        self._jsonSuspensionCheckpointId = suspensionCheckpointId
+        self._jsonAutomaticSuspensionFence = automaticSuspensionFence
+        self._jsonIdleControlPlaneRevision = idleControlPlaneRevision
+        self._jsonIdlePendingCommandCount = idlePendingCommandCount
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case sandboxId; case spec; case desiredStatus; case generation; case registryCredential; case restore;
+        case suspensionStorageBudgetBytes; case suspensionAfterSnapshotId; case suspensionCheckpointId;
+        case automaticSuspensionFence; case idleControlPlaneRevision; case idlePendingCommandCount
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonSandboxId = try container.decode(UUID.self, forKey: .sandboxId)
+        self._jsonSpec = try container.decode(SandboxSpec.self, forKey: .spec)
+        self._jsonDesiredStatus = try container.decode(DesiredSandboxStatus.self, forKey: .desiredStatus)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonRegistryCredential = try container.decodeIfPresent(
+            RegistryCredential.self, forKey: .registryCredential)
+        self._jsonRestore = try container.decodeIfPresent(DesiredRestore.self, forKey: .restore)
+        self._jsonSuspensionStorageBudgetBytes = try container.decodeIfPresent(
+            Int64.self, forKey: .suspensionStorageBudgetBytes)
+        self._jsonSuspensionAfterSnapshotId = try container.decodeIfPresent(
+            UUID.self, forKey: .suspensionAfterSnapshotId)
+        self._jsonSuspensionCheckpointId = try container.decodeIfPresent(UUID.self, forKey: .suspensionCheckpointId)
+        self._jsonAutomaticSuspensionFence = try container.decodeIfPresent(
+            SandboxAutomaticSuspensionFence.self, forKey: .automaticSuspensionFence)
+        self._jsonIdleControlPlaneRevision = try container.decodeIfPresent(
+            Int64.self, forKey: .idleControlPlaneRevision)
+        self._jsonIdlePendingCommandCount = try container.decodeIfPresent(Int.self, forKey: .idlePendingCommandCount)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonSandboxId, forKey: .sandboxId)
+        try container.encode(_jsonSpec, forKey: .spec)
+        try container.encode(_jsonDesiredStatus, forKey: .desiredStatus)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encodeIfPresent(_jsonRegistryCredential, forKey: .registryCredential)
+        try container.encodeIfPresent(_jsonRestore, forKey: .restore)
+        try container.encodeIfPresent(_jsonSuspensionStorageBudgetBytes, forKey: .suspensionStorageBudgetBytes)
+        try container.encodeIfPresent(_jsonSuspensionAfterSnapshotId, forKey: .suspensionAfterSnapshotId)
+        try container.encodeIfPresent(_jsonSuspensionCheckpointId, forKey: .suspensionCheckpointId)
+        try container.encodeIfPresent(_jsonAutomaticSuspensionFence, forKey: .automaticSuspensionFence)
+        try container.encodeIfPresent(_jsonIdleControlPlaneRevision, forKey: .idleControlPlaneRevision)
+        try container.encodeIfPresent(_jsonIdlePendingCommandCount, forKey: .idlePendingCommandCount)
+    }
+
 }
 
 // MARK: - Desired Volume State
@@ -233,12 +291,43 @@ public struct DesiredSandboxState: Codable, Sendable {
 /// same reason: misreading a desired volume status destroys the only copy of
 /// user data. An unknown value fails the whole sync and the agent keeps what
 /// it has.
-public enum DesiredVolumeStatus: String, Codable, CaseIterable, Sendable {
-    case present = "Present"
-    /// The volume should not exist on the agent at all (deletion in progress).
-    /// Rows are removed from the control-plane database only after an agent
-    /// confirms absence by omitting the volume from its observed report.
-    case absent = "Absent"
+public typealias DesiredVolumeStatus = Strato_Agent_V1_DesiredVolumeStatus
+extension Strato_Agent_V1_DesiredVolumeStatus: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .present: return "Present"
+        case .absent: return "Absent"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "Present": self = .present
+        case "Absent": self = .absent
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.present, .absent] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// How a volume that does not yet exist on this host gets its initial bytes: a
@@ -252,36 +341,14 @@ public enum DesiredVolumeStatus: String, Codable, CaseIterable, Sendable {
 /// A `String` discriminator rather than a Swift enum with associated values:
 /// an unrecognized `kind` must fail *this volume* — surfacing as its
 /// `lastError` — never the whole `DesiredStateMessage`.
-public struct DesiredVolumeSource: Codable, Sendable {
+public typealias DesiredVolumeSource = Strato_Agent_V1_DesiredVolumeSource
+extension Strato_Agent_V1_DesiredVolumeSource: Codable {
     /// Allocate an empty disk of `DesiredVolumeState.sizeBytes`.
     public static let blank = "blank"
     /// Materialize from an image artifact; `imageInfo` carries the locator.
     public static let image = "image"
     /// Copy another volume on this same agent; `sourceVolumeId` names it.
     public static let clone = "clone"
-
-    public let kind: String
-    /// Present for `image`. Download URLs are control-plane-relative paths
-    /// fetched over SVID mTLS — no signature, so nothing here expires and the
-    /// entry stays safe to sit in a sync indefinitely.
-    public let imageInfo: ImageInfo?
-    /// The typed image artifact whose bytes initialize this volume. Required
-    /// for `image`: QEMU boot/data volumes use `.diskImage`, while a
-    /// Firecracker boot volume uses `.rootfs`.
-    public let artifactKind: ArtifactKind?
-    /// Present for `clone`. The volume/VM co-location constraint guarantees the
-    /// source lives on this same agent, and the agent derives the source path
-    /// from its own layout — no path travels on the wire (STR-180).
-    public let sourceVolumeId: UUID?
-    /// The VM that currently owns an attached clone source. The agent holds
-    /// this VM's reconciliation lane for the complete copy, so a later desired
-    /// state cannot start the source guest while its bytes are being read. Nil
-    /// for a detached clone source.
-    public let sourceVMId: UUID?
-    /// The source volume's format, when known, so the agent can pick a copy
-    /// strategy without probing. Advisory: the backend detects rather than
-    /// assumes.
-    public let sourceFormat: String?
 
     public init(
         kind: String,
@@ -291,12 +358,13 @@ public struct DesiredVolumeSource: Codable, Sendable {
         sourceVMId: UUID? = nil,
         sourceFormat: String? = nil
     ) {
-        self.kind = kind
-        self.imageInfo = imageInfo
-        self.artifactKind = artifactKind
-        self.sourceVolumeId = sourceVolumeId
-        self.sourceVMId = sourceVMId
-        self.sourceFormat = sourceFormat
+        self.init()
+        self._jsonKind = kind
+        self._jsonImageInfo = imageInfo
+        self._jsonArtifactKind = artifactKind
+        self._jsonSourceVolumeId = sourceVolumeId
+        self._jsonSourceVMId = sourceVMId
+        self._jsonSourceFormat = sourceFormat
     }
 
     public static func image(_ info: ImageInfo, artifactKind: ArtifactKind) -> DesiredVolumeSource {
@@ -310,6 +378,33 @@ public struct DesiredVolumeSource: Codable, Sendable {
             kind: Self.clone, sourceVolumeId: volumeId, sourceVMId: sourceVMId,
             sourceFormat: format)
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind; case imageInfo; case artifactKind; case sourceVolumeId; case sourceVMId; case sourceFormat
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(String.self, forKey: .kind)
+        self._jsonImageInfo = try container.decodeIfPresent(ImageInfo.self, forKey: .imageInfo)
+        self._jsonArtifactKind = try container.decodeIfPresent(ArtifactKind.self, forKey: .artifactKind)
+        self._jsonSourceVolumeId = try container.decodeIfPresent(UUID.self, forKey: .sourceVolumeId)
+        self._jsonSourceVMId = try container.decodeIfPresent(UUID.self, forKey: .sourceVMId)
+        self._jsonSourceFormat = try container.decodeIfPresent(String.self, forKey: .sourceFormat)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encodeIfPresent(_jsonImageInfo, forKey: .imageInfo)
+        try container.encodeIfPresent(_jsonArtifactKind, forKey: .artifactKind)
+        try container.encodeIfPresent(_jsonSourceVolumeId, forKey: .sourceVolumeId)
+        try container.encodeIfPresent(_jsonSourceVMId, forKey: .sourceVMId)
+        try container.encodeIfPresent(_jsonSourceFormat, forKey: .sourceFormat)
+    }
+
 }
 
 /// Absolute per-volume I/O ceilings (STR-19).
@@ -333,20 +428,17 @@ public struct DesiredVolumeSource: Codable, Sendable {
 ///   that has never heard of ceilings has its silence read as a deliberate
 ///   clear — which, with no capability gate on this feature, is the one
 ///   misreading that matters.
-public struct VolumeIOLimits: Codable, Sendable, Equatable {
-    /// Total (read + write) IOPS ceiling. Nil means uncapped in that dimension.
-    public let iopsTotal: Int64?
-    /// Total (read + write) throughput ceiling in bytes per second. Nil means
-    /// uncapped in that dimension.
-    public let bpsTotal: Int64?
+public typealias VolumeIOLimits = Strato_Agent_V1_VolumeIOLimits
+extension Strato_Agent_V1_VolumeIOLimits: Codable {
 
     /// Whether this carries no cap at all. Equal *in effect* to nil, but not
     /// `==` to it, which is exactly why `normalized(_:_:)` exists.
-    public var isEmpty: Bool { iopsTotal == nil && bpsTotal == nil }
+    public var isEmpty: Bool { _jsonIopsTotal == nil && _jsonBpsTotal == nil }
 
     public init(iopsTotal: Int64? = nil, bpsTotal: Int64? = nil) {
-        self.iopsTotal = iopsTotal
-        self.bpsTotal = bpsTotal
+        self.init()
+        self._jsonIopsTotal = iopsTotal
+        self._jsonBpsTotal = bpsTotal
     }
 
     /// Nil for an all-nil pair, so "uncapped" has exactly one spelling on the
@@ -356,6 +448,23 @@ public struct VolumeIOLimits: Codable, Sendable, Equatable {
         guard iopsTotal != nil || bpsTotal != nil else { return nil }
         return VolumeIOLimits(iopsTotal: iopsTotal, bpsTotal: bpsTotal)
     }
+
+    private enum CodingKeys: String, CodingKey { case iopsTotal; case bpsTotal }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonIopsTotal = try container.decodeIfPresent(Int64.self, forKey: .iopsTotal)
+        self._jsonBpsTotal = try container.decodeIfPresent(Int64.self, forKey: .bpsTotal)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(_jsonIopsTotal, forKey: .iopsTotal)
+        try container.encodeIfPresent(_jsonBpsTotal, forKey: .bpsTotal)
+    }
+
 }
 
 /// The measured aggregate I/O rate for one attached volume (STR-270).
@@ -365,38 +474,67 @@ public struct VolumeIOLimits: Codable, Sendable, Equatable {
 /// directly comparable value beside the configured and applied ceilings.
 /// Nil on `ObservedVolumeState` means no two live samples were available yet
 /// (including a stopped or newly adopted domain), never zero activity.
-public struct VolumeIOObservedRate: Codable, Sendable, Equatable {
-    public let iops: Double
-    public let bytesPerSecond: Double
+public typealias VolumeIOObservedRate = Strato_Agent_V1_VolumeIOObservedRate
+extension Strato_Agent_V1_VolumeIOObservedRate: Codable {
 
     public init(iops: Double, bytesPerSecond: Double) {
-        self.iops = iops
-        self.bytesPerSecond = bytesPerSecond
+        self.init()
+        self._jsonIops = iops
+        self._jsonBytesPerSecond = bytesPerSecond
     }
+
+    private enum CodingKeys: String, CodingKey { case iops; case bytesPerSecond }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonIops = try container.decode(Double.self, forKey: .iops)
+        self._jsonBytesPerSecond = try container.decode(Double.self, forKey: .bytesPerSecond)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonIops, forKey: .iops)
+        try container.encode(_jsonBytesPerSecond, forKey: .bytesPerSecond)
+    }
+
 }
 
 /// Where a volume should be plugged in. Nil on the desired entry means
 /// "detached"; a value means the agent should have this volume presented to
 /// `vmId` as `deviceName`.
-public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
-    public let vmId: UUID
-    /// The control-plane-assigned slot ("disk1", ...). Stable across power
-    /// cycles so a re-realized attachment lands where the guest's fstab
-    /// expects it, unique within its VM, and validated by its type — the slot
-    /// becomes a hypervisor object id, so a sync cannot carry one a hypervisor
-    /// would refuse (STR-129).
-    public let deviceName: VolumeDeviceName
-    public let readonly: Bool
-    /// Explicit boot priority; informational to the agent, which receives
-    /// `VMSpec.volumes` pre-sorted.
-    public let bootOrder: Int?
+public typealias DesiredVolumeAttachment = Strato_Agent_V1_DesiredVolumeAttachment
+extension Strato_Agent_V1_DesiredVolumeAttachment: Codable {
 
     public init(vmId: UUID, deviceName: VolumeDeviceName, readonly: Bool = false, bootOrder: Int? = nil) {
-        self.vmId = vmId
-        self.deviceName = deviceName
-        self.readonly = readonly
-        self.bootOrder = bootOrder
+        self.init()
+        self._jsonVmId = vmId
+        self._jsonDeviceName = deviceName
+        self._jsonReadonly = readonly
+        self._jsonBootOrder = bootOrder
     }
+
+    private enum CodingKeys: String, CodingKey { case vmId; case deviceName; case readonly; case bootOrder }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonVmId = try container.decode(UUID.self, forKey: .vmId)
+        self._jsonDeviceName = try container.decode(VolumeDeviceName.self, forKey: .deviceName)
+        self._jsonReadonly = try container.decode(Bool.self, forKey: .readonly)
+        self._jsonBootOrder = try container.decodeIfPresent(Int.self, forKey: .bootOrder)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonDeviceName, forKey: .deviceName)
+        try container.encode(_jsonReadonly, forKey: .readonly)
+        try container.encodeIfPresent(_jsonBootOrder, forKey: .bootOrder)
+    }
+
 }
 
 /// One volume's authoritative desired state (ADR 0001 stage 5, STR-148).
@@ -407,45 +545,8 @@ public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
 /// not the control-plane pool row that produced it. There is no `storagePath`,
 /// because the selected backend owns realization; its attachment travels the
 /// other way on the observed report.
-public struct DesiredVolumeState: Codable, Sendable {
-    public let volumeId: UUID
-    public let desiredStatus: DesiredVolumeStatus
-    /// Monotonic per-volume counter, bumped by the control plane on every
-    /// desired change. The agent records the generation it last applied and
-    /// rejects older ones, so replayed or reordered syncs cannot roll a volume
-    /// backward.
-    public let generation: Int64
-    /// Desired virtual size in bytes. Growth plans a `.resize`; a *shrink* is a
-    /// permanent failure the agent refuses rather than a truncation it
-    /// performs.
-    public let sizeBytes: Int64
-    /// "qcow2" or "raw", parsed by the agent with `DiskFormat(rawValue:)` and
-    /// rejected there. A `String` at the boundary for the same reason
-    /// `VolumeCreateMessage.format` was one: an unknown format must fail this
-    /// volume, not the sync. Immutable after create — a mismatch is a
-    /// permanent failure, never a silent conversion.
-    public let format: String
-    /// Backend-specific realization configuration. Local volumes preserve the
-    /// historical agent-owned path layout; Ceph volumes carry a complete,
-    /// project-scoped client configuration so any eligible site agent can
-    /// converge the same RBD image.
-    public let storage: DesiredVolumeStorage
-    /// How to fill a volume that does not exist yet. Nil means blank.
-    public let source: DesiredVolumeSource?
-    /// Nil means the volume should be detached.
-    public let attachment: DesiredVolumeAttachment?
-    /// Absolute I/O ceilings for this volume (STR-19). Nil means uncapped, and
-    /// is what every volume created before this field existed means.
-    ///
-    /// Emitted whether or not the volume is attached: a ceiling is a property
-    /// of the volume, latent while it is detached and realized by the attach.
-    /// Always built through `VolumeIOLimits.normalized(iopsTotal:bpsTotal:)`,
-    /// so an all-nil pair travels as an absent field — see the type's note on
-    /// why the desired and observed sides normalize in opposite directions.
-    public let ioLimits: VolumeIOLimits?
-    /// Requested QEMU host-cache policy. Existing desired entries decode to
-    /// the conservative path so optimized caching never appears by upgrade.
-    public let blockMode: VolumeBlockMode
+public typealias DesiredVolumeState = Strato_Agent_V1_DesiredVolumeState
+extension Strato_Agent_V1_DesiredVolumeState: Codable {
 
     public init(
         volumeId: UUID,
@@ -459,16 +560,17 @@ public struct DesiredVolumeState: Codable, Sendable {
         ioLimits: VolumeIOLimits? = nil,
         blockMode: VolumeBlockMode = .conservative
     ) {
-        self.volumeId = volumeId
-        self.desiredStatus = desiredStatus
-        self.generation = generation
-        self.sizeBytes = sizeBytes
-        self.format = format
-        self.storage = storage
-        self.source = source
-        self.attachment = attachment
-        self.ioLimits = ioLimits
-        self.blockMode = blockMode
+        self.init()
+        self._jsonVolumeId = volumeId
+        self._jsonDesiredStatus = desiredStatus
+        self._jsonGeneration = generation
+        self._jsonSizeBytes = sizeBytes
+        self._jsonFormat = format
+        self._jsonStorage = storage
+        self._jsonSource = source
+        self._jsonAttachment = attachment
+        self._jsonIoLimits = ioLimits
+        self._jsonBlockMode = blockMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -479,7 +581,7 @@ public struct DesiredVolumeState: Codable, Sendable {
     /// Agent manifests written before wire v53 contain no storage field. They
     /// can only describe filesystem-backed volumes, so the one safe meaning is
     /// `.local`; every new wire producer emits the field explicitly.
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             volumeId: try container.decode(UUID.self, forKey: .volumeId),
@@ -496,6 +598,22 @@ public struct DesiredVolumeState: Codable, Sendable {
             blockMode: try container.decodeIfPresent(VolumeBlockMode.self, forKey: .blockMode)
                 ?? .conservative)
     }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonVolumeId, forKey: .volumeId)
+        try container.encode(_jsonDesiredStatus, forKey: .desiredStatus)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonSizeBytes, forKey: .sizeBytes)
+        try container.encode(_jsonFormat, forKey: .format)
+        try container.encode(_jsonStorage, forKey: .storage)
+        try container.encodeIfPresent(_jsonSource, forKey: .source)
+        try container.encodeIfPresent(_jsonAttachment, forKey: .attachment)
+        try container.encodeIfPresent(_jsonIoLimits, forKey: .ioLimits)
+        try container.encode(_jsonBlockMode, forKey: .blockMode)
+    }
+
 }
 
 // MARK: - Workload tombstones
@@ -513,16 +631,34 @@ public struct DesiredVolumeState: Codable, Sendable {
 /// `generation` outranks whatever the agent last applied for the workload, so
 /// the reconciler's staleness guard admits it exactly like any other desired
 /// entry.
-public struct DesiredWorkloadTombstone: Codable, Sendable, Equatable {
-    public let kind: WorkloadKind
-    public let workloadId: UUID
-    public let generation: Int64
+public typealias DesiredWorkloadTombstone = Strato_Agent_V1_DesiredWorkloadTombstone
+extension Strato_Agent_V1_DesiredWorkloadTombstone: Codable {
 
     public init(kind: WorkloadKind, workloadId: UUID, generation: Int64) {
-        self.kind = kind
-        self.workloadId = workloadId
-        self.generation = generation
+        self.init()
+        self._jsonKind = kind
+        self._jsonWorkloadId = workloadId
+        self._jsonGeneration = generation
     }
+
+    private enum CodingKeys: String, CodingKey { case kind; case workloadId; case generation }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(WorkloadKind.self, forKey: .kind)
+        self._jsonWorkloadId = try container.decode(UUID.self, forKey: .workloadId)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encode(_jsonWorkloadId, forKey: .workloadId)
+        try container.encode(_jsonGeneration, forKey: .generation)
+    }
+
 }
 
 // MARK: - Desired Agent Update
@@ -540,20 +676,8 @@ public struct DesiredWorkloadTombstone: Codable, Sendable, Equatable {
 /// only when its local preconditions hold (not containerized, no in-flight
 /// reconcile work); otherwise it reports why via
 /// `ObservedStateReport.agentUpdateStatus` and retries on later syncs.
-public struct DesiredAgentUpdate: Codable, Sendable {
-    /// The version the agent should be running. Informational to the updater
-    /// (the artifact decides what is installed) but the agent uses it to
-    /// no-op when already converged and to label its status reports.
-    public let targetVersion: String
-    /// Where to download the artifact. May be presigned — treat the query
-    /// string as a credential (see `redactURL`).
-    public let artifactURL: String
-    /// Hex SHA-256 the downloaded artifact must match.
-    public let sha256: String
-    /// Shape of the artifact (tarball to extract vs. bare binary).
-    public let artifactKind: AgentUpdateArtifactKind
-    /// Member to extract when `artifactKind == .tarball`.
-    public let tarballMember: String?
+public typealias DesiredAgentUpdate = Strato_Agent_V1_DesiredAgentUpdate
+extension Strato_Agent_V1_DesiredAgentUpdate: Codable {
 
     public init(
         targetVersion: String,
@@ -562,16 +686,17 @@ public struct DesiredAgentUpdate: Codable, Sendable {
         artifactKind: AgentUpdateArtifactKind,
         tarballMember: String? = nil
     ) {
-        self.targetVersion = targetVersion
-        self.artifactURL = artifactURL
-        self.sha256 = sha256
-        self.artifactKind = artifactKind
-        self.tarballMember = tarballMember
+        self.init()
+        self._jsonTargetVersion = targetVersion
+        self._jsonArtifactURL = artifactURL
+        self._jsonSha256 = sha256
+        self._jsonArtifactKind = artifactKind
+        self._jsonTarballMember = tarballMember
     }
 
     /// `artifactURL` with query and userinfo stripped, safe for logs.
     public var redactedArtifactURL: String {
-        Self.redactURL(artifactURL)
+        Self.redactURL(_jsonArtifactURL)
     }
 
     /// Artifact URLs may carry credentials — presigned query tokens or
@@ -588,6 +713,62 @@ public struct DesiredAgentUpdate: Codable, Sendable {
         guard let base = components.string else { return "<unparseable-url>" }
         return hadQuery ? base + "?[redacted]" : base
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case targetVersion; case artifactURL; case sha256; case artifactKind; case tarballMember
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonTargetVersion = try container.decode(String.self, forKey: .targetVersion)
+        self._jsonArtifactURL = try container.decode(String.self, forKey: .artifactURL)
+        self._jsonSha256 = try container.decode(String.self, forKey: .sha256)
+        self._jsonArtifactKind = try container.decode(AgentUpdateArtifactKind.self, forKey: .artifactKind)
+        self._jsonTarballMember = try container.decodeIfPresent(String.self, forKey: .tarballMember)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonTargetVersion, forKey: .targetVersion)
+        try container.encode(_jsonArtifactURL, forKey: .artifactURL)
+        try container.encode(_jsonSha256, forKey: .sha256)
+        try container.encode(_jsonArtifactKind, forKey: .artifactKind)
+        try container.encodeIfPresent(_jsonTarballMember, forKey: .tarballMember)
+    }
+
+}
+
+/// A permanent instruction to remove one retired Ceph runtime credential from
+/// an agent. It is append-only and intentionally has no generation or expiry:
+/// current, re-enrolled, and future clients in the cluster's site all receive
+/// the same tombstone, making cleanup idempotent across outages and reinstalls.
+public typealias DesiredCephCredentialRevocation = Strato_Agent_V1_DesiredCephCredentialRevocation
+extension Strato_Agent_V1_DesiredCephCredentialRevocation: Codable {
+
+    public init(clusterId: UUID, credentialId: UUID) {
+        self.init()
+        self._jsonClusterId = clusterId
+        self._jsonCredentialId = credentialId
+    }
+
+    private enum CodingKeys: String, CodingKey { case clusterId; case credentialId }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonClusterId = try container.decode(UUID.self, forKey: .clusterId)
+        self._jsonCredentialId = try container.decode(UUID.self, forKey: .credentialId)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonClusterId, forKey: .clusterId)
+        try container.encode(_jsonCredentialId, forKey: .credentialId)
+    }
+
 }
 
 /// Control plane → agent: the full authoritative set of VMs that should exist
@@ -605,97 +786,9 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 /// with a `DesiredWorkloadTombstone` (or an ordinary `.absent` entry). Before
 /// that, the whole safety of a host's workloads rested on the assembler's
 /// `WHERE` clause returning a complete list.
-/// A permanent instruction to remove one retired Ceph runtime credential from
-/// an agent. It is append-only and intentionally has no generation or expiry:
-/// current, re-enrolled, and future clients in the cluster's site all receive
-/// the same tombstone, making cleanup idempotent across outages and reinstalls.
-public struct DesiredCephCredentialRevocation: Codable, Sendable, Equatable {
-    public let clusterId: UUID
-    public let credentialId: UUID
-
-    public init(clusterId: UUID, credentialId: UUID) {
-        self.clusterId = clusterId
-        self.credentialId = credentialId
-    }
-}
-
-public struct DesiredStateMessage: WebSocketMessage {
+public typealias DesiredStateMessage = Strato_Agent_V1_DesiredStateMessage
+extension Strato_Agent_V1_DesiredStateMessage: WebSocketMessage {
     public var type: MessageType { .desiredState }
-    public let requestId: String
-    public let timestamp: Date
-    /// Correlation id for logging/tracing a sync end to end. No semantics.
-    public let syncId: String
-    public let vms: [DesiredVMState]
-    /// The full authoritative set of sandboxes that should exist on the
-    /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
-    /// here should not exist — and, like a VM, is held and reported rather
-    /// than destroyed until a tombstone says otherwise).
-    public let sandboxes: [DesiredSandboxState]
-    /// The full authoritative set of logical networks that should exist on the
-    /// receiving agent (full-list, same semantics as `vms`: a network omitted
-    /// here should be torn down). An empty list authoritatively means this agent
-    /// should realize no logical-network topology.
-    public let networks: [DesiredNetworkState]
-    /// Whether the receiving agent is the topology authority for its OVN
-    /// northbound database. The authority reconciles `networks` — creating and
-    /// tearing down switches, routers, and NAT. A non-authoritative agent shares
-    /// its site's NB with peers and must leave topology alone (it still binds
-    /// its own VMs' ports); exactly one agent per site is authoritative, so the
-    /// shared NB has a single topology writer. Site-less agents own their local
-    /// NB outright and are always authoritative.
-    public let networksAuthoritative: Bool
-    /// The agent build this agent should be running (issue #434), with a
-    /// freshly resolved artifact. Nil means "no opinion" — deployments without
-    /// a meaningful target (dev builds), agents with auto-update off, and agents
-    /// the fleet rollout has not reached yet. Never an instruction to downgrade
-    /// or tear anything down, so absence is always safe.
-    public let desiredAgentUpdate: DesiredAgentUpdate?
-    /// The security groups the receiving agent needs realized as OVN port
-    /// groups + ACLs: every group attached to a NIC of a VM in this sync's
-    /// scope, plus the transitive closure of groups referenced by their rules
-    /// (so `$pg_…` address-set references always resolve). Only the topology
-    /// authority acts on this list; other agents consume just the per-NIC
-    /// `NetworkSpec.securityGroupIds` for port membership. Nil means this agent
-    /// is not authoritative for security-group topology — never "tear down all
-    /// port groups": the agent skips security-group reconciliation entirely.
-    public let securityGroups: [DesiredSecurityGroup]?
-    /// Workloads the receiving agent holds that the control plane has
-    /// confirmed have no row, and which it therefore authorizes the agent to
-    /// tear down (STR-98). Each entry is the answer to an
-    /// `UnrecognizedWorkload` the agent reported, so a tombstone is always the
-    /// second half of a round trip — never something the control plane
-    /// volunteers. An empty list means no teardown is authorized.
-    public let tombstones: [DesiredWorkloadTombstone]
-    /// The full authoritative set of volumes that should exist on the receiving
-    /// agent (ADR 0001 stage 5, STR-148), with the same full-list semantics as
-    /// `vms`. An empty list authoritatively means this host should hold no
-    /// volumes.
-    public let volumes: [DesiredVolumeState]
-    /// The full authoritative set of snapshot artifacts — volume snapshots, VM
-    /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
-    /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
-    /// One list rather than three because the diff, the generation guard and
-    /// the absent-then-confirm dance are identical across the families; only
-    /// the backend that captures the bytes differs, and the entry's own `kind`
-    /// says which. An empty list authoritatively means this host should retain
-    /// no snapshot artifacts.
-    public let snapshots: [DesiredSnapshotState]
-    /// Retired Ceph secret/config identities this site must never retain.
-    /// Unlike workload desired state this ledger is append-only: an empty list
-    /// means there are no recorded revocations for this site, never that an
-    /// agent should forget ones it already applied.
-    public let cephCredentialRevocations: [DesiredCephCredentialRevocation]
-    /// The DNS zones the receiving agent should realize into the OVN `DNS`
-    /// table (STR-39): every zone attached to a network whose topology this
-    /// agent authors, with the zone's full effective record set.
-    ///
-    /// Nil is "the sender has no opinion about DNS" and the agent leaves every
-    /// managed row alone — what a *non-authority* agent gets, since realizing
-    /// switch-scoped rows from two writers would have them fight over teardown.
-    /// `[]` is an opinion and means "no
-    /// zone reaches any network you author": managed rows are removed, which
-    /// is what makes detaching the last zone from a network take effect.
-    public let dnsZones: [DesiredDNSZone]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -713,20 +806,67 @@ public struct DesiredStateMessage: WebSocketMessage {
         cephCredentialRevocations: [DesiredCephCredentialRevocation] = [],
         dnsZones: [DesiredDNSZone]? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.syncId = syncId
-        self.vms = vms
-        self.sandboxes = sandboxes
-        self.networks = networks
-        self.networksAuthoritative = networksAuthoritative
-        self.desiredAgentUpdate = desiredAgentUpdate
-        self.securityGroups = securityGroups
-        self.tombstones = tombstones
-        self.volumes = volumes
-        self.snapshots = snapshots
-        self.cephCredentialRevocations = cephCredentialRevocations
-        self.dnsZones = dnsZones
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonSyncId = syncId
+        self._jsonVms = vms
+        self._jsonSandboxes = sandboxes
+        self._jsonNetworks = networks
+        self._jsonNetworksAuthoritative = networksAuthoritative
+        self._jsonDesiredAgentUpdate = desiredAgentUpdate
+        self._jsonSecurityGroups = securityGroups
+        self._jsonTombstones = tombstones
+        self._jsonVolumes = volumes
+        self._jsonSnapshots = snapshots
+        self._jsonCephCredentialRevocations = cephCredentialRevocations
+        self._jsonDnsZones = dnsZones
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case syncId; case vms; case sandboxes; case networks;
+        case networksAuthoritative; case desiredAgentUpdate; case securityGroups; case tombstones; case volumes;
+        case snapshots; case cephCredentialRevocations; case dnsZones
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonSyncId = try container.decode(String.self, forKey: .syncId)
+        self._jsonVms = try container.decode([DesiredVMState].self, forKey: .vms)
+        self._jsonSandboxes = try container.decode([DesiredSandboxState].self, forKey: .sandboxes)
+        self._jsonNetworks = try container.decode([DesiredNetworkState].self, forKey: .networks)
+        self._jsonNetworksAuthoritative = try container.decode(Bool.self, forKey: .networksAuthoritative)
+        self._jsonDesiredAgentUpdate = try container.decodeIfPresent(
+            DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
+        self._jsonSecurityGroups = try container.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
+        self._jsonTombstones = try container.decode([DesiredWorkloadTombstone].self, forKey: .tombstones)
+        self._jsonVolumes = try container.decode([DesiredVolumeState].self, forKey: .volumes)
+        self._jsonSnapshots = try container.decode([DesiredSnapshotState].self, forKey: .snapshots)
+        self._jsonCephCredentialRevocations = try container.decode(
+            [DesiredCephCredentialRevocation].self, forKey: .cephCredentialRevocations)
+        self._jsonDnsZones = try container.decodeIfPresent([DesiredDNSZone].self, forKey: .dnsZones)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonSyncId, forKey: .syncId)
+        try container.encode(_jsonVms, forKey: .vms)
+        try container.encode(_jsonSandboxes, forKey: .sandboxes)
+        try container.encode(_jsonNetworks, forKey: .networks)
+        try container.encode(_jsonNetworksAuthoritative, forKey: .networksAuthoritative)
+        try container.encodeIfPresent(_jsonDesiredAgentUpdate, forKey: .desiredAgentUpdate)
+        try container.encodeIfPresent(_jsonSecurityGroups, forKey: .securityGroups)
+        try container.encode(_jsonTombstones, forKey: .tombstones)
+        try container.encode(_jsonVolumes, forKey: .volumes)
+        try container.encode(_jsonSnapshots, forKey: .snapshots)
+        try container.encode(_jsonCephCredentialRevocations, forKey: .cephCredentialRevocations)
+        try container.encodeIfPresent(_jsonDnsZones, forKey: .dnsZones)
     }
 
 }
@@ -741,29 +881,8 @@ public struct DesiredStateMessage: WebSocketMessage {
 /// port-group name (and thus the OVN-generated `$<pg>_ip4`/`_ip6` address-set
 /// reference) itself via `OVNNaming`, so naming stays a single-owner concern
 /// exactly like floating-IP port names.
-public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
-    /// The control-plane rule row's id, stamped into the ACL's `external_ids`
-    /// so operators can trace an OVN ACL back to the rule that produced it.
-    public let id: UUID
-    /// "ingress" (traffic to the VM, `to-lport`) or "egress" (traffic from
-    /// the VM, `from-lport`).
-    public let direction: String
-    /// "ipv4" or "ipv6" — which address family the rule matches.
-    public let ethertype: String
-    /// "tcp", "udp", or "icmp"; nil matches any protocol of the ethertype.
-    public let protocolName: String?
-    /// For tcp/udp: the destination port range (min == max for one port).
-    /// For icmp: `portRangeMin` is the ICMP type and `portRangeMax` the code.
-    /// Nil means all ports/types.
-    public let portRangeMin: Int?
-    public let portRangeMax: Int?
-    /// CIDR peer (source for ingress, destination for egress).
-    public let remoteCIDR: String?
-    /// Security-group peer: matches the addresses of the referenced group's
-    /// member ports via its auto-generated address set.
-    public let remoteGroupId: UUID?
-    /// Whether the ACL should log the packets it matches.
-    public let log: Bool
+public typealias DesiredSecurityGroupRule = Strato_Agent_V1_DesiredSecurityGroupRule
+extension Strato_Agent_V1_DesiredSecurityGroupRule: Codable {
 
     public init(
         id: UUID,
@@ -776,16 +895,51 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
         remoteGroupId: UUID? = nil,
         log: Bool = false
     ) {
-        self.id = id
-        self.direction = direction
-        self.ethertype = ethertype
-        self.protocolName = protocolName
-        self.portRangeMin = portRangeMin
-        self.portRangeMax = portRangeMax
-        self.remoteCIDR = remoteCIDR
-        self.remoteGroupId = remoteGroupId
-        self.log = log
+        self.init()
+        self._jsonId = id
+        self._jsonDirection = direction
+        self._jsonEthertype = ethertype
+        self._jsonProtocolName = protocolName
+        self._jsonPortRangeMin = portRangeMin
+        self._jsonPortRangeMax = portRangeMax
+        self._jsonRemoteCIDR = remoteCIDR
+        self._jsonRemoteGroupId = remoteGroupId
+        self._jsonLog = log
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case direction; case ethertype; case protocolName; case portRangeMin; case portRangeMax;
+        case remoteCIDR; case remoteGroupId; case log
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonDirection = try container.decode(String.self, forKey: .direction)
+        self._jsonEthertype = try container.decode(String.self, forKey: .ethertype)
+        self._jsonProtocolName = try container.decodeIfPresent(String.self, forKey: .protocolName)
+        self._jsonPortRangeMin = try container.decodeIfPresent(Int.self, forKey: .portRangeMin)
+        self._jsonPortRangeMax = try container.decodeIfPresent(Int.self, forKey: .portRangeMax)
+        self._jsonRemoteCIDR = try container.decodeIfPresent(String.self, forKey: .remoteCIDR)
+        self._jsonRemoteGroupId = try container.decodeIfPresent(UUID.self, forKey: .remoteGroupId)
+        self._jsonLog = try container.decode(Bool.self, forKey: .log)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonDirection, forKey: .direction)
+        try container.encode(_jsonEthertype, forKey: .ethertype)
+        try container.encodeIfPresent(_jsonProtocolName, forKey: .protocolName)
+        try container.encodeIfPresent(_jsonPortRangeMin, forKey: .portRangeMin)
+        try container.encodeIfPresent(_jsonPortRangeMax, forKey: .portRangeMax)
+        try container.encodeIfPresent(_jsonRemoteCIDR, forKey: .remoteCIDR)
+        try container.encodeIfPresent(_jsonRemoteGroupId, forKey: .remoteGroupId)
+        try container.encode(_jsonLog, forKey: .log)
+    }
+
 }
 
 /// The state the control plane wants one security group to be in: an OVN port
@@ -793,16 +947,34 @@ public struct DesiredSecurityGroupRule: Codable, Sendable, Equatable {
 /// mutation; the agent replaces the port group's ACL set only when the stored
 /// generation differs, so replayed or reordered syncs can never resurrect old
 /// rules (the `LogicalNetwork.generation` pattern).
-public struct DesiredSecurityGroup: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let generation: Int64
-    public let rules: [DesiredSecurityGroupRule]
+public typealias DesiredSecurityGroup = Strato_Agent_V1_DesiredSecurityGroup
+extension Strato_Agent_V1_DesiredSecurityGroup: Codable {
 
     public init(id: UUID, generation: Int64, rules: [DesiredSecurityGroupRule]) {
-        self.id = id
-        self.generation = generation
-        self.rules = rules
+        self.init()
+        self._jsonId = id
+        self._jsonGeneration = generation
+        self._jsonRules = rules
     }
+
+    private enum CodingKeys: String, CodingKey { case id; case generation; case rules }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonRules = try container.decode([DesiredSecurityGroupRule].self, forKey: .rules)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonRules, forKey: .rules)
+    }
+
 }
 
 // MARK: - Desired Network ACLs
@@ -813,22 +985,8 @@ public struct DesiredSecurityGroup: Codable, Sendable, Equatable {
 /// `ruleNumber` order. The topology-authority agent owns the mapping from that
 /// stable API ordering to OVN tiers and priorities; the wire deliberately does
 /// not expose backend-specific priority values.
-public struct DesiredNetworkACLRule: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let ruleNumber: Int
-    /// "ingress" (`to-lport`) or "egress" (`from-lport`).
-    public let direction: String
-    /// "ipv4" or "ipv6".
-    public let ethertype: String
-    /// "allow" or "deny". These are policy verdicts, not raw OVN actions.
-    public let action: String
-    /// "tcp", "udp", or "icmp"; nil matches any IP protocol.
-    public let protocolName: String?
-    /// Destination ports for TCP/UDP, or ICMP type/code.
-    public let portRangeMin: Int?
-    public let portRangeMax: Int?
-    /// Source CIDR for ingress, destination CIDR for egress.
-    public let remoteCIDR: String
+public typealias DesiredNetworkACLRule = Strato_Agent_V1_DesiredNetworkACLRule
+extension Strato_Agent_V1_DesiredNetworkACLRule: Codable {
 
     public init(
         id: UUID,
@@ -841,16 +999,51 @@ public struct DesiredNetworkACLRule: Codable, Sendable, Equatable {
         portRangeMax: Int? = nil,
         remoteCIDR: String
     ) {
-        self.id = id
-        self.ruleNumber = ruleNumber
-        self.direction = direction
-        self.ethertype = ethertype
-        self.action = action
-        self.protocolName = protocolName
-        self.portRangeMin = portRangeMin
-        self.portRangeMax = portRangeMax
-        self.remoteCIDR = remoteCIDR
+        self.init()
+        self._jsonId = id
+        self._jsonRuleNumber = ruleNumber
+        self._jsonDirection = direction
+        self._jsonEthertype = ethertype
+        self._jsonAction = action
+        self._jsonProtocolName = protocolName
+        self._jsonPortRangeMin = portRangeMin
+        self._jsonPortRangeMax = portRangeMax
+        self._jsonRemoteCIDR = remoteCIDR
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case ruleNumber; case direction; case ethertype; case action; case protocolName; case portRangeMin;
+        case portRangeMax; case remoteCIDR
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonRuleNumber = try container.decode(Int.self, forKey: .ruleNumber)
+        self._jsonDirection = try container.decode(String.self, forKey: .direction)
+        self._jsonEthertype = try container.decode(String.self, forKey: .ethertype)
+        self._jsonAction = try container.decode(String.self, forKey: .action)
+        self._jsonProtocolName = try container.decodeIfPresent(String.self, forKey: .protocolName)
+        self._jsonPortRangeMin = try container.decodeIfPresent(Int.self, forKey: .portRangeMin)
+        self._jsonPortRangeMax = try container.decodeIfPresent(Int.self, forKey: .portRangeMax)
+        self._jsonRemoteCIDR = try container.decode(String.self, forKey: .remoteCIDR)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonRuleNumber, forKey: .ruleNumber)
+        try container.encode(_jsonDirection, forKey: .direction)
+        try container.encode(_jsonEthertype, forKey: .ethertype)
+        try container.encode(_jsonAction, forKey: .action)
+        try container.encodeIfPresent(_jsonProtocolName, forKey: .protocolName)
+        try container.encodeIfPresent(_jsonPortRangeMin, forKey: .portRangeMin)
+        try container.encodeIfPresent(_jsonPortRangeMax, forKey: .portRangeMax)
+        try container.encode(_jsonRemoteCIDR, forKey: .remoteCIDR)
+    }
+
 }
 
 /// The one network ACL attached to a logical network.
@@ -858,16 +1051,34 @@ public struct DesiredNetworkACLRule: Codable, Sendable, Equatable {
 /// The control plane bumps `generation` for every rule mutation. The agent
 /// realizes the whole ordered rule set as one fail-closed replacement, never as
 /// an imperative per-rule edit.
-public struct DesiredNetworkACL: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let generation: Int64
-    public let rules: [DesiredNetworkACLRule]
+public typealias DesiredNetworkACL = Strato_Agent_V1_DesiredNetworkACL
+extension Strato_Agent_V1_DesiredNetworkACL: Codable {
 
     public init(id: UUID, generation: Int64, rules: [DesiredNetworkACLRule]) {
-        self.id = id
-        self.generation = generation
-        self.rules = rules
+        self.init()
+        self._jsonId = id
+        self._jsonGeneration = generation
+        self._jsonRules = rules
     }
+
+    private enum CodingKeys: String, CodingKey { case id; case generation; case rules }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonRules = try container.decode([DesiredNetworkACLRule].self, forKey: .rules)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonRules, forKey: .rules)
+    }
+
 }
 
 // MARK: - Desired Network State
@@ -882,57 +1093,80 @@ public struct DesiredNetworkACL: Codable, Sendable, Equatable {
 /// then handled on the chassis hosting the VM rather than hairpinning through
 /// the gateway chassis. The port name is derived agent-side (`OVNNaming`), not
 /// carried on the wire, so naming stays a single-owner concern.
-public struct DesiredFloatingIP: Codable, Sendable, Equatable {
-    /// The floating (external) IPv4 address, from a control-plane floating IP
-    /// pool. Used as the NAT rule's `external_ip`.
-    public let externalIP: String
-    /// The attached NIC's fixed IPv4 address on the tenant network. Used as
-    /// the NAT rule's `logical_ip`.
-    public let logicalIP: String
-    /// The VM owning the attached NIC.
-    public let vmId: UUID?
-    /// The NIC's position in the VM's interface list (orderIndex), matching
-    /// the index the agent used when naming the NIC's logical switch port.
-    public let nicIndex: Int?
+public typealias DesiredFloatingIP = Strato_Agent_V1_DesiredFloatingIP
+extension Strato_Agent_V1_DesiredFloatingIP: Codable {
 
     public init(
         externalIP: String, logicalIP: String, vmId: UUID? = nil, nicIndex: Int? = nil
     ) {
-        self.externalIP = externalIP
-        self.logicalIP = logicalIP
-        self.vmId = vmId
-        self.nicIndex = nicIndex
+        self.init()
+        self._jsonExternalIP = externalIP
+        self._jsonLogicalIP = logicalIP
+        self._jsonVmId = vmId
+        self._jsonNicIndex = nicIndex
     }
+
+    private enum CodingKeys: String, CodingKey { case externalIP; case logicalIP; case vmId; case nicIndex }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonExternalIP = try container.decode(String.self, forKey: .externalIP)
+        self._jsonLogicalIP = try container.decode(String.self, forKey: .logicalIP)
+        self._jsonVmId = try container.decodeIfPresent(UUID.self, forKey: .vmId)
+        self._jsonNicIndex = try container.decodeIfPresent(Int.self, forKey: .nicIndex)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonExternalIP, forKey: .externalIP)
+        try container.encode(_jsonLogicalIP, forKey: .logicalIP)
+        try container.encodeIfPresent(_jsonVmId, forKey: .vmId)
+        try container.encodeIfPresent(_jsonNicIndex, forKey: .nicIndex)
+    }
+
 }
 
 /// One listener on an OVN-native L4 load balancer (STR-28). The control plane
 /// keeps listeners separate so high-churn backend membership never requires a
 /// read-modify-write of this stable port mapping.
-public struct DesiredLoadBalancerListener: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let port: Int
-    public let backendPort: Int
+public typealias DesiredLoadBalancerListener = Strato_Agent_V1_DesiredLoadBalancerListener
+extension Strato_Agent_V1_DesiredLoadBalancerListener: Codable {
 
     public init(id: UUID, port: Int, backendPort: Int) {
-        self.id = id
-        self.port = port
-        self.backendPort = backendPort
+        self.init()
+        self._jsonId = id
+        self._jsonPort = port
+        self._jsonBackendPort = backendPort
     }
+
+    private enum CodingKeys: String, CodingKey { case id; case port; case backendPort }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonPort = try container.decode(Int.self, forKey: .port)
+        self._jsonBackendPort = try container.decode(Int.self, forKey: .backendPort)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonPort, forKey: .port)
+        try container.encode(_jsonBackendPort, forKey: .backendPort)
+    }
+
 }
 
 /// One backend address for a desired load balancer. VM identity is carried
 /// only for on-platform NICs, allowing the agent to derive the stable OVN LSP
 /// name used by health-check `ip_port_mappings`. Off-platform targets have an
 /// address but no VM, NIC, or member switch.
-public struct DesiredLoadBalancerBackend: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let ipAddress: String
-    public let vmId: UUID?
-    public let nicIndex: Int?
-    public let networkId: UUID?
-    /// Router-port address on the backend's subnet, used as OVN's probe source
-    /// in `ip_port_mappings`. Nil for off-platform targets.
-    public let healthCheckSourceIP: String?
+public typealias DesiredLoadBalancerBackend = Strato_Agent_V1_DesiredLoadBalancerBackend
+extension Strato_Agent_V1_DesiredLoadBalancerBackend: Codable {
 
     public init(
         id: UUID,
@@ -942,21 +1176,45 @@ public struct DesiredLoadBalancerBackend: Codable, Sendable, Equatable {
         networkId: UUID? = nil,
         healthCheckSourceIP: String? = nil
     ) {
-        self.id = id
-        self.ipAddress = ipAddress
-        self.vmId = vmId
-        self.nicIndex = nicIndex
-        self.networkId = networkId
-        self.healthCheckSourceIP = healthCheckSourceIP
+        self.init()
+        self._jsonId = id
+        self._jsonIpAddress = ipAddress
+        self._jsonVmId = vmId
+        self._jsonNicIndex = nicIndex
+        self._jsonNetworkId = networkId
+        self._jsonHealthCheckSourceIP = healthCheckSourceIP
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case ipAddress; case vmId; case nicIndex; case networkId; case healthCheckSourceIP
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonIpAddress = try container.decode(String.self, forKey: .ipAddress)
+        self._jsonVmId = try container.decodeIfPresent(UUID.self, forKey: .vmId)
+        self._jsonNicIndex = try container.decodeIfPresent(Int.self, forKey: .nicIndex)
+        self._jsonNetworkId = try container.decodeIfPresent(UUID.self, forKey: .networkId)
+        self._jsonHealthCheckSourceIP = try container.decodeIfPresent(String.self, forKey: .healthCheckSourceIP)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonIpAddress, forKey: .ipAddress)
+        try container.encodeIfPresent(_jsonVmId, forKey: .vmId)
+        try container.encodeIfPresent(_jsonNicIndex, forKey: .nicIndex)
+        try container.encodeIfPresent(_jsonNetworkId, forKey: .networkId)
+        try container.encodeIfPresent(_jsonHealthCheckSourceIP, forKey: .healthCheckSourceIP)
+    }
+
 }
 
-public struct DesiredLoadBalancerHealthCheck: Codable, Sendable, Equatable {
-    public let enabled: Bool
-    public let intervalSeconds: Int
-    public let timeoutSeconds: Int
-    public let successThreshold: Int
-    public let failureThreshold: Int
+public typealias DesiredLoadBalancerHealthCheck = Strato_Agent_V1_DesiredLoadBalancerHealthCheck
+extension Strato_Agent_V1_DesiredLoadBalancerHealthCheck: Codable {
 
     public init(
         enabled: Bool,
@@ -965,26 +1223,45 @@ public struct DesiredLoadBalancerHealthCheck: Codable, Sendable, Equatable {
         successThreshold: Int,
         failureThreshold: Int
     ) {
-        self.enabled = enabled
-        self.intervalSeconds = intervalSeconds
-        self.timeoutSeconds = timeoutSeconds
-        self.successThreshold = successThreshold
-        self.failureThreshold = failureThreshold
+        self.init()
+        self._jsonEnabled = enabled
+        self._jsonIntervalSeconds = intervalSeconds
+        self._jsonTimeoutSeconds = timeoutSeconds
+        self._jsonSuccessThreshold = successThreshold
+        self._jsonFailureThreshold = failureThreshold
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled; case intervalSeconds; case timeoutSeconds; case successThreshold; case failureThreshold
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonEnabled = try container.decode(Bool.self, forKey: .enabled)
+        self._jsonIntervalSeconds = try container.decode(Int.self, forKey: .intervalSeconds)
+        self._jsonTimeoutSeconds = try container.decode(Int.self, forKey: .timeoutSeconds)
+        self._jsonSuccessThreshold = try container.decode(Int.self, forKey: .successThreshold)
+        self._jsonFailureThreshold = try container.decode(Int.self, forKey: .failureThreshold)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonEnabled, forKey: .enabled)
+        try container.encode(_jsonIntervalSeconds, forKey: .intervalSeconds)
+        try container.encode(_jsonTimeoutSeconds, forKey: .timeoutSeconds)
+        try container.encode(_jsonSuccessThreshold, forKey: .successThreshold)
+        try container.encode(_jsonFailureThreshold, forKey: .failureThreshold)
+    }
+
 }
 
 /// A first-class Strato L4 load balancer, keyed by its resource UUID rather
 /// than its mutable display name. Omission from an authoritative network sync
 /// means the owner-tagged OVN row must be removed.
-public struct DesiredLoadBalancer: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let name: String
-    public let vip: String
-    public let protocolName: String
-    public let generation: Int64
-    public let healthCheck: DesiredLoadBalancerHealthCheck
-    public let listeners: [DesiredLoadBalancerListener]
-    public let backends: [DesiredLoadBalancerBackend]
+public typealias DesiredLoadBalancer = Strato_Agent_V1_DesiredLoadBalancer
+extension Strato_Agent_V1_DesiredLoadBalancer: Codable {
 
     public init(
         id: UUID,
@@ -996,15 +1273,48 @@ public struct DesiredLoadBalancer: Codable, Sendable, Equatable {
         listeners: [DesiredLoadBalancerListener],
         backends: [DesiredLoadBalancerBackend]
     ) {
-        self.id = id
-        self.name = name
-        self.vip = vip
-        self.protocolName = protocolName
-        self.generation = generation
-        self.healthCheck = healthCheck
-        self.listeners = listeners
-        self.backends = backends
+        self.init()
+        self._jsonId = id
+        self._jsonName = name
+        self._jsonVip = vip
+        self._jsonProtocolName = protocolName
+        self._jsonGeneration = generation
+        self._jsonHealthCheck = healthCheck
+        self._jsonListeners = listeners
+        self._jsonBackends = backends
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case name; case vip; case protocolName; case generation; case healthCheck; case listeners;
+        case backends
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonVip = try container.decode(String.self, forKey: .vip)
+        self._jsonProtocolName = try container.decode(String.self, forKey: .protocolName)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonHealthCheck = try container.decode(DesiredLoadBalancerHealthCheck.self, forKey: .healthCheck)
+        self._jsonListeners = try container.decode([DesiredLoadBalancerListener].self, forKey: .listeners)
+        self._jsonBackends = try container.decode([DesiredLoadBalancerBackend].self, forKey: .backends)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonVip, forKey: .vip)
+        try container.encode(_jsonProtocolName, forKey: .protocolName)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonHealthCheck, forKey: .healthCheck)
+        try container.encode(_jsonListeners, forKey: .listeners)
+        try container.encode(_jsonBackends, forKey: .backends)
+    }
+
 }
 
 /// The state the control plane wants a logical network to be in on an agent.
@@ -1019,124 +1329,8 @@ public struct DesiredLoadBalancer: Codable, Sendable, Equatable {
 /// logical router (giving cross-switch east-west), keyed by `routerKey`. Two
 /// projects never share a router, which is what makes it safe for them to use
 /// the same subnet (issue #765).
-public struct DesiredNetworkState: Codable, Sendable {
-    public let networkId: UUID
-    /// Human label for logs and external-ids. **Not** the OVN switch name — the
-    /// agent derives that from `networkId` (issue #342) — and not unique:
-    /// names are scoped per project, so two entries in one sync may share one
-    /// (issue #765).
-    public let name: String
-    /// The network's subnet in CIDR form, e.g. `192.168.1.0/24`. Used as the
-    /// SNAT `logical_ip` and to size the router port's address.
-    public let subnet: String
-    /// The L3 gateway address the router presents on this network (the router
-    /// port's IP). Already reserved by control-plane IPAM as a non-allocatable
-    /// host address. Nil disables L3 for the network (switch only).
-    public let gateway: String?
-    /// The network's IPv6 subnet in CIDR form (a /64, e.g.
-    /// `fd12:3456:789a::/64`), when the network is dual-stack. Nil on
-    /// v4-only networks.
-    public let subnet6: String?
-    /// The IPv6 gateway (router-port address) inside `subnet6`, when
-    /// dual-stack. The agent adds it to the router port and announces it via
-    /// Router Advertisements (dhcpv6_stateful mode) — DHCPv6 itself cannot
-    /// convey a default route.
-    public let gateway6: String?
-    /// Identity of the logical router this network attaches to. Networks sharing
-    /// a `routerKey` share one router. Opaque to the agent — do not parse it.
-    public let routerKey: String
-    /// Whether the agent should program outbound SNAT to the site uplink for
-    /// this network. The uplink IP is auto-detected on the agent. IPv4-only:
-    /// IPv6 stays internal (no NAT66, no default route) in this phase.
-    public let externalAccess: Bool
-    /// Whether the network's guests are addressed by OVN's DHCP responder.
-    /// Carried here — not only on per-NIC specs — because DHCP edits don't
-    /// bump VM generations, so converged VMs never re-realize their NICs; the
-    /// level-triggered network reconcile is what converges the DHCP_Options
-    /// rows (including deleting them when DHCP is turned off).
-    public let dhcpEnabled: Bool
-    /// The network's DNS resolvers; may be mixed-family (the agent splits per
-    /// DHCP family).
-    ///
-    /// **What this list is depends on `resolverEnabled`** (wire v37, STR-40).
-    /// With the resolver off it is what the guest is told over DHCP, which is
-    /// all it ever was. With the resolver on, the guest is told
-    /// `NetworkResolverEndpoint.address` instead and this becomes the
-    /// *upstream forwarders* the network's CoreDNS sends misses to. The field
-    /// did not change shape or validation, only its consumer — and the two
-    /// readings agree on the values that matter, because a resolver list was
-    /// already a list of recursive resolvers.
-    public let dnsServers: [String]
-    /// DNS search domain advertised over DHCP.
-    public let domainName: String?
-    /// DHCPv4 lease time in seconds; agents default it when nil.
-    public let leaseTime: Int?
-    /// Whether this network's guests can reach the instance metadata service at
-    /// `InstanceMetadataEndpoint`. Realized as an OVN `localport` on the
-    /// network's logical switch — instantiated on every chassis, never
-    /// forwarded across tunnels — converged level-triggered by the network
-    /// reconcile, including deletion when turned off.
-    ///
-    /// Carried here rather than only on per-NIC specs for `dhcpEnabled`'s
-    /// reason: network-level metadata settings don't bump each attached VM's
-    /// generation, so a converged VM never re-realizes its NICs and the network
-    /// reconcile is the only path that reaches a live network whose setting
-    /// changed.
-    ///
-    /// `false` is authoritative and removes the managed metadata port; that is
-    /// what makes turning the feature off converge.
-    public let metadataEnabled: Bool
-    /// Whether this network's guests get a resolver at the addresses in
-    /// `resolverAddresses` (STR-40, wire v37): the host-wide CoreDNS each agent
-    /// runs in its *host* namespace, which serves the network's zones in full —
-    /// including the CNAME/TXT/SRV the OVN `DNS` table cannot express — and
-    /// forwards everything else to `dnsServers`.
-    ///
-    /// Realized on a **second** `localport` of its own, not the one
-    /// `metadataEnabled` authors, because the two services terminate in
-    /// different namespaces and one OVS interface claims one `iface-id` (ADR
-    /// 0008). It is still a second flag on one carrier rather than a second
-    /// carrier, because both are properties of the same network row.
-    ///
-    /// Nil means this sender has no resolver opinion and leaves managed rows in
-    /// place; `false` is authoritative and removes them. This flag also decides
-    /// what the DHCP `dns_server` option contains, so a network flipping it
-    /// changes what guests are told at their next lease.
-    ///
-    /// The control plane withholds `true` unless *every* agent in the site
-    /// reports `AgentRegisterMessage.resolverCapable`.
-    public let resolverEnabled: Bool?
-    /// This network's own resolver addresses, v4 first (STR-40).
-    ///
-    /// **Distinct per network**, which is what lets every resolver on a host
-    /// share one namespace — the host's — and so forward upstream through the
-    /// hypervisor's own egress. A single well-known address could not: the
-    /// listener would have no way to tell which network asked, and the host no
-    /// way to route a reply back to a `10.0.0.5` that exists on three switches.
-    ///
-    /// Non-nil exactly when `resolverEnabled` is true. Two fields rather than
-    /// one derived from an index on the wire, because the agent should realize
-    /// what it was told rather than re-derive an allocation scheme the control
-    /// plane owns.
-    public let resolverAddresses: [String]?
-    /// Monotonic per-network counter, bumped by the control plane on any change
-    /// that alters realization (subnet, gateway, router membership, external
-    /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
-    /// edits deliberately don't bump it — the network reconcile is
-    /// level-triggered, so same-generation networks still converge DHCP.
-    public let generation: Int64
-    /// Floating IPs attached to this network's NICs, realized as
-    /// `dnat_and_snat` rules on the network's router (issue #344). Only
-    /// meaningful on `externalAccess` networks (the NAT needs the router's uplink).
-    public let floatingIPs: [DesiredFloatingIP]
-    /// Native OVN load balancers whose VIP belongs to this network. An empty
-    /// array is authoritative.
-    public let loadBalancers: [DesiredLoadBalancer]
-    /// The network-level ACL attached to this switch (STR-33). The schema
-    /// permits at most one entry, while the collection shape preserves the
-    /// desired-state distinction between no opinion (`nil`) and authoritative
-    /// absence (`[]`), which tells the agent to remove managed switch ACLs.
-    public let networkACLs: [DesiredNetworkACL]?
+public typealias DesiredNetworkState = Strato_Agent_V1_DesiredNetworkState
+extension Strato_Agent_V1_DesiredNetworkState: Codable {
 
     public init(
         networkId: UUID,
@@ -1159,26 +1353,83 @@ public struct DesiredNetworkState: Codable, Sendable {
         loadBalancers: [DesiredLoadBalancer] = [],
         networkACLs: [DesiredNetworkACL]? = nil
     ) {
-        self.networkId = networkId
-        self.name = name
-        self.subnet = subnet
-        self.gateway = gateway
-        self.subnet6 = subnet6
-        self.gateway6 = gateway6
-        self.routerKey = routerKey
-        self.externalAccess = externalAccess
-        self.dhcpEnabled = dhcpEnabled
-        self.dnsServers = dnsServers
-        self.domainName = domainName
-        self.leaseTime = leaseTime
-        self.metadataEnabled = metadataEnabled
-        self.resolverEnabled = resolverEnabled
-        self.resolverAddresses = resolverAddresses
-        self.generation = generation
-        self.floatingIPs = floatingIPs
-        self.loadBalancers = loadBalancers
-        self.networkACLs = networkACLs
+        self.init()
+        self._jsonNetworkId = networkId
+        self._jsonName = name
+        self._jsonSubnet = subnet
+        self._jsonGateway = gateway
+        self._jsonSubnet6 = subnet6
+        self._jsonGateway6 = gateway6
+        self._jsonRouterKey = routerKey
+        self._jsonExternalAccess = externalAccess
+        self._jsonDhcpEnabled = dhcpEnabled
+        self._jsonDnsServers = dnsServers
+        self._jsonDomainName = domainName
+        self._jsonLeaseTime = leaseTime
+        self._jsonMetadataEnabled = metadataEnabled
+        self._jsonResolverEnabled = resolverEnabled
+        self._jsonResolverAddresses = resolverAddresses
+        self._jsonGeneration = generation
+        self._jsonFloatingIPs = floatingIPs
+        self._jsonLoadBalancers = loadBalancers
+        self._jsonNetworkACLs = networkACLs
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case networkId; case name; case subnet; case gateway; case subnet6; case gateway6; case routerKey;
+        case externalAccess; case dhcpEnabled; case dnsServers; case domainName; case leaseTime; case metadataEnabled;
+        case resolverEnabled; case resolverAddresses; case generation; case floatingIPs; case loadBalancers;
+        case networkACLs
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonNetworkId = try container.decode(UUID.self, forKey: .networkId)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonSubnet = try container.decode(String.self, forKey: .subnet)
+        self._jsonGateway = try container.decodeIfPresent(String.self, forKey: .gateway)
+        self._jsonSubnet6 = try container.decodeIfPresent(String.self, forKey: .subnet6)
+        self._jsonGateway6 = try container.decodeIfPresent(String.self, forKey: .gateway6)
+        self._jsonRouterKey = try container.decode(String.self, forKey: .routerKey)
+        self._jsonExternalAccess = try container.decode(Bool.self, forKey: .externalAccess)
+        self._jsonDhcpEnabled = try container.decode(Bool.self, forKey: .dhcpEnabled)
+        self._jsonDnsServers = try container.decode([String].self, forKey: .dnsServers)
+        self._jsonDomainName = try container.decodeIfPresent(String.self, forKey: .domainName)
+        self._jsonLeaseTime = try container.decodeIfPresent(Int.self, forKey: .leaseTime)
+        self._jsonMetadataEnabled = try container.decode(Bool.self, forKey: .metadataEnabled)
+        self._jsonResolverEnabled = try container.decodeIfPresent(Bool.self, forKey: .resolverEnabled)
+        self._jsonResolverAddresses = try container.decodeIfPresent([String].self, forKey: .resolverAddresses)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonFloatingIPs = try container.decode([DesiredFloatingIP].self, forKey: .floatingIPs)
+        self._jsonLoadBalancers = try container.decode([DesiredLoadBalancer].self, forKey: .loadBalancers)
+        self._jsonNetworkACLs = try container.decodeIfPresent([DesiredNetworkACL].self, forKey: .networkACLs)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonNetworkId, forKey: .networkId)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonSubnet, forKey: .subnet)
+        try container.encodeIfPresent(_jsonGateway, forKey: .gateway)
+        try container.encodeIfPresent(_jsonSubnet6, forKey: .subnet6)
+        try container.encodeIfPresent(_jsonGateway6, forKey: .gateway6)
+        try container.encode(_jsonRouterKey, forKey: .routerKey)
+        try container.encode(_jsonExternalAccess, forKey: .externalAccess)
+        try container.encode(_jsonDhcpEnabled, forKey: .dhcpEnabled)
+        try container.encode(_jsonDnsServers, forKey: .dnsServers)
+        try container.encodeIfPresent(_jsonDomainName, forKey: .domainName)
+        try container.encodeIfPresent(_jsonLeaseTime, forKey: .leaseTime)
+        try container.encode(_jsonMetadataEnabled, forKey: .metadataEnabled)
+        try container.encodeIfPresent(_jsonResolverEnabled, forKey: .resolverEnabled)
+        try container.encodeIfPresent(_jsonResolverAddresses, forKey: .resolverAddresses)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonFloatingIPs, forKey: .floatingIPs)
+        try container.encode(_jsonLoadBalancers, forKey: .loadBalancers)
+        try container.encodeIfPresent(_jsonNetworkACLs, forKey: .networkACLs)
+    }
+
 }
 
 // MARK: - Desired DNS zones
@@ -1196,33 +1447,37 @@ public struct DesiredNetworkState: Codable, Sendable {
 /// `type` is a string, not an enum, on the `DesiredSecurityGroupRule.direction`
 /// precedent: a record type from a newer control plane must decode into an
 /// entry this agent ignores, never fail the whole sync.
-public struct DesiredDNSRecord: Codable, Sendable, Equatable {
-    /// Fully-qualified owner name, lowercased and without a trailing dot. For
-    /// a `PTR` this is the `in-addr.arpa` / `ip6.arpa` name.
-    public let name: String
-    /// `A`, `AAAA`, `PTR`, `CNAME`, `TXT`, `SRV` — uppercase, as zone files
-    /// spell them.
-    public let type: String
-    /// The RRset's values, deduplicated and sorted by the control plane so two
-    /// assemblies of the same data compare (and hash) equal.
-    public let values: [String]
-    /// The RRset's TTL in seconds (wire v37, STR-40).
-    ///
-    /// v36 deliberately left this off: an OVN `DNS` row has nowhere to put a
-    /// TTL, so carrying one would have been dead weight on every sync. A zone
-    /// file has to write one, and it writes **one per RRset** — which is why
-    /// the control plane enforces a single TTL across an RRset (RFC 2181 §5.2)
-    /// rather than storing it per value.
-    ///
-    /// Defaults to the conventional zone TTL for convenient construction.
-    public let ttl: Int
+public typealias DesiredDNSRecord = Strato_Agent_V1_DesiredDNSRecord
+extension Strato_Agent_V1_DesiredDNSRecord: Codable {
 
     public init(name: String, type: String, values: [String], ttl: Int = 300) {
-        self.name = name
-        self.type = type
-        self.values = values
-        self.ttl = ttl
+        self.init()
+        self._jsonName = name
+        self._jsonType = type
+        self._jsonValues = values
+        self._jsonTtl = ttl
     }
+
+    private enum CodingKeys: String, CodingKey { case name; case type; case values; case ttl }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonType = try container.decode(String.self, forKey: .type)
+        self._jsonValues = try container.decode([String].self, forKey: .values)
+        self._jsonTtl = try container.decode(Int.self, forKey: .ttl)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonType, forKey: .type)
+        try container.encode(_jsonValues, forKey: .values)
+        try container.encode(_jsonTtl, forKey: .ttl)
+    }
+
 }
 
 /// A DNS zone the receiving agent should realize (STR-39, roadmap #769).
@@ -1253,45 +1508,45 @@ public struct DesiredDNSRecord: Codable, Sendable, Equatable {
 /// on one, and `networkIds` is the union of both. An agent realizes the OVN
 /// half only for the networks it actually authors, which it already knows from
 /// `DesiredStateMessage.networksAuthoritative`.
-public struct DesiredDNSZone: Codable, Sendable, Equatable {
-    public let zoneId: UUID
-    /// The zone's fully-qualified name, lowercased with no trailing dot. Not
-    /// an identifier — zone names are unique only within a project — and used
-    /// only as a human label on the realized row.
-    public let zoneName: String
-    /// The networks that should answer from this zone, restricted to the ones
-    /// this agent has something to do with — those it authors topology for,
-    /// plus (from v37) those it runs a local NIC on. The agent derives switch
-    /// and namespace names from the ids (`OVNNaming.switchName`,
-    /// `ChassisServicePlan.netnsName`), so user-chosen names never enter the
-    /// OVN or host namespace.
-    public let networkIds: [UUID]
-    /// The zone's effective contents, derived ∪ authored, in a stable order.
-    public let records: [DesiredDNSRecord]
-    /// A digest of the `records` carried here — which is the zone minus its
-    /// `.external`-view entries, since those are for publication elsewhere and
-    /// never reach an agent. Computed by the control plane. The agent stamps it
-    /// on the realized row's `external_ids` and compares it on the next sync,
-    /// so an unchanged zone costs no OVSDB transaction: records are
-    /// O(VMs on the network) and ship on every sync, and rewriting the whole
-    /// map every cycle is what level-triggering must not degenerate into.
-    ///
-    /// Never load-bearing for correctness — a stamp that disagrees with the
-    /// row's actual contents (a hand-edited row, an agent whose realization
-    /// changed across an upgrade) still heals, because the agent also compares
-    /// the records it would write against the ones the row carries.
-    public let recordsHash: String
+public typealias DesiredDNSZone = Strato_Agent_V1_DesiredDNSZone
+extension Strato_Agent_V1_DesiredDNSZone: Codable {
 
     public init(
         zoneId: UUID, zoneName: String, networkIds: [UUID], records: [DesiredDNSRecord],
         recordsHash: String
     ) {
-        self.zoneId = zoneId
-        self.zoneName = zoneName
-        self.networkIds = networkIds
-        self.records = records
-        self.recordsHash = recordsHash
+        self.init()
+        self._jsonZoneId = zoneId
+        self._jsonZoneName = zoneName
+        self._jsonNetworkIds = networkIds
+        self._jsonRecords = records
+        self._jsonRecordsHash = recordsHash
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case zoneId; case zoneName; case networkIds; case records; case recordsHash
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonZoneId = try container.decode(UUID.self, forKey: .zoneId)
+        self._jsonZoneName = try container.decode(String.self, forKey: .zoneName)
+        self._jsonNetworkIds = try container.decode([UUID].self, forKey: .networkIds)
+        self._jsonRecords = try container.decode([DesiredDNSRecord].self, forKey: .records)
+        self._jsonRecordsHash = try container.decode(String.self, forKey: .recordsHash)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonZoneId, forKey: .zoneId)
+        try container.encode(_jsonZoneName, forKey: .zoneName)
+        try container.encode(_jsonNetworkIds, forKey: .networkIds)
+        try container.encode(_jsonRecords, forKey: .records)
+        try container.encode(_jsonRecordsHash, forKey: .recordsHash)
+    }
+
 }
 
 // MARK: - Observed VM State
@@ -1302,67 +1557,48 @@ public struct DesiredDNSZone: Codable, Sendable, Equatable {
 /// agent does not send it, and the control plane must keep its historical
 /// terminal-failure behavior in that case. `waitingOnDependency` never reaches
 /// an observed error at all, so it has no wire case.
-public enum ObservedFailureClassification: String, Codable, Sendable {
-    case transient
-    case permanent
-    case blocked
+public typealias ObservedFailureClassification = Strato_Agent_V1_ObservedFailureClassification
+extension Strato_Agent_V1_ObservedFailureClassification: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .transient: return "transient"
+        case .permanent: return "permanent"
+        case .blocked: return "blocked"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "transient": self = .transient
+        case "permanent": self = .permanent
+        case "blocked": self = .blocked
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// One VM's state as actually observed on an agent.
-public struct ObservedVMState: Codable, Sendable {
-    public let vmId: UUID
-    public let status: VMStatus
-    /// The desired-state generation this observation reflects: the last
-    /// generation the agent finished converging toward (0 if none yet). The
-    /// control plane records it as `observed_generation` and completes pending
-    /// operations only once the observed generation has caught up.
-    public let observedGeneration: Int64
-    /// Set while the agent is still converging this VM toward a newer
-    /// generation — a human-readable stage like "downloading image". Progress
-    /// only: the control plane surfaces it but must not treat the entry as a
-    /// settled observation for operation completion.
-    public let convergencePhase: String?
-    /// The most recent convergence failure for this VM, if the last attempt
-    /// failed. Lets the control plane fail a pending operation with a real
-    /// error instead of waiting for its completion budget to expire.
-    public let lastError: String?
-    /// The generation whose convergence produced `lastError`. The control
-    /// plane fails a pending operation on `lastError` only when this matches
-    /// the VM's current generation — otherwise a stale error from a previous
-    /// generation (still carried on heartbeat reports until the new
-    /// generation's work item runs) would fail a brand-new operation before
-    /// the agent ever attempted it.
-    public let failedGeneration: Int64?
-    /// The agent-side retry category for this failure. Only `.blocked` tells
-    /// the control plane to retain the desired state while surfacing the error;
-    /// nil is the legacy terminal behavior for reports from older agents.
-    public let failureClassification: ObservedFailureClassification?
-    /// What the QEMU guest agent reported about this VM's guest OS, if the
-    /// agent has a recent successful probe (issue #563). Nil for VMs without
-    /// qga, still booting, hung, or on agents/hypervisors that don't probe it —
-    /// so `Optional` keeps this backward-decodable both ways (an older control
-    /// plane ignores the key; an older agent never sends it, which synthesized
-    /// `Codable` decodes to nil, not a failure). Purely informational: it never
-    /// participates in convergence.
-    public let guestInfo: GuestInfo?
-    public let guestAgentObservation: GuestAgentObservation?
-    public let guestConfigObservation: GuestConfigObservation?
-    /// Terminal failure of the guest configuration step, including channel failure without read-back.
-    public let guestConfigFailedGeneration: Int64?
-    /// Guest memory usage from the VM's virtio-balloon device (issue #567).
-    /// Nil for guests without the virtio_balloon driver, still booting, or on
-    /// agents/hypervisors that don't poll it — the same tolerant-both-ways
-    /// `Optional` contract as `guestInfo`. Purely informational: it never
-    /// participates in convergence.
-    public let memoryStats: VMMemoryStats?
-    /// Last host-side contention sample for this VM. Every scalar carries
-    /// explicit availability so a backend without a per-workload cgroup or a
-    /// guest without a steal-time source never reports a synthetic zero.
-    public let resourceTelemetry: WorkloadResourceTelemetry?
-    /// Interface ids present in the agent's durable VM manifest (wire v40).
-    /// Nil means the reporting agent predates per-NIC reconciliation; an empty
-    /// array is an authoritative networkless VM.
-    public let appliedNetworkInterfaceIds: [UUID]?
+public typealias ObservedVMState = Strato_Agent_V1_ObservedVMState
+extension Strato_Agent_V1_ObservedVMState: Codable {
 
     public init(
         vmId: UUID,
@@ -1380,21 +1616,73 @@ public struct ObservedVMState: Codable, Sendable {
         resourceTelemetry: WorkloadResourceTelemetry? = nil,
         appliedNetworkInterfaceIds: [UUID]? = nil
     ) {
-        self.vmId = vmId
-        self.status = status
-        self.observedGeneration = observedGeneration
-        self.convergencePhase = convergencePhase
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        self.failureClassification = failureClassification
-        self.guestInfo = guestInfo
-        self.guestAgentObservation = guestAgentObservation
-        self.guestConfigObservation = guestConfigObservation
-        self.guestConfigFailedGeneration = guestConfigFailedGeneration
-        self.memoryStats = memoryStats
-        self.resourceTelemetry = resourceTelemetry
-        self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
+        self.init()
+        self._jsonVmId = vmId
+        self._jsonStatus = status
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonConvergencePhase = convergencePhase
+        self._jsonLastError = lastError
+        self._jsonFailedGeneration = failedGeneration
+        self._jsonFailureClassification = failureClassification
+        self._jsonGuestInfo = guestInfo
+        self._jsonGuestAgentObservation = guestAgentObservation
+        self._jsonGuestConfigObservation = guestConfigObservation
+        self._jsonGuestConfigFailedGeneration = guestConfigFailedGeneration
+        self._jsonMemoryStats = memoryStats
+        self._jsonResourceTelemetry = resourceTelemetry
+        self._jsonAppliedNetworkInterfaceIds = appliedNetworkInterfaceIds
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case vmId; case status; case observedGeneration; case convergencePhase; case lastError; case failedGeneration;
+        case failureClassification; case guestInfo; case guestAgentObservation; case guestConfigObservation;
+        case guestConfigFailedGeneration; case memoryStats; case resourceTelemetry; case appliedNetworkInterfaceIds
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonVmId = try container.decode(UUID.self, forKey: .vmId)
+        self._jsonStatus = try container.decode(VMStatus.self, forKey: .status)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonConvergencePhase = try container.decodeIfPresent(String.self, forKey: .convergencePhase)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailedGeneration = try container.decodeIfPresent(Int64.self, forKey: .failedGeneration)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+        self._jsonGuestInfo = try container.decodeIfPresent(GuestInfo.self, forKey: .guestInfo)
+        self._jsonGuestAgentObservation = try container.decodeIfPresent(
+            GuestAgentObservation.self, forKey: .guestAgentObservation)
+        self._jsonGuestConfigObservation = try container.decodeIfPresent(
+            GuestConfigObservation.self, forKey: .guestConfigObservation)
+        self._jsonGuestConfigFailedGeneration = try container.decodeIfPresent(
+            Int64.self, forKey: .guestConfigFailedGeneration)
+        self._jsonMemoryStats = try container.decodeIfPresent(VMMemoryStats.self, forKey: .memoryStats)
+        self._jsonResourceTelemetry = try container.decodeIfPresent(
+            WorkloadResourceTelemetry.self, forKey: .resourceTelemetry)
+        self._jsonAppliedNetworkInterfaceIds = try container.decodeIfPresent(
+            [UUID].self, forKey: .appliedNetworkInterfaceIds)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encodeIfPresent(_jsonConvergencePhase, forKey: .convergencePhase)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailedGeneration, forKey: .failedGeneration)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+        try container.encodeIfPresent(_jsonGuestInfo, forKey: .guestInfo)
+        try container.encodeIfPresent(_jsonGuestAgentObservation, forKey: .guestAgentObservation)
+        try container.encodeIfPresent(_jsonGuestConfigObservation, forKey: .guestConfigObservation)
+        try container.encodeIfPresent(_jsonGuestConfigFailedGeneration, forKey: .guestConfigFailedGeneration)
+        try container.encodeIfPresent(_jsonMemoryStats, forKey: .memoryStats)
+        try container.encodeIfPresent(_jsonResourceTelemetry, forKey: .resourceTelemetry)
+        try container.encodeIfPresent(_jsonAppliedNetworkInterfaceIds, forKey: .appliedNetworkInterfaceIds)
+    }
+
 }
 
 // MARK: - Observed Sandbox State
@@ -1402,34 +1690,8 @@ public struct ObservedVMState: Codable, Sendable {
 /// One sandbox's state as actually observed on an agent. Field semantics match
 /// `ObservedVMState` (see the doc comments there for the generation/error
 /// contract); `exitCode` is the sandbox-specific addition.
-public struct ObservedSandboxState: Codable, Sendable {
-    public let sandboxId: UUID
-    public let status: SandboxStatus
-    /// The desired-state generation this observation reflects (0 if none yet).
-    public let observedGeneration: Int64
-    /// Human-readable convergence stage (e.g. "pulling image") while the agent
-    /// is still working toward a newer generation. Progress only.
-    public let convergencePhase: String?
-    /// The most recent convergence failure, if the last attempt failed.
-    public let lastError: String?
-    /// The generation whose convergence produced `lastError` (see
-    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
-    public let failedGeneration: Int64?
-    /// Retry semantics for `lastError`; see
-    /// `ObservedVMState.failureClassification`.
-    public let failureClassification: ObservedFailureClassification?
-    /// Exit code of the workload once it has ended (`status == .exited`), as
-    /// reported by the guest agent over vsock. Nil while running, when the
-    /// sandbox was stopped by request rather than by the workload ending, or
-    /// when the guest could not report one.
-    public let exitCode: Int?
-    /// Last host-side contention sample for this sandbox.
-    public let resourceTelemetry: WorkloadResourceTelemetry?
-    public let idleActivity: SandboxIdleActivityReport?
-    public let suspension: SandboxSuspensionEvidence?
-    public let suspensionStorageReservedBytes: Int64?
-    /// Next capture estimate, based on actual local files; nil means unsupported/unavailable.
-    public let suspensionStorageEstimateBytes: Int64?
+public typealias ObservedSandboxState = Strato_Agent_V1_ObservedSandboxState
+extension Strato_Agent_V1_ObservedSandboxState: Codable {
 
     public init(
         sandboxId: UUID,
@@ -1446,20 +1708,68 @@ public struct ObservedSandboxState: Codable, Sendable {
         suspensionStorageReservedBytes: Int64? = nil,
         suspensionStorageEstimateBytes: Int64? = nil
     ) {
-        self.sandboxId = sandboxId
-        self.status = status
-        self.observedGeneration = observedGeneration
-        self.convergencePhase = convergencePhase
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        self.failureClassification = failureClassification
-        self.exitCode = exitCode
-        self.resourceTelemetry = resourceTelemetry
-        self.idleActivity = idleActivity
-        self.suspension = suspension
-        self.suspensionStorageReservedBytes = suspensionStorageReservedBytes
-        self.suspensionStorageEstimateBytes = suspensionStorageEstimateBytes
+        self.init()
+        self._jsonSandboxId = sandboxId
+        self._jsonStatus = status
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonConvergencePhase = convergencePhase
+        self._jsonLastError = lastError
+        self._jsonFailedGeneration = failedGeneration
+        self._jsonFailureClassification = failureClassification
+        self._jsonExitCode = exitCode
+        self._jsonResourceTelemetry = resourceTelemetry
+        self._jsonIdleActivity = idleActivity
+        self._jsonSuspension = suspension
+        self._jsonSuspensionStorageReservedBytes = suspensionStorageReservedBytes
+        self._jsonSuspensionStorageEstimateBytes = suspensionStorageEstimateBytes
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case sandboxId; case status; case observedGeneration; case convergencePhase; case lastError;
+        case failedGeneration; case failureClassification; case exitCode; case resourceTelemetry; case idleActivity;
+        case suspension; case suspensionStorageReservedBytes; case suspensionStorageEstimateBytes
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonSandboxId = try container.decode(UUID.self, forKey: .sandboxId)
+        self._jsonStatus = try container.decode(SandboxStatus.self, forKey: .status)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonConvergencePhase = try container.decodeIfPresent(String.self, forKey: .convergencePhase)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailedGeneration = try container.decodeIfPresent(Int64.self, forKey: .failedGeneration)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+        self._jsonExitCode = try container.decodeIfPresent(Int.self, forKey: .exitCode)
+        self._jsonResourceTelemetry = try container.decodeIfPresent(
+            WorkloadResourceTelemetry.self, forKey: .resourceTelemetry)
+        self._jsonIdleActivity = try container.decodeIfPresent(SandboxIdleActivityReport.self, forKey: .idleActivity)
+        self._jsonSuspension = try container.decodeIfPresent(SandboxSuspensionEvidence.self, forKey: .suspension)
+        self._jsonSuspensionStorageReservedBytes = try container.decodeIfPresent(
+            Int64.self, forKey: .suspensionStorageReservedBytes)
+        self._jsonSuspensionStorageEstimateBytes = try container.decodeIfPresent(
+            Int64.self, forKey: .suspensionStorageEstimateBytes)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonSandboxId, forKey: .sandboxId)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encodeIfPresent(_jsonConvergencePhase, forKey: .convergencePhase)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailedGeneration, forKey: .failedGeneration)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+        try container.encodeIfPresent(_jsonExitCode, forKey: .exitCode)
+        try container.encodeIfPresent(_jsonResourceTelemetry, forKey: .resourceTelemetry)
+        try container.encodeIfPresent(_jsonIdleActivity, forKey: .idleActivity)
+        try container.encodeIfPresent(_jsonSuspension, forKey: .suspension)
+        try container.encodeIfPresent(_jsonSuspensionStorageReservedBytes, forKey: .suspensionStorageReservedBytes)
+        try container.encodeIfPresent(_jsonSuspensionStorageEstimateBytes, forKey: .suspensionStorageEstimateBytes)
+    }
+
 }
 
 // MARK: - Observed Volume State
@@ -1484,71 +1794,8 @@ public struct ObservedSandboxState: Codable, Sendable {
 /// virtual size can and would cost a subprocess per volume per report. A
 /// per-volume usage surface — sampled on its own cadence, off the convergence
 /// path — is the right home for those if a reader ever appears.
-public struct ObservedVolumeState: Codable, Sendable {
-    public let volumeId: UUID
-    /// Whether the volume's data exists on this host. A `false` entry is a
-    /// volume the agent is listing because it is mid-create or failed with no
-    /// bytes yet — the mirror of the VM report's in-flight and
-    /// failed-convergence sections. *Absence from the list* is what confirms a
-    /// deletion; `present: false` explicitly does not.
-    public let present: Bool
-    /// How the agent exposes the disk. The agent owns storage layout, so this
-    /// is the only direction the descriptor originates: the control plane
-    /// stores what it is told and never derives one.
-    public let attachment: DiskAttachment?
-    /// The volume's **virtual size on disk** (STR-199) — what `qemu-img info`
-    /// reports, not what anyone asked for.
-    ///
-    /// It exists because the two can disagree for a long time and nothing said
-    /// so. A grow refused while the guest holding the image is running leaves
-    /// the desired size persisted and the file untouched; before this field the
-    /// API answered that volume's size with the number it had failed to reach,
-    /// which reads exactly like a grow that worked.
-    ///
-    /// Nil means **this agent did not say** — a pre-v38 agent, or a volume
-    /// whose size probe failed. Never "zero bytes", and never a licence to
-    /// clear what a previous report recorded.
-    public let sizeBytes: Int64?
-    /// The VM this volume is attached to, from the agent's *durable attachment
-    /// record* rather than a live hypervisor query. A powered-off guest has no
-    /// live device list, and reporting "detached" for it would plan an attach
-    /// against a dead control channel on every sync and degrade the volume for
-    /// the crime of having a stopped VM.
-    public let attachedVMId: UUID?
-    /// The desired-state generation this observation reflects (0 if none yet).
-    public let observedGeneration: Int64
-    /// Human-readable convergence stage ("creating", "cloning", ...) while the
-    /// agent is still working toward a newer generation. Progress only.
-    public let convergencePhase: String?
-    /// The most recent convergence failure, if the last attempt failed.
-    public let lastError: String?
-    /// The generation whose convergence produced `lastError` (see
-    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
-    public let failedGeneration: Int64?
-    /// Retry semantics for `lastError`; see
-    /// `ObservedVMState.failureClassification`.
-    public let failureClassification: ObservedFailureClassification?
-    /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
-    /// not a derivation, and the only thing that distinguishes "capped" from
-    /// "ignored".
-    ///
-    /// The capability gate prevents new work from reaching an agent that has
-    /// never heard of ceilings, while this field proves that a capable agent
-    /// actually read the requested values back. The generation pair alone is
-    /// not sufficient evidence for this mutation.
-    ///
-    /// Nil means **this agent does not report applied limits**. It must never be
-    /// written through as a clear. "Applied, and the answer is uncapped" is spelled
-    /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
-    /// unlike the desired side, this one is deliberately *not* normalized.
-    public let ioLimits: VolumeIOLimits?
-    /// Block policy this agent actually applied, or an explicit inactive value
-    /// for a detached volume. Nil is reserved for agents predating wire v62.
-    public let blockPolicy: AppliedBlockDevicePolicy?
-    /// Measured read + write rate between two live libvirt block-stat samples.
-    /// Optional because a first sample, a stopped domain, or a failed stats
-    /// read has no honest rate to report.
-    public let ioObservedRate: VolumeIOObservedRate?
+public typealias ObservedVolumeState = Strato_Agent_V1_ObservedVolumeState
+extension Strato_Agent_V1_ObservedVolumeState: Codable {
 
     public init(
         volumeId: UUID,
@@ -1565,20 +1812,65 @@ public struct ObservedVolumeState: Codable, Sendable {
         blockPolicy: AppliedBlockDevicePolicy? = nil,
         ioObservedRate: VolumeIOObservedRate? = nil
     ) {
-        self.volumeId = volumeId
-        self.present = present
-        self.attachment = attachment
-        self.sizeBytes = sizeBytes
-        self.attachedVMId = attachedVMId
-        self.observedGeneration = observedGeneration
-        self.convergencePhase = convergencePhase
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        self.failureClassification = failureClassification
-        self.ioLimits = ioLimits
-        self.blockPolicy = blockPolicy
-        self.ioObservedRate = ioObservedRate
+        self.init()
+        self._jsonVolumeId = volumeId
+        self._jsonPresent = present
+        self._jsonAttachment = attachment
+        self._jsonSizeBytes = sizeBytes
+        self._jsonAttachedVMId = attachedVMId
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonConvergencePhase = convergencePhase
+        self._jsonLastError = lastError
+        self._jsonFailedGeneration = failedGeneration
+        self._jsonFailureClassification = failureClassification
+        self._jsonIoLimits = ioLimits
+        self._jsonBlockPolicy = blockPolicy
+        self._jsonIoObservedRate = ioObservedRate
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case volumeId; case present; case attachment; case sizeBytes; case attachedVMId; case observedGeneration;
+        case convergencePhase; case lastError; case failedGeneration; case failureClassification; case ioLimits;
+        case blockPolicy; case ioObservedRate
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonVolumeId = try container.decode(UUID.self, forKey: .volumeId)
+        self._jsonPresent = try container.decode(Bool.self, forKey: .present)
+        self._jsonAttachment = try container.decodeIfPresent(DiskAttachment.self, forKey: .attachment)
+        self._jsonSizeBytes = try container.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        self._jsonAttachedVMId = try container.decodeIfPresent(UUID.self, forKey: .attachedVMId)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonConvergencePhase = try container.decodeIfPresent(String.self, forKey: .convergencePhase)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailedGeneration = try container.decodeIfPresent(Int64.self, forKey: .failedGeneration)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+        self._jsonIoLimits = try container.decodeIfPresent(VolumeIOLimits.self, forKey: .ioLimits)
+        self._jsonBlockPolicy = try container.decodeIfPresent(AppliedBlockDevicePolicy.self, forKey: .blockPolicy)
+        self._jsonIoObservedRate = try container.decodeIfPresent(VolumeIOObservedRate.self, forKey: .ioObservedRate)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonVolumeId, forKey: .volumeId)
+        try container.encode(_jsonPresent, forKey: .present)
+        try container.encodeIfPresent(_jsonAttachment, forKey: .attachment)
+        try container.encodeIfPresent(_jsonSizeBytes, forKey: .sizeBytes)
+        try container.encodeIfPresent(_jsonAttachedVMId, forKey: .attachedVMId)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encodeIfPresent(_jsonConvergencePhase, forKey: .convergencePhase)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailedGeneration, forKey: .failedGeneration)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+        try container.encodeIfPresent(_jsonIoLimits, forKey: .ioLimits)
+        try container.encodeIfPresent(_jsonBlockPolicy, forKey: .blockPolicy)
+        try container.encodeIfPresent(_jsonIoObservedRate, forKey: .ioObservedRate)
+    }
+
 }
 
 // MARK: - Observed Agent Update Status
@@ -1587,7 +1879,8 @@ public struct ObservedVolumeState: Codable, Sendable {
 /// (issue #434), reported back on the observed-state report so the control
 /// plane's rollout can distinguish "waiting on a precondition" from "the
 /// update itself failed" instead of timing both out identically.
-public struct ObservedAgentUpdateStatus: Codable, Sendable {
+public typealias ObservedAgentUpdateStatus = Strato_Agent_V1_ObservedAgentUpdateStatus
+extension Strato_Agent_V1_ObservedAgentUpdateStatus: Codable {
     /// A precondition currently prevents the attempt (containerized install,
     /// in-flight reconcile work). Transient from the rollout's perspective:
     /// the agent re-evaluates on every sync.
@@ -1598,21 +1891,31 @@ public struct ObservedAgentUpdateStatus: Codable, Sendable {
     /// process lifetime, so the rollout should halt rather than wait.
     public static let dispositionFailed = "failed"
 
-    /// The `DesiredAgentUpdate.targetVersion` this status is about, so a
-    /// stale report can never be attributed to a newer rollout target.
-    public let targetVersion: String
-    /// One of the `disposition*` constants. A string rather than an enum so
-    /// a disposition added later still decodes on older control planes
-    /// (unknown values are treated as `blocked`, the conservative reading).
-    public let disposition: String
-    /// Human-readable explanation, surfaced on the agent's API resource.
-    public let reason: String
-
     public init(targetVersion: String, disposition: String, reason: String) {
-        self.targetVersion = targetVersion
-        self.disposition = disposition
-        self.reason = reason
+        self.init()
+        self._jsonTargetVersion = targetVersion
+        self._jsonDisposition = disposition
+        self._jsonReason = reason
     }
+
+    private enum CodingKeys: String, CodingKey { case targetVersion; case disposition; case reason }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonTargetVersion = try container.decode(String.self, forKey: .targetVersion)
+        self._jsonDisposition = try container.decode(String.self, forKey: .disposition)
+        self._jsonReason = try container.decode(String.self, forKey: .reason)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonTargetVersion, forKey: .targetVersion)
+        try container.encode(_jsonDisposition, forKey: .disposition)
+        try container.encode(_jsonReason, forKey: .reason)
+    }
+
 }
 
 // MARK: - Unrecognized workloads
@@ -1625,25 +1928,37 @@ public struct ObservedAgentUpdateStatus: Codable, Sendable {
 /// that still exists means an assembler or scoping bug and must never
 /// authorize teardown; no row at all earns a `DesiredWorkloadTombstone` on a
 /// later sync.
-public struct UnrecognizedWorkload: Codable, Sendable, Equatable {
-    public let kind: WorkloadKind
-    public let workloadId: UUID
-    /// The last desired-state generation the agent applied for this workload
-    /// (0 if it never applied one), so the control plane can mint a tombstone
-    /// generation that outranks it rather than one the agent would drop as
-    /// stale.
-    public let observedGeneration: Int64
-    /// The workload's observed status, persisted onto the control plane's
-    /// `AgentWorkloadClaim` and logged — "holding a *running* VM nothing
-    /// describes" reads very differently from holding a stopped one.
-    public let status: String?
+public typealias UnrecognizedWorkload = Strato_Agent_V1_UnrecognizedWorkload
+extension Strato_Agent_V1_UnrecognizedWorkload: Codable {
 
     public init(kind: WorkloadKind, workloadId: UUID, observedGeneration: Int64, status: String? = nil) {
-        self.kind = kind
-        self.workloadId = workloadId
-        self.observedGeneration = observedGeneration
-        self.status = status
+        self.init()
+        self._jsonKind = kind
+        self._jsonWorkloadId = workloadId
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonStatus = status
     }
+
+    private enum CodingKeys: String, CodingKey { case kind; case workloadId; case observedGeneration; case status }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(WorkloadKind.self, forKey: .kind)
+        self._jsonWorkloadId = try container.decode(UUID.self, forKey: .workloadId)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonStatus = try container.decodeIfPresent(String.self, forKey: .status)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encode(_jsonWorkloadId, forKey: .workloadId)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encodeIfPresent(_jsonStatus, forKey: .status)
+    }
+
 }
 
 /// Why an agent refused to converge the teardowns a sync authorized (STR-98
@@ -1652,24 +1967,39 @@ public struct UnrecognizedWorkload: Codable, Sendable, Equatable {
 /// Reported so the refusal reaches operators through the plumbing that already
 /// exists, rather than living only in an agent log nobody is watching. The
 /// agent keeps converging everything else in the sync.
-public struct ObservedTeardownRefusal: Codable, Sendable, Equatable {
-    /// The sync whose teardowns were refused, so the refusal can be correlated
-    /// with the control-plane side of the same exchange.
-    public let syncId: String
-    /// How many tombstoned workloads that sync would have destroyed.
-    public let requestedTeardowns: Int
-    /// How many workloads the host holds in total, the denominator of the
-    /// percentage half of the guard.
-    public let presentWorkloads: Int
-    /// Human-readable explanation, surfaced on the agent's API resource.
-    public let reason: String
+public typealias ObservedTeardownRefusal = Strato_Agent_V1_ObservedTeardownRefusal
+extension Strato_Agent_V1_ObservedTeardownRefusal: Codable {
 
     public init(syncId: String, requestedTeardowns: Int, presentWorkloads: Int, reason: String) {
-        self.syncId = syncId
-        self.requestedTeardowns = requestedTeardowns
-        self.presentWorkloads = presentWorkloads
-        self.reason = reason
+        self.init()
+        self._jsonSyncId = syncId
+        self._jsonRequestedTeardowns = requestedTeardowns
+        self._jsonPresentWorkloads = presentWorkloads
+        self._jsonReason = reason
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case syncId; case requestedTeardowns; case presentWorkloads; case reason
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonSyncId = try container.decode(String.self, forKey: .syncId)
+        self._jsonRequestedTeardowns = try container.decode(Int.self, forKey: .requestedTeardowns)
+        self._jsonPresentWorkloads = try container.decode(Int.self, forKey: .presentWorkloads)
+        self._jsonReason = try container.decode(String.self, forKey: .reason)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonSyncId, forKey: .syncId)
+        try container.encode(_jsonRequestedTeardowns, forKey: .requestedTeardowns)
+        try container.encode(_jsonPresentWorkloads, forKey: .presentWorkloads)
+        try container.encode(_jsonReason, forKey: .reason)
+    }
+
 }
 
 /// Agent → control plane: what the agent's durable workload manifest — its
@@ -1677,36 +2007,38 @@ public struct ObservedTeardownRefusal: Codable, Sendable, Equatable {
 /// (STR-138).
 ///
 /// Sent only when there is something wrong to say; nil is the steady state.
-public struct ObservedManifestStatus: Codable, Sendable, Equatable {
-    /// Whether the `vms`/`sandboxes` lists on this report are a complete
-    /// inventory of the host.
-    ///
-    /// **False changes the meaning of the whole report.** The manifest could
-    /// not be read at all, so the agent cannot enumerate its own workloads:
-    /// the lists are empty because it doesn't know, not because the host is
-    /// empty. Absence confirms nothing — not a deletion, not a loss — and the
-    /// control plane must apply none of the report's workload half.
-    public let inventoryComplete: Bool
-    /// Entries that decoded far enough to prove a workload exists under that
-    /// id, but not far enough to route operations to it (an unrecognized
-    /// hypervisor type, a spec this build cannot read). They keep reserving
-    /// capacity and are reported as present, but nothing can be done to them
-    /// until an agent that understands them runs here.
-    public let quarantinedEntries: Int
-    /// Operator-facing explanation, surfaced on the agent's API resource.
-    /// (The unreadable manifest itself is preserved beside the original on
-    /// the host for post-mortem; the agent logs where.)
-    public let reason: String
+public typealias ObservedManifestStatus = Strato_Agent_V1_ObservedManifestStatus
+extension Strato_Agent_V1_ObservedManifestStatus: Codable {
 
     public init(
         inventoryComplete: Bool,
         quarantinedEntries: Int,
         reason: String
     ) {
-        self.inventoryComplete = inventoryComplete
-        self.quarantinedEntries = quarantinedEntries
-        self.reason = reason
+        self.init()
+        self._jsonInventoryComplete = inventoryComplete
+        self._jsonQuarantinedEntries = quarantinedEntries
+        self._jsonReason = reason
     }
+
+    private enum CodingKeys: String, CodingKey { case inventoryComplete; case quarantinedEntries; case reason }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonInventoryComplete = try container.decode(Bool.self, forKey: .inventoryComplete)
+        self._jsonQuarantinedEntries = try container.decode(Int.self, forKey: .quarantinedEntries)
+        self._jsonReason = try container.decode(String.self, forKey: .reason)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonInventoryComplete, forKey: .inventoryComplete)
+        try container.encode(_jsonQuarantinedEntries, forKey: .quarantinedEntries)
+        try container.encode(_jsonReason, forKey: .reason)
+    }
+
 }
 
 // MARK: - Observed Network Fabric State
@@ -1715,22 +2047,49 @@ public struct ObservedManifestStatus: Codable, Sendable, Equatable {
 /// agent. Reports are statements about the agent's own OVSDB writes, not packet
 /// probes: `.active` means the requested writes and the verification read
 /// completed, while `.error` preserves a failed attempt for the control plane.
-public enum ObservedNetworkFabricStatus: String, Codable, Sendable, Equatable {
-    case active
-    case error
+public typealias ObservedNetworkFabricStatus = Strato_Agent_V1_ObservedNetworkFabricStatus
+extension Strato_Agent_V1_ObservedNetworkFabricStatus: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .active: return "active"
+        case .error: return "error"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "active": self = .active
+        case "error": self = .error
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// What the site's OVN topology authority observed after reconciling one
 /// logical network. Optional at the report level because a non-authority has no
 /// opinion about shared topology; an empty list is an authoritative opinion
 /// about an empty desired set.
-public struct ObservedNetworkState: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let observedGeneration: Int64
-    public let status: ObservedNetworkFabricStatus
-    public let lastError: String?
-    public let failedGeneration: Int64?
-    public let failureClassification: ObservedFailureClassification?
+public typealias ObservedNetworkState = Strato_Agent_V1_ObservedNetworkState
+extension Strato_Agent_V1_ObservedNetworkState: Codable {
 
     public init(
         id: UUID,
@@ -1740,26 +2099,50 @@ public struct ObservedNetworkState: Codable, Sendable, Equatable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil
     ) {
-        self.id = id
-        self.observedGeneration = observedGeneration
-        self.status = status
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        self.failureClassification = failureClassification
+        self.init()
+        self._jsonId = id
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonStatus = status
+        self._jsonLastError = lastError
+        self._jsonFailedGeneration = failedGeneration
+        self._jsonFailureClassification = failureClassification
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case observedGeneration; case status; case lastError; case failedGeneration; case failureClassification
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonStatus = try container.decode(ObservedNetworkFabricStatus.self, forKey: .status)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailedGeneration = try container.decodeIfPresent(Int64.self, forKey: .failedGeneration)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailedGeneration, forKey: .failedGeneration)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+    }
+
 }
 
 /// What the site's OVN topology authority observed after reconciling one
 /// security group's port group and ACLs. A group can be realized by more than
 /// one site; each report remains scoped to its reporting authority and the
 /// control plane is responsible for combining those opinions.
-public struct ObservedSecurityGroupState: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let observedGeneration: Int64
-    public let status: ObservedNetworkFabricStatus
-    public let lastError: String?
-    public let failedGeneration: Int64?
-    public let failureClassification: ObservedFailureClassification?
+public typealias ObservedSecurityGroupState = Strato_Agent_V1_ObservedSecurityGroupState
+extension Strato_Agent_V1_ObservedSecurityGroupState: Codable {
 
     public init(
         id: UUID,
@@ -1769,26 +2152,50 @@ public struct ObservedSecurityGroupState: Codable, Sendable, Equatable {
         failedGeneration: Int64? = nil,
         failureClassification: ObservedFailureClassification? = nil
     ) {
-        self.id = id
-        self.observedGeneration = observedGeneration
-        self.status = status
-        self.lastError = lastError
-        self.failedGeneration = failedGeneration
-        self.failureClassification = failureClassification
+        self.init()
+        self._jsonId = id
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonStatus = status
+        self._jsonLastError = lastError
+        self._jsonFailedGeneration = failedGeneration
+        self._jsonFailureClassification = failureClassification
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case observedGeneration; case status; case lastError; case failedGeneration; case failureClassification
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonStatus = try container.decode(ObservedNetworkFabricStatus.self, forKey: .status)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailedGeneration = try container.decodeIfPresent(Int64.self, forKey: .failedGeneration)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailedGeneration, forKey: .failedGeneration)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+    }
+
 }
 
 /// The result of converging one VM or sandbox port's security-group
 /// membership. `securityGroupIds` is the desired set this result belongs to;
 /// the control plane compares it with the current attachment rows before
 /// applying the result so a delayed report cannot bless a newer membership.
-public struct ObservedPortMembershipState: Codable, Sendable, Equatable {
-    public let interfaceId: UUID
-    public let portName: String
-    public let securityGroupIds: [UUID]
-    public let status: ObservedNetworkFabricStatus
-    public let lastError: String?
-    public let failureClassification: ObservedFailureClassification?
+public typealias ObservedPortMembershipState = Strato_Agent_V1_ObservedPortMembershipState
+extension Strato_Agent_V1_ObservedPortMembershipState: Codable {
 
     public init(
         interfaceId: UUID,
@@ -1798,55 +2205,165 @@ public struct ObservedPortMembershipState: Codable, Sendable, Equatable {
         lastError: String? = nil,
         failureClassification: ObservedFailureClassification? = nil
     ) {
-        self.interfaceId = interfaceId
-        self.portName = portName
-        self.securityGroupIds = securityGroupIds
-        self.status = status
-        self.lastError = lastError
-        self.failureClassification = failureClassification
+        self.init()
+        self._jsonInterfaceId = interfaceId
+        self._jsonPortName = portName
+        self._jsonSecurityGroupIds = securityGroupIds
+        self._jsonStatus = status
+        self._jsonLastError = lastError
+        self._jsonFailureClassification = failureClassification
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case interfaceId; case portName; case securityGroupIds; case status; case lastError; case failureClassification
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonInterfaceId = try container.decode(UUID.self, forKey: .interfaceId)
+        self._jsonPortName = try container.decode(String.self, forKey: .portName)
+        self._jsonSecurityGroupIds = try container.decode([UUID].self, forKey: .securityGroupIds)
+        self._jsonStatus = try container.decode(ObservedNetworkFabricStatus.self, forKey: .status)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonFailureClassification = try container.decodeIfPresent(
+            ObservedFailureClassification.self, forKey: .failureClassification)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonInterfaceId, forKey: .interfaceId)
+        try container.encode(_jsonPortName, forKey: .portName)
+        try container.encode(_jsonSecurityGroupIds, forKey: .securityGroupIds)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encodeIfPresent(_jsonFailureClassification, forKey: .failureClassification)
+    }
+
 }
 
 // MARK: - Observed Load Balancer State
 
-public enum ObservedLoadBalancerStatus: String, Codable, Sendable {
-    case pending
-    case active
-    case error
+public typealias ObservedLoadBalancerStatus = Strato_Agent_V1_ObservedLoadBalancerStatus
+extension Strato_Agent_V1_ObservedLoadBalancerStatus: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .active: return "active"
+        case .error: return "error"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "pending": self = .pending
+        case "active": self = .active
+        case "error": self = .error
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
-public enum ObservedLoadBalancerBackendHealth: String, Codable, Sendable {
-    case unknown
-    case online
-    case offline
-    case error
+public typealias ObservedLoadBalancerBackendHealth = Strato_Agent_V1_ObservedLoadBalancerBackendHealth
+extension Strato_Agent_V1_ObservedLoadBalancerBackendHealth: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .unknown: return "unknown"
+        case .online: return "online"
+        case .offline: return "offline"
+        case .error: return "error"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "unknown": self = .unknown
+        case "online": self = .online
+        case "offline": self = .offline
+        case "error": self = .error
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
-public struct ObservedLoadBalancerBackend: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let healthStatus: ObservedLoadBalancerBackendHealth
-    public let lastCheckedAt: Date?
+public typealias ObservedLoadBalancerBackend = Strato_Agent_V1_ObservedLoadBalancerBackend
+extension Strato_Agent_V1_ObservedLoadBalancerBackend: Codable {
 
     public init(
         id: UUID,
         healthStatus: ObservedLoadBalancerBackendHealth,
         lastCheckedAt: Date? = nil
     ) {
-        self.id = id
-        self.healthStatus = healthStatus
-        self.lastCheckedAt = lastCheckedAt
+        self.init()
+        self._jsonId = id
+        self._jsonHealthStatus = healthStatus
+        self._jsonLastCheckedAt = lastCheckedAt
     }
+
+    private enum CodingKeys: String, CodingKey { case id; case healthStatus; case lastCheckedAt }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonHealthStatus = try container.decode(ObservedLoadBalancerBackendHealth.self, forKey: .healthStatus)
+        self._jsonLastCheckedAt = try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonHealthStatus, forKey: .healthStatus)
+        try container.encodeIfPresent(_jsonLastCheckedAt, forKey: .lastCheckedAt)
+    }
+
 }
 
 /// What the site's single OVN author observed after reconciling one native
 /// load balancer. Optional at the report level because non-authoritative and
 /// pre-v43 agents have no opinion about these project-scoped rows.
-public struct ObservedLoadBalancerState: Codable, Sendable, Equatable {
-    public let id: UUID
-    public let observedGeneration: Int64
-    public let status: ObservedLoadBalancerStatus
-    public let lastError: String?
-    public let backends: [ObservedLoadBalancerBackend]
+public typealias ObservedLoadBalancerState = Strato_Agent_V1_ObservedLoadBalancerState
+extension Strato_Agent_V1_ObservedLoadBalancerState: Codable {
 
     public init(
         id: UUID,
@@ -1855,12 +2372,38 @@ public struct ObservedLoadBalancerState: Codable, Sendable, Equatable {
         lastError: String? = nil,
         backends: [ObservedLoadBalancerBackend] = []
     ) {
-        self.id = id
-        self.observedGeneration = observedGeneration
-        self.status = status
-        self.lastError = lastError
-        self.backends = backends
+        self.init()
+        self._jsonId = id
+        self._jsonObservedGeneration = observedGeneration
+        self._jsonStatus = status
+        self._jsonLastError = lastError
+        self._jsonBackends = backends
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id; case observedGeneration; case status; case lastError; case backends
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonId = try container.decode(UUID.self, forKey: .id)
+        self._jsonObservedGeneration = try container.decode(Int64.self, forKey: .observedGeneration)
+        self._jsonStatus = try container.decode(ObservedLoadBalancerStatus.self, forKey: .status)
+        self._jsonLastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        self._jsonBackends = try container.decode([ObservedLoadBalancerBackend].self, forKey: .backends)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonId, forKey: .id)
+        try container.encode(_jsonObservedGeneration, forKey: .observedGeneration)
+        try container.encode(_jsonStatus, forKey: .status)
+        try container.encodeIfPresent(_jsonLastError, forKey: .lastError)
+        try container.encode(_jsonBackends, forKey: .backends)
+    }
+
 }
 
 /// Agent → control plane: everything the agent actually has, with resources.
@@ -1874,79 +2417,9 @@ public struct ObservedLoadBalancerState: Codable, Sendable, Equatable {
 /// `manifestStatus` is the one thing that suspends those semantics: an agent
 /// that cannot read its manifest sends the report to carry the condition and
 /// its resource snapshot, and the lists mean nothing (STR-138).
-public struct ObservedStateReport: WebSocketMessage {
+public typealias ObservedStateReport = Strato_Agent_V1_ObservedStateReport
+extension Strato_Agent_V1_ObservedStateReport: WebSocketMessage {
     public var type: MessageType { .observedState }
-    public let requestId: String
-    public let timestamp: Date
-    public let agentId: String
-    public let vms: [ObservedVMState]
-    /// Sandboxes actually present on this agent. Full-list, like `vms`: a
-    /// sandbox missing from the list does not exist, which is how sandbox
-    /// deletions are confirmed. The key is required even when the list is
-    /// empty.
-    public let sandboxes: [ObservedSandboxState]
-    public let resources: AgentResources
-    /// Coherent wire67 enforcement/accounting acknowledgement. Nil is unknown.
-    public let resourceEnforcement: ResourceEnforcementSnapshot?
-    /// Same independently sampled host-resource snapshot carried by the
-    /// heartbeat. It is duplicated here so either periodic path refreshes the
-    /// operator view without doing any probe work itself.
-    public let hostResourceTelemetry: HostResourceTelemetry?
-    /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
-    /// is desired and something is in the way (issue #434). Nil when no update
-    /// is desired or convergence is proceeding (the agent restarts into the new
-    /// build rather than reporting progress).
-    public let agentUpdateStatus: ObservedAgentUpdateStatus?
-    /// Workloads this agent holds that its last sync did not list (STR-98).
-    /// They also appear in `vms`/`sandboxes` above — the agent really is
-    /// running them — so this list is the agent asking "should these exist?",
-    /// not a second inventory.
-    public let unrecognized: [UnrecognizedWorkload]
-    /// Set when the blast-radius guard refused a sync's teardowns. Nil in the
-    /// steady state.
-    public let teardownRefusal: ObservedTeardownRefusal?
-    /// Set when the agent's durable workload manifest could not be read in full
-    /// (STR-138). Nil in the steady state. `inventoryComplete == false`
-    /// suspends this report's full-list semantics — see
-    /// `ObservedManifestStatus`.
-    public let manifestStatus: ObservedManifestStatus?
-    /// Volumes actually present on this agent (STR-148). Full-list, like
-    /// `vms`: a volume missing from the list does not exist here, which is how
-    /// volume deletions are confirmed.
-    ///
-    /// Optional rather than `[]`-defaulted because nil means the current agent
-    /// could not enumerate its volume store. The control plane must read that as
-    /// "unknown", not "every volume on this agent is gone" — which would reap
-    /// terminating volume rows and error live ones.
-    public let volumes: [ObservedVolumeState]?
-    /// Snapshot artifacts actually present on this agent (STR-150). Full-list
-    /// and kind-tagged, like the desired counterpart: an artifact missing from
-    /// this list does not exist here, which is how snapshot deletions are
-    /// confirmed and how the finalizer reap learns a checkpoint's bytes are
-    /// really gone.
-    ///
-    /// `Optional` for `volumes`' reason. Nil means the current agent could not
-    /// enumerate one of its artifact stores, so the control plane must do
-    /// nothing rather than read the absence as "every checkpoint is gone".
-    public let snapshots: [ObservedSnapshotState]?
-    /// Native LB programming and backend health observed by the site's
-    /// topology author. Nil means no opinion, not an empty authoritative set.
-    public let loadBalancers: [ObservedLoadBalancerState]?
-    /// Logical-switch/router/SNAT/DHCP realization observed by the site's
-    /// topology authority. Nil means this agent has no topology opinion.
-    public let networks: [ObservedNetworkState]?
-    /// Port-group and ACL realization observed by the site's topology
-    /// authority. Nil means this agent has no authority-side opinion.
-    public let securityGroups: [ObservedSecurityGroupState]?
-    /// Per-workload port-group membership observed by this agent. Nil means the
-    /// agent did not attempt or cannot identify membership; an empty list is an
-    /// authoritative statement that this sync contained no managed local port.
-    public let portMemberships: [ObservedPortMembershipState]?
-    /// Whole physical disks observed by this agent. A non-nil value is the
-    /// complete current inventory, including an authoritative empty list.
-    /// Nil means enumeration failed or is unsupported and must not be read as
-    /// device absence.
-    public let storageDevices: [ObservedStorageDevice]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1969,25 +2442,88 @@ public struct ObservedStateReport: WebSocketMessage {
         portMemberships: [ObservedPortMembershipState]? = nil,
         storageDevices: [ObservedStorageDevice]? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.agentId = agentId
-        self.vms = vms
-        self.sandboxes = sandboxes
-        self.resources = resources
-        self.resourceEnforcement = resourceEnforcement
-        self.hostResourceTelemetry = hostResourceTelemetry
-        self.agentUpdateStatus = agentUpdateStatus
-        self.unrecognized = unrecognized
-        self.teardownRefusal = teardownRefusal
-        self.manifestStatus = manifestStatus
-        self.volumes = volumes
-        self.snapshots = snapshots
-        self.loadBalancers = loadBalancers
-        self.networks = networks
-        self.securityGroups = securityGroups
-        self.portMemberships = portMemberships
-        self.storageDevices = storageDevices
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonAgentId = agentId
+        self._jsonVms = vms
+        self._jsonSandboxes = sandboxes
+        self._jsonResources = resources
+        self._jsonResourceEnforcement = resourceEnforcement
+        self._jsonHostResourceTelemetry = hostResourceTelemetry
+        self._jsonAgentUpdateStatus = agentUpdateStatus
+        self._jsonUnrecognized = unrecognized
+        self._jsonTeardownRefusal = teardownRefusal
+        self._jsonManifestStatus = manifestStatus
+        self._jsonVolumes = volumes
+        self._jsonSnapshots = snapshots
+        self._jsonLoadBalancers = loadBalancers
+        self._jsonNetworks = networks
+        self._jsonSecurityGroups = securityGroups
+        self._jsonPortMemberships = portMemberships
+        self._jsonStorageDevices = storageDevices
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case agentId; case vms; case sandboxes; case resources;
+        case resourceEnforcement; case hostResourceTelemetry; case agentUpdateStatus; case unrecognized;
+        case teardownRefusal; case manifestStatus; case volumes; case snapshots; case loadBalancers; case networks;
+        case securityGroups; case portMemberships; case storageDevices
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonAgentId = try container.decode(String.self, forKey: .agentId)
+        self._jsonVms = try container.decode([ObservedVMState].self, forKey: .vms)
+        self._jsonSandboxes = try container.decode([ObservedSandboxState].self, forKey: .sandboxes)
+        self._jsonResources = try container.decode(AgentResources.self, forKey: .resources)
+        self._jsonResourceEnforcement = try container.decodeIfPresent(
+            ResourceEnforcementSnapshot.self, forKey: .resourceEnforcement)
+        self._jsonHostResourceTelemetry = try container.decodeIfPresent(
+            HostResourceTelemetry.self, forKey: .hostResourceTelemetry)
+        self._jsonAgentUpdateStatus = try container.decodeIfPresent(
+            ObservedAgentUpdateStatus.self, forKey: .agentUpdateStatus)
+        self._jsonUnrecognized = try container.decode([UnrecognizedWorkload].self, forKey: .unrecognized)
+        self._jsonTeardownRefusal = try container.decodeIfPresent(
+            ObservedTeardownRefusal.self, forKey: .teardownRefusal)
+        self._jsonManifestStatus = try container.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
+        self._jsonVolumes = try container.decodeIfPresent([ObservedVolumeState].self, forKey: .volumes)
+        self._jsonSnapshots = try container.decodeIfPresent([ObservedSnapshotState].self, forKey: .snapshots)
+        self._jsonLoadBalancers = try container.decodeIfPresent(
+            [ObservedLoadBalancerState].self, forKey: .loadBalancers)
+        self._jsonNetworks = try container.decodeIfPresent([ObservedNetworkState].self, forKey: .networks)
+        self._jsonSecurityGroups = try container.decodeIfPresent(
+            [ObservedSecurityGroupState].self, forKey: .securityGroups)
+        self._jsonPortMemberships = try container.decodeIfPresent(
+            [ObservedPortMembershipState].self, forKey: .portMemberships)
+        self._jsonStorageDevices = try container.decodeIfPresent([ObservedStorageDevice].self, forKey: .storageDevices)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonAgentId, forKey: .agentId)
+        try container.encode(_jsonVms, forKey: .vms)
+        try container.encode(_jsonSandboxes, forKey: .sandboxes)
+        try container.encode(_jsonResources, forKey: .resources)
+        try container.encodeIfPresent(_jsonResourceEnforcement, forKey: .resourceEnforcement)
+        try container.encodeIfPresent(_jsonHostResourceTelemetry, forKey: .hostResourceTelemetry)
+        try container.encodeIfPresent(_jsonAgentUpdateStatus, forKey: .agentUpdateStatus)
+        try container.encode(_jsonUnrecognized, forKey: .unrecognized)
+        try container.encodeIfPresent(_jsonTeardownRefusal, forKey: .teardownRefusal)
+        try container.encodeIfPresent(_jsonManifestStatus, forKey: .manifestStatus)
+        try container.encodeIfPresent(_jsonVolumes, forKey: .volumes)
+        try container.encodeIfPresent(_jsonSnapshots, forKey: .snapshots)
+        try container.encodeIfPresent(_jsonLoadBalancers, forKey: .loadBalancers)
+        try container.encodeIfPresent(_jsonNetworks, forKey: .networks)
+        try container.encodeIfPresent(_jsonSecurityGroups, forKey: .securityGroups)
+        try container.encodeIfPresent(_jsonPortMemberships, forKey: .portMemberships)
+        try container.encodeIfPresent(_jsonStorageDevices, forKey: .storageDevices)
     }
 
 }

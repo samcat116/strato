@@ -97,14 +97,14 @@ final class SiteTests {
 
     private func registerAgent(
         app: Application, named name: String, siteID: UUID? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion,
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major),
         networkCapability: NetworkCapability = .overlay
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
             on: app,
             named: name,
             networkCapability: networkCapability,
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             siteID: siteID)
     }
 
@@ -759,7 +759,7 @@ final class SiteTests {
             // pinned-but-unused one — even with no VMs of its own.
             let controllerSync = try await app.desiredStateAssembler.assemble(agentId: controllerId)
             #expect(controllerSync.networksAuthoritative)
-            let names = Set(controllerSync.networks.map(\.name))
+            let names = Set(controllerSync.networks.values.map(\.name))
             #expect(names.contains("peer-net"))
             #expect(names.contains("pinned-net"))
 
@@ -767,8 +767,8 @@ final class SiteTests {
             // belongs to the controller.
             let peerSync = try await app.desiredStateAssembler.assemble(agentId: peerId)
             #expect(!peerSync.networksAuthoritative)
-            #expect(peerSync.networks.isEmpty)
-            #expect(peerSync.vms.count == 1)
+            #expect(peerSync.networks.values.isEmpty)
+            #expect(peerSync.vms.values.count == 1)
         }
     }
 
@@ -788,9 +788,9 @@ final class SiteTests {
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(!sync.networksAuthoritative)
-            #expect(sync.networks.isEmpty)
+            #expect(sync.networks.values.isEmpty)
             // The VM still syncs — only topology is withheld.
-            #expect(sync.vms.count == 1)
+            #expect(sync.vms.values.count == 1)
         }
     }
 
@@ -1051,7 +1051,7 @@ final class SiteTests {
         try await withSiteTestApp { app, _, _, _ in
             for (name, capability, version, expected) in [
                 (
-                    "slirp", NetworkCapability.userMode, WireProtocol.currentVersion,
+                    "slirp", NetworkCapability.userMode, Int(AgentProtocolCompatibility.major),
                     SiteNetworkAuthority.ControllerFault.noOverlayNetworking
                 )
             ] as [(String, NetworkCapability, Int, SiteNetworkAuthority.ControllerFault)] {
@@ -1066,7 +1066,7 @@ final class SiteTests {
                     app: app, named: "regress-peer-\(name)", siteID: siteID)
                 _ = try await self.registerAgent(
                     app: app, named: "regress-ctl-\(name)", siteID: siteID,
-                    protocolVersion: version, networkCapability: capability)
+                    protocolMajor: version, networkCapability: capability)
                 // Re-validation hands the job to an eligible peer, so pin the
                 // regressed agent back to isolate what `resolve` reports.
                 let reloaded = try #require(try await Site.find(siteID, on: app.db))
@@ -1104,8 +1104,8 @@ final class SiteTests {
 
             let peerSync = try await app.desiredStateAssembler.assemble(agentId: peerId)
             #expect(!peerSync.networksAuthoritative)
-            #expect(peerSync.networks.isEmpty)
-            #expect(peerSync.vms.count == 1)
+            #expect(peerSync.networks.values.isEmpty)
+            #expect(peerSync.vms.values.count == 1)
 
             // And the controller still gets its authoritative view, so it
             // converges the moment it comes back.
@@ -1162,6 +1162,12 @@ final class SiteTests {
                 name: "guard-pinned-net", project: project, subnet: "10.64.0.0/24",
                 gateway: "10.64.0.1", site: site)
             let pending = try await builder.createVM(name: "guard-unplaceable", project: project)
+            // Exercise peer placement deterministically. The controller itself is
+            // intentionally allowed to queue work while offline, so selecting it
+            // would test the separate single-node exception below.
+            let pool = try await StoragePool.defaultPool(on: app.db)
+            pool.memberAgentIds = [peerId]
+            try await pool.save(on: app.db)
             try await attachBootVolume(to: pending, on: nil, using: app.db)
             try await VMNetworkInterface(
                 vmID: try pending.requireID(), logicalNetworkID: try pinned.requireID(),

@@ -25,9 +25,9 @@ struct AgentWorkloadClaimEnumConstraintTests {
         try await withTestApp { app in
             // Every kind the agent can put in `ObservedStateReport.unrecognized`
             // maps to a `resource_kind` this table has to accept. Driven off
-            // `WorkloadKind.allCases` rather than a literal list, so a kind
+            // `WorkloadKind.knownCases` rather than a literal list, so a kind
             // added later fails here instead of in production.
-            for kind in WorkloadKind.allCases {
+            for kind in WorkloadKind.knownCases {
                 let claim = AgentWorkloadClaim(
                     agentId: "claim-agent",
                     resourceKind: kind.resourceKind,
@@ -44,7 +44,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
             let recorded = try await AgentWorkloadClaim.query(on: app.db)
                 .filter(\.$agentId == "claim-agent")
                 .count()
-            #expect(recorded == WorkloadKind.allCases.count)
+            #expect(recorded == WorkloadKind.knownCases.count)
         }
     }
 

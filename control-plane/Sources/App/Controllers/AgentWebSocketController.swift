@@ -3,27 +3,11 @@ import X509
 import Vapor
 import StratoShared
 import NIOCore
+import NIOConcurrencyHelpers
 import NIOWebSocket
 import Fluent
 
 struct AgentWebSocketController: RouteCollection {
-    /// Message types whose bodies are base64 payload rather than anything worth
-    /// reading in a log, and which arrive at a rate no log should try to keep
-    /// up with. Classification happens only after decoding the envelope; JSON
-    /// object key order is not stable, so inspecting a raw prefix can expose a
-    /// payload that happened to encode before `type`.
-    private static let streamingFrameTypes = [
-        MessageType.consoleData.rawValue,
-        MessageType.guestExecOutput.rawValue,
-        MessageType.guestExecRecordedState.rawValue,
-        MessageType.sandboxLog.rawValue,
-    ]
-
-    static func rawTextPreview(for text: String, envelopeType: MessageType) -> String? {
-        guard !streamingFrameTypes.contains(envelopeType.rawValue) else { return nil }
-        return String(text.prefix(500))
-    }
-
     func boot(routes: RoutesBuilder) throws {
         let agentRoutes = routes.grouped("agent")
         // Observed-state reports carry an entry per VM on the agent, so frames
@@ -44,7 +28,7 @@ struct AgentWebSocketController: RouteCollection {
     /// The value is intentionally not `Sendable`; `NIOLoopBound` is the checked
     /// proof that every access happens on the WebSocket's event loop.
     private final class MessageStateValue {
-        var buffer: [String] = []
+        var buffer: [Data] = []
         /// Total bytes held in `buffer`, checked against
         /// `maxPreAuthBufferBytes` so an unauthenticated peer cannot grow the
         /// buffer without bound while validation is in flight.
@@ -68,8 +52,8 @@ struct AgentWebSocketController: RouteCollection {
     /// Buffers a frame that arrived before authentication completed, closing
     /// the connection instead if the peer has exceeded the pre-auth cap.
     /// Runs on the WebSocket's event loop, like all `state` access.
-    private func bufferPreAuthFrame(req: Request, ws: WebSocket, text: String, state: MessageState) {
-        state.value.bufferedBytes += text.utf8.count
+    private func bufferPreAuthFrame(req: Request, ws: WebSocket, data: Data, state: MessageState) {
+        state.value.bufferedBytes += data.count
         guard state.value.bufferedBytes <= Self.maxPreAuthBufferBytes else {
             req.logger.warning(
                 "Closing agent WebSocket: pre-authentication buffer limit exceeded",
@@ -78,7 +62,7 @@ struct AgentWebSocketController: RouteCollection {
             _ = ws.close(code: .policyViolation)
             return
         }
-        state.value.buffer.append(text)
+        state.value.buffer.append(data)
     }
 
     // Non-async handler - runs on WebSocket's event loop
@@ -87,23 +71,17 @@ struct AgentWebSocketController: RouteCollection {
         // can slip through while authentication is in flight.
         let state = MessageState(MessageStateValue(), eventLoop: ws.eventLoop)
 
-        ws.onText { ws, text in
-            if let processor = state.value.frameProcessor {
-                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
-            } else {
-                self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
-            }
+        ws.onText { ws, _ in
+            req.logger.warning("Rejecting text frame on Protobuf agent connection")
+            _ = ws.close(code: .unacceptableData)
         }
 
         ws.onBinary { ws, buffer in
-            guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                req.logger.error("Failed to convert binary buffer to string")
-                return
-            }
+            let data = Data(buffer.readableBytesView)
             if let processor = state.value.frameProcessor {
-                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
+                self.enqueueWebSocketMessage(req: req, ws: ws, data: data, processor: processor)
             } else {
-                self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
+                self.bufferPreAuthFrame(req: req, ws: ws, data: data, state: state)
             }
         }
 
@@ -154,8 +132,8 @@ struct AgentWebSocketController: RouteCollection {
                     metadata: ["strato.agent.name": .string(agent.name)]
                 )
             }
-            for text in state.value.buffer {
-                self.enqueueWebSocketMessage(req: req, ws: ws, text: text, processor: processor)
+            for data in state.value.buffer {
+                self.enqueueWebSocketMessage(req: req, ws: ws, data: data, processor: processor)
             }
             state.value.buffer.removeAll()
             state.value.bufferedBytes = 0
@@ -254,16 +232,16 @@ struct AgentWebSocketController: RouteCollection {
     /// a byte-bounded FIFO, preserving wire order without retaining one waiting
     /// task and full frame string per message.
     private func enqueueWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, processor: AgentWebSocketFrameProcessor
+        req: Request, ws: WebSocket, data: Data, processor: AgentWebSocketFrameProcessor
     ) {
-        switch processor.enqueue(text) {
+        switch processor.enqueue(data) {
         case .accepted, .closed:
             return
         case .overflow:
             req.logger.warning(
                 "Closing agent WebSocket: authenticated frame queue limit exceeded",
                 metadata: [
-                    "frameBytes": .stringConvertible(text.utf8.count),
+                    "frameBytes": .stringConvertible(data.count),
                     "queueLimitBytes": .stringConvertible(
                         AgentWebSocketFrameProcessor.defaultBufferLimitBytes),
                 ])
@@ -272,61 +250,42 @@ struct AgentWebSocketController: RouteCollection {
     }
 
     private func handleWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent, inventorySessionID: UUID
+        req: Request, ws: WebSocket, data: Data, agent: AuthenticatedAgent, inventorySessionID: UUID,
+        agreement: NIOLockedValueBox<Strato_Agent_V1_ProtocolAgreement?>
     ) async {
         // The key every agent-scoped registry is stored under (sockets,
         // presence, routes, session ownership) — the full SPIFFE ID, never the
         // bare name. `identity.name` is for display and the register response.
         let agentKey = agent.identity.key
         let agentName = agent.name
-        // Routine per-message receipt is a debugging aid, not an operator
-        // signal, and it is the one log line whose rate scales with fleet size
-        // on a single host: every agent's heartbeat and observed-state report
-        // lands here (issue #705). The raw-frame dump is noisier still, so it
-        // sits a level below the decoded envelope.
-        //
-        guard let data = text.data(using: .utf8) else {
-            req.logger.error("Failed to convert WebSocket text to data")
-            return
-        }
-
         do {
-            let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-            // Streaming frames are logged by length alone, mirroring the
-            // agent's send path. Decode first: JSONEncoder does not guarantee
-            // key order, and a payload-first recorded-state envelope can carry
-            // a full MiB of command output before its `type` key.
-            var traceMetadata: Logger.Metadata = [
-                "strato.agent.name": .string(agentName),
-                "messageLength": .string("\(text.count)"),
-            ]
-            if let preview = Self.rawTextPreview(for: text, envelopeType: envelope.type) {
-                traceMetadata["rawTextPreview"] = .string(preview)
-            }
-            req.logger.trace("Processing WebSocket message", metadata: traceMetadata)
+            let envelope = try WireProtocol.decodeEnvelope(data)
+            // Never render a decoded Protobuf message: descriptions include secrets.
+            req.logger.trace(
+                "Processing WebSocket message",
+                metadata: [
+                    "strato.agent.name": .string(agentName),
+                    "messageLength": .stringConvertible(data.count),
+                ])
             req.logger.debug(
                 "Decoded message envelope",
                 metadata: ["type": .string("\(envelope.type)"), "strato.agent.name": .string(agentName)])
 
+            if envelope.type != .agentRegister {
+                guard let negotiated = agreement.withLockedValue({ $0 }) else {
+                    throw AgentProtocolCompatibility.Failure.invalidSession
+                }
+                try AgentProtocolCompatibility.require(
+                    envelope.requirements, agreement: negotiated,
+                    offered: AgentProtocolCompatibility.localOffer)
+            }
             switch envelope.type {
             case .agentRegister:
-                guard req.application.websocketManager.getConnection(agentKey: agentKey) === ws else { return }
-                let message: AgentRegisterMessage
-                do {
-                    message = try envelope.decode(as: AgentRegisterMessage.self)
-                } catch DecodingError.keyNotFound(let key, _)
-                    where key.stringValue == "protocolVersion"
-                {
-                    Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
-                    let reason =
-                        "Agent registration omitted the required wire protocol version; this control plane "
-                        + "requires exactly v\(WireProtocol.currentVersion). Deploy a matching agent build."
-                    req.logger.error("Failed to register agent: \(reason)")
-                    sendErrorResponse(
-                        ws: ws, requestId: "", error: reason,
-                        code: ErrorMessage.ErrorCode.unsupportedProtocolVersion, logger: req.logger)
-                    return
+                guard envelope.requiredCapabilities.isEmpty else {
+                    throw AgentProtocolCompatibility.Failure.unsupportedCapability
                 }
+                guard req.application.websocketManager.getConnection(agentKey: agentKey) === ws else { return }
+                let message = try envelope.decode(as: AgentRegisterMessage.self)
                 // Await registration in this serial frame handler. Draining
                 // a predecessor must include its registration transaction.
                 do {
@@ -341,8 +300,12 @@ struct AgentWebSocketController: RouteCollection {
                     let response = AgentRegisterResponseMessage(
                         requestId: message.requestId,
                         agentId: agentUUID.uuidString,
-                        name: agentName
+                        name: agentName,
+                        agreement: try AgentProtocolCompatibility.negotiate(
+                            local: AgentProtocolCompatibility.localOffer, remote: message.protocolOffer,
+                            inventorySessionID: inventorySessionID)
                     )
+                    agreement.withLockedValue { $0 = response.agreement }
                     self.sendMessage(ws: ws, message: response, logger: req.logger)
 
                     // Ring immediately on (re)registration so drift
@@ -381,34 +344,30 @@ struct AgentWebSocketController: RouteCollection {
 
             case .agentHeartbeat:
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
-                Task {
-                    do {
-                        try await req.agentService.updateAgentHeartbeat(
-                            message, fromAgentKey: agentKey, inventorySession: inventorySessionID)
-                        self.sendSuccessResponse(
-                            ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
-                    } catch {
-                        req.logger.error("Failed to update heartbeat: \(error)")
-                        self.sendErrorResponse(
-                            ws: ws, requestId: message.requestId, error: "Failed to update heartbeat",
-                            logger: req.logger)
-                    }
+                do {
+                    try await req.agentService.updateAgentHeartbeat(
+                        message, fromAgentKey: agentKey, inventorySession: inventorySessionID)
+                    self.sendSuccessResponse(
+                        ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
+                } catch {
+                    req.logger.error("Failed to update heartbeat: \(error)")
+                    self.sendErrorResponse(
+                        ws: ws, requestId: message.requestId, error: "Failed to update heartbeat",
+                        logger: req.logger)
                 }
 
             case .agentUnregister:
                 let message = try envelope.decode(as: AgentUnregisterMessage.self)
-                Task {
-                    do {
-                        try await req.agentService.unregisterAgent(message.agentId, fromAgentKey: agentKey)
-                        self.sendSuccessResponse(
-                            ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
-                            logger: req.logger)
-                    } catch {
-                        req.logger.error("Failed to unregister agent: \(error)")
-                        self.sendErrorResponse(
-                            ws: ws, requestId: message.requestId, error: "Failed to unregister agent",
-                            logger: req.logger)
-                    }
+                do {
+                    try await req.agentService.unregisterAgent(message.agentID, fromAgentKey: agentKey)
+                    self.sendSuccessResponse(
+                        ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
+                        logger: req.logger)
+                } catch {
+                    req.logger.error("Failed to unregister agent: \(error)")
+                    self.sendErrorResponse(
+                        ws: ws, requestId: message.requestId, error: "Failed to unregister agent",
+                        logger: req.logger)
                 }
 
             case .success, .error:
@@ -435,18 +394,17 @@ struct AgentWebSocketController: RouteCollection {
                 // observed status/generation, settles convergence, confirms
                 // deletions by absence (issue #260). Enqueued rather than
                 // applied directly so same-agent reports apply in send order.
-                Task {
-                    await req.agentService.enqueueObservedStateReport(
-                        envelope, fromAgentKey: agentKey, inventorySession: inventorySessionID)
-                }
+                await req.agentService.enqueueObservedStateReport(
+                    envelope, fromAgentKey: agentKey, inventorySession: inventorySessionID)
 
             case .consoleData:
                 // Route console data from agent to frontend
                 let message = try envelope.decode(as: ConsoleDataMessage.self)
-                if let data = message.rawData {
+                if message.hasData {
+                    let data = message.data
                     req.consoleSessionManager.routeToFrontend(
-                        vmId: message.vmId,
-                        sessionId: message.sessionId,
+                        vmId: message.vmID,
+                        sessionId: message.sessionID,
                         data: data,
                         fromAgentKey: agentKey
                     )
@@ -457,47 +415,49 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.info(
                     "Console connected confirmation from agent",
                     metadata: [
-                        "strato.vm.id": .string(message.vmId),
-                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
+                        "strato.vm.id": .string(message.vmID),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
                     ])
                 // Notify the frontend that the console is ready for input
                 req.consoleSessionManager.notifyFrontendReady(
-                    sessionId: message.sessionId, fromAgentKey: agentKey)
+                    sessionId: message.sessionID, fromAgentKey: agentKey)
 
             case .consoleDisconnected:
                 let message = try envelope.decode(as: ConsoleDisconnectedMessage.self)
                 req.logger.info(
                     "Console disconnected from agent",
                     metadata: [
-                        "strato.vm.id": .string(message.vmId),
-                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionId),
-                        "reason": .string(message.reason ?? "unknown"),
+                        "strato.vm.id": .string(message.vmID),
+                        "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
+                        "reason": .string(message.hasReason ? message.reason : "unknown"),
                     ])
                 // Close the browser socket as well as cleaning up: this is the
                 // only routable signal the agent has for "I could not open
                 // that console", so dropping it here would leave the tab
                 // waiting on a connection that will never come.
                 req.consoleSessionManager.closeSession(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                    sessionId: message.sessionID, fromAgentKey: agentKey,
+                    reason: message.optionalReason)
 
             case .guestExecStarted:
                 let message = try envelope.decode(as: GuestExecStartedMessage.self)
                 if !(await req.vmCommandExecutionService.handleStarted(
-                    sessionId: message.sessionId, fromAgentKey: agentKey))
+                    sessionId: message.sessionID, fromAgentKey: agentKey))
                 {
                     await req.guestExecSessionManager.handleStarted(
-                        sessionId: message.sessionId, fromAgentKey: agentKey)
+                        sessionId: message.sessionID, fromAgentKey: agentKey)
                 }
 
             case .guestExecOutput:
                 let message = try envelope.decode(as: GuestExecOutputMessage.self)
-                if let data = message.rawData {
+                if message.hasData {
+                    let data = message.data
                     if !(await req.vmCommandExecutionService.handleOutput(
-                        sessionId: message.sessionId, fromAgentKey: agentKey,
+                        sessionId: message.sessionID, fromAgentKey: agentKey,
                         stream: message.stream, data: data))
                     {
                         req.guestExecSessionManager.handleOutput(
-                            sessionId: message.sessionId, fromAgentKey: agentKey,
+                            sessionId: message.sessionID, fromAgentKey: agentKey,
                             stream: message.stream, data: data)
                     }
                 }
@@ -505,21 +465,23 @@ struct AgentWebSocketController: RouteCollection {
             case .guestExecExit:
                 let message = try envelope.decode(as: GuestExecExitMessage.self)
                 if !(await req.vmCommandExecutionService.handleExit(
-                    sessionId: message.sessionId, fromAgentKey: agentKey,
-                    exitCode: message.exitCode))
+                    sessionId: message.sessionID, fromAgentKey: agentKey,
+                    exitCode: Int(message.exitCode)))
                 {
                     await req.guestExecSessionManager.handleExit(
-                        sessionId: message.sessionId, fromAgentKey: agentKey,
-                        exitCode: message.exitCode)
+                        sessionId: message.sessionID, fromAgentKey: agentKey,
+                        exitCode: Int(message.exitCode))
                 }
 
             case .guestExecClosed:
                 let message = try envelope.decode(as: GuestExecClosedMessage.self)
                 if !(await req.vmCommandExecutionService.handleClosed(
-                    sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason))
+                    sessionId: message.sessionID, fromAgentKey: agentKey,
+                    reason: message.optionalReason))
                 {
                     await req.guestExecSessionManager.handleClosed(
-                        sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
+                        sessionId: message.sessionID, fromAgentKey: agentKey,
+                        reason: message.optionalReason)
                 }
 
             case .guestExecRecordedState:
@@ -573,9 +535,9 @@ struct AgentWebSocketController: RouteCollection {
                 ws.eventLoop.execute { _ = ws.close(code: .policyViolation) }
                 return
             }
-            req.logger.error("Failed to handle WebSocket message: \(error)")
+            req.logger.error("Failed to handle Protobuf WebSocket message")
             sendErrorResponse(
-                ws: ws, requestId: "", error: "Failed to process message: \(error.localizedDescription)",
+                ws: ws, requestId: "", error: "Failed to process Protobuf message",
                 logger: req.logger)
         }
     }
@@ -652,6 +614,7 @@ struct AgentWebSocketController: RouteCollection {
 
         // Execute on the WebSocket's event loop to avoid NIOLoopBound precondition failures
         ws.eventLoop.execute {
+            guard !ws.isClosed else { return }
             req.logger.info(
                 "Setting up WebSocket connection",
                 metadata: [
@@ -662,9 +625,11 @@ struct AgentWebSocketController: RouteCollection {
             // Allocated locally, never supplied by the peer or looked up from
             // the identity after a delayed frame crosses a reconnect.
             let inventorySessionID = UUID()
-            let processor = AgentWebSocketFrameProcessor { text in
+            let agreement = NIOLockedValueBox<Strato_Agent_V1_ProtocolAgreement?>(nil)
+            let processor = AgentWebSocketFrameProcessor { data in
                 await self.handleWebSocketMessage(
-                    req: req, ws: ws, text: text, agent: agent, inventorySessionID: inventorySessionID)
+                    req: req, ws: ws, data: data, agent: agent, inventorySessionID: inventorySessionID,
+                    agreement: agreement)
             }
 
             // The mTLS handshake authenticates one credential, not every future

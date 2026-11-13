@@ -83,7 +83,7 @@ struct HierarchyTreeBuilder {
                 id: vm.id!,
                 name: vm.name,
                 environment: vm.environment,
-                status: vm.status.rawValue,
+                status: vm.status.protocolValue,
                 cpu: vm.cpu,
                 memoryGB: vm.memory.bytesToGB,
                 diskGB: vm.disk.bytesToGB

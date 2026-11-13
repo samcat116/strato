@@ -223,22 +223,26 @@ public enum SecurityGroupACLBuilder {
 
         var clauses = [portBinding, ipMatch]
 
-        if let peer = rule.remoteCIDR {
+        if rule.hasRemoteCidr {
+            let peer = rule.remoteCidr
             clauses.append("\(peerField) == \(peer)")
-        } else if let peerGroup = rule.remoteGroupId {
+        } else if rule.hasRemoteGroupID {
+            let peerGroup = validatedProtocolUUID(rule.remoteGroupID)
             let reference = OVNNaming.addressSetReference(
                 portGroup: OVNNaming.portGroupName(securityGroupId: peerGroup),
                 ethertype: rule.ethertype)
             clauses.append("\(peerField) == \(reference)")
         }
 
-        switch rule.protocolName {
+        switch rule.optionalProtocolName {
         case nil:
             break
         case "tcp", "udp":
-            let proto = rule.protocolName!
+            let proto = rule.protocolName
             clauses.append(proto)
-            if let min = rule.portRangeMin, let max = rule.portRangeMax {
+            if rule.hasPortRangeMin, rule.hasPortRangeMax {
+                let min = rule.portRangeMin
+                let max = rule.portRangeMax
                 if min == max {
                     clauses.append("\(proto).dst == \(min)")
                 } else {
@@ -248,9 +252,11 @@ public enum SecurityGroupACLBuilder {
         case "icmp":
             let proto = rule.ethertype == "ipv6" ? "icmp6" : "icmp4"
             clauses.append(proto)
-            if let type = rule.portRangeMin {
+            if rule.hasPortRangeMin {
+                let type = rule.portRangeMin
                 clauses.append("\(proto).type == \(type)")
-                if let code = rule.portRangeMax {
+                if rule.hasPortRangeMax {
+                    let code = rule.portRangeMax
                     clauses.append("\(proto).code == \(code)")
                 }
             }
@@ -269,10 +275,10 @@ public enum SecurityGroupACLBuilder {
             action: "allow-related",
             log: logged,
             severity: logged ? logSeverity : nil,
-            name: logged ? aclName(ruleId: rule.id) : nil,
+            name: logged ? aclName(ruleId: validatedProtocolUUID(rule.id)) : nil,
             externalIDs: [
                 managedKey: managedValue,
-                "strato-rule-id": rule.id.uuidString.lowercased(),
+                "strato-rule-id": rule.id.lowercased(),
             ])
     }
 
@@ -628,16 +634,16 @@ public struct DesiredPortMembership: Equatable, Sendable {
 /// manifests key host resources by the control plane's stable NIC slot;
 /// compact array position remains only as the legacy fallback.
 public enum VMPortMembershipPlanner {
-    public static func memberships(for vms: [DesiredVMState]) -> [DesiredPortMembership] {
-        vms.flatMap { vm in
-            let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
-            return vm.spec.networks.enumerated().map { fallbackIndex, spec in
+    public static func memberships(for vms: [DesiredVMState]) throws -> [DesiredPortMembership] {
+        try vms.flatMap { vm in
+            let metadataDenied = vm.hasMetadata && !vm.metadata.isServiceEnabled
+            return try vm.spec.networks.values.enumerated().map { fallbackIndex, spec in
                 DesiredPortMembership(
-                    interfaceId: spec.interfaceId,
+                    interfaceId: spec.hasInterfaceID ? try UUID(protocolString: spec.interfaceID) : nil,
                     portName: OVNNaming.vmPortName(
-                        vmId: vm.vmId.uuidString,
-                        nicIndex: spec.orderIndex ?? fallbackIndex),
-                    securityGroupIds: spec.securityGroupIds,
+                        vmId: vm.vmID, nicIndex: spec.hasOrderIndex ? Int(spec.orderIndex) : fallbackIndex),
+                    securityGroupIds: spec.hasSecurityGroupIds
+                        ? try spec.securityGroupIds.values.map { try UUID(protocolString: $0) } : nil,
                     metadataDenied: metadataDenied)
             }
         }
@@ -676,13 +682,13 @@ public enum SecurityGroupReconciler {
         ]
         var unexpressed: [UUID] = []
 
-        for group in securityGroups.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
-            let name = OVNNaming.portGroupName(securityGroupId: group.id)
+        for group in securityGroups.sorted(by: { $0.id < $1.id }) {
+            let name = OVNNaming.portGroupName(securityGroupId: validatedProtocolUUID(group.id))
             var acls: [ACLSpec] = []
-            for rule in group.rules {
+            for rule in group.rules.values {
                 if let acl = SecurityGroupACLBuilder.acl(for: rule, portGroup: name) {
                     var ids = acl.externalIDs
-                    ids["strato-sg-id"] = group.id.uuidString.lowercased()
+                    ids["strato-sg-id"] = group.id.lowercased()
                     acls.append(
                         ACLSpec(
                             direction: acl.direction, priority: acl.priority, tier: acl.tier,
@@ -690,7 +696,7 @@ public enum SecurityGroupReconciler {
                             severity: acl.severity, name: acl.name,
                             externalIDs: ids))
                 } else {
-                    unexpressed.append(rule.id)
+                    unexpressed.append(validatedProtocolUUID(rule.id))
                 }
             }
             plans.append(PortGroupPlan(name: name, generation: group.generation, acls: acls))
@@ -791,21 +797,23 @@ extension SecurityGroupReconciler {
         actuator: any SecurityGroupActuator,
         logger: Logger
     ) async throws -> SecurityGroupReconcileResult {
+        for group in securityGroups { try group.validateProtocol() }
         let (plans, unexpressed) = plan(securityGroups: securityGroups)
         var fullyConverged = true
         var failedByGroup: [UUID: (message: String, classification: ObservedFailureClassification)] = [:]
         var globalFailure: (message: String, classification: ObservedFailureClassification)?
         let groupIDByPlanName = Dictionary(
             uniqueKeysWithValues: securityGroups.map {
-                (OVNNaming.portGroupName(securityGroupId: $0.id), $0.id)
+                (OVNNaming.portGroupName(securityGroupId: validatedProtocolUUID($0.id)), validatedProtocolUUID($0.id))
             })
         if !unexpressed.isEmpty {
             logger.error(
                 "Security-group rules from a newer control plane could not be expressed as ACLs; they are NOT enforced",
                 metadata: ["ruleIds": .array(unexpressed.map { .string($0.uuidString) })])
             let unexpressedSet = Set(unexpressed)
-            for group in securityGroups where group.rules.contains(where: { unexpressedSet.contains($0.id) }) {
-                failedByGroup[group.id] = (
+            for group in securityGroups
+            where group.rules.values.contains(where: { unexpressedSet.contains(validatedProtocolUUID($0.id)) }) {
+                failedByGroup[validatedProtocolUUID(group.id)] = (
                     "One or more security-group rules cannot be expressed by this agent",
                     .permanent
                 )
@@ -877,33 +885,33 @@ extension SecurityGroupReconciler {
             }
         }
         let observations = securityGroups.map { group -> ObservedSecurityGroupState in
-            if failedByGroup[group.id] == nil, let globalFailure {
-                failedByGroup[group.id] = globalFailure
+            if failedByGroup[validatedProtocolUUID(group.id)] == nil, let globalFailure {
+                failedByGroup[validatedProtocolUUID(group.id)] = globalFailure
             }
-            if failedByGroup[group.id] == nil {
-                let name = OVNNaming.portGroupName(securityGroupId: group.id)
+            if failedByGroup[validatedProtocolUUID(group.id)] == nil {
+                let name = OVNNaming.portGroupName(securityGroupId: validatedProtocolUUID(group.id))
                 if let observed = finalByName[name],
                     let generation = observed.generation,
                     generation >= group.generation,
                     observed.builderRevision == SecurityGroupACLBuilder.aclSchemaRevision
                 {
                     return ObservedSecurityGroupState(
-                        id: group.id,
+                        id: validatedProtocolUUID(group.id),
                         observedGeneration: group.generation,
                         status: .active)
                 }
-                failedByGroup[group.id] = (
+                failedByGroup[validatedProtocolUUID(group.id)] = (
                     "The security-group port group is missing or has not reached the desired generation",
                     .transient
                 )
             }
-            let failure = failedByGroup[group.id]!
+            let failure = failedByGroup[validatedProtocolUUID(group.id)]!
             let observedGeneration =
                 finalByName[
-                    OVNNaming.portGroupName(securityGroupId: group.id)
+                    OVNNaming.portGroupName(securityGroupId: validatedProtocolUUID(group.id))
                 ]?.generation ?? 0
             return ObservedSecurityGroupState(
-                id: group.id,
+                id: validatedProtocolUUID(group.id),
                 observedGeneration: min(observedGeneration, max(0, group.generation - 1)),
                 status: .error,
                 lastError: failure.message,

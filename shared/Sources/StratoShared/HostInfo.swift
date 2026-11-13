@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 /// Descriptive hardware, platform, and OS details for a hypervisor host,
 /// gathered by the agent at registration and surfaced on the agent object for
@@ -10,41 +11,8 @@ import Foundation
 /// value the agent couldn't read stays `nil`), and the whole struct is absent
 /// for agents that registered before host-info reporting, so readers must
 /// tolerate missing pieces rather than assume a complete record.
-public struct HostInfo: Codable, Sendable, Equatable {
-    /// Human-readable OS product/distribution name including its version, e.g.
-    /// "Ubuntu 24.04.1 LTS" (from `/etc/os-release` `PRETTY_NAME`) or
-    /// "macOS 15.1".
-    public let osName: String?
-
-    /// Kernel release string (`uname -r`), e.g. "6.8.0-45-generic" on Linux or
-    /// the Darwin release "24.1.0" on macOS.
-    public let kernelVersion: String?
-
-    /// CPU brand/model string, e.g. "Apple M2 Pro" or
-    /// "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz".
-    public let cpuModel: String?
-
-    /// CPU vendor identifier, e.g. "GenuineIntel", "AuthenticAMD", or "Apple".
-    public let cpuVendor: String?
-
-    /// Number of physical CPU cores (distinct from `logicalCoreCount`, which
-    /// counts hardware threads / hyperthreads).
-    public let physicalCoreCount: Int?
-
-    /// Number of logical CPU cores (hardware threads) available to the host.
-    public let logicalCoreCount: Int?
-
-    /// Total physical memory on the host, in bytes.
-    public let totalMemoryBytes: Int64?
-
-    /// Machine/hardware model identifier, e.g. "MacBookPro18,3" (macOS
-    /// `hw.model`) or the DMI product name on Linux ("PowerEdge R650").
-    public let machineModel: String?
-
-    /// The instant the host last booted. A fixed point in time (unlike an
-    /// uptime duration, which goes stale the moment it's stored), so the UI can
-    /// render a live "up for N days" from it.
-    public let bootTime: Date?
+public typealias HostInfo = Strato_Agent_V1_HostInfo
+extension Strato_Agent_V1_HostInfo: Codable {
 
     public init(
         osName: String? = nil,
@@ -57,14 +25,49 @@ public struct HostInfo: Codable, Sendable, Equatable {
         machineModel: String? = nil,
         bootTime: Date? = nil
     ) {
-        self.osName = osName
-        self.kernelVersion = kernelVersion
-        self.cpuModel = cpuModel
-        self.cpuVendor = cpuVendor
-        self.physicalCoreCount = physicalCoreCount
-        self.logicalCoreCount = logicalCoreCount
-        self.totalMemoryBytes = totalMemoryBytes
-        self.machineModel = machineModel
-        self.bootTime = bootTime
+        self.init()
+        self._jsonOsName = osName
+        self._jsonKernelVersion = kernelVersion
+        self._jsonCpuModel = cpuModel
+        self._jsonCpuVendor = cpuVendor
+        self._jsonPhysicalCoreCount = physicalCoreCount
+        self._jsonLogicalCoreCount = logicalCoreCount
+        self._jsonTotalMemoryBytes = totalMemoryBytes
+        self._jsonMachineModel = machineModel
+        self._jsonBootTime = bootTime
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case osName; case kernelVersion; case cpuModel; case cpuVendor; case physicalCoreCount; case logicalCoreCount;
+        case totalMemoryBytes; case machineModel; case bootTime
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonOsName = try container.decodeIfPresent(String.self, forKey: .osName)
+        self._jsonKernelVersion = try container.decodeIfPresent(String.self, forKey: .kernelVersion)
+        self._jsonCpuModel = try container.decodeIfPresent(String.self, forKey: .cpuModel)
+        self._jsonCpuVendor = try container.decodeIfPresent(String.self, forKey: .cpuVendor)
+        self._jsonPhysicalCoreCount = try container.decodeIfPresent(Int.self, forKey: .physicalCoreCount)
+        self._jsonLogicalCoreCount = try container.decodeIfPresent(Int.self, forKey: .logicalCoreCount)
+        self._jsonTotalMemoryBytes = try container.decodeIfPresent(Int64.self, forKey: .totalMemoryBytes)
+        self._jsonMachineModel = try container.decodeIfPresent(String.self, forKey: .machineModel)
+        self._jsonBootTime = try container.decodeIfPresent(Date.self, forKey: .bootTime)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(_jsonOsName, forKey: .osName)
+        try container.encodeIfPresent(_jsonKernelVersion, forKey: .kernelVersion)
+        try container.encodeIfPresent(_jsonCpuModel, forKey: .cpuModel)
+        try container.encodeIfPresent(_jsonCpuVendor, forKey: .cpuVendor)
+        try container.encodeIfPresent(_jsonPhysicalCoreCount, forKey: .physicalCoreCount)
+        try container.encodeIfPresent(_jsonLogicalCoreCount, forKey: .logicalCoreCount)
+        try container.encodeIfPresent(_jsonTotalMemoryBytes, forKey: .totalMemoryBytes)
+        try container.encodeIfPresent(_jsonMachineModel, forKey: .machineModel)
+        try container.encodeIfPresent(_jsonBootTime, forKey: .bootTime)
+    }
+
 }

@@ -469,7 +469,7 @@ final class NetworkACLControllerTests {
                     totalMemory: 1 << 33, availableMemory: 1 << 33,
                     totalDisk: 1 << 39, availableDisk: 1 << 39),
                 networkCapability: .overlay,
-                protocolVersion: WireProtocol.currentVersion,
+                protocolOffer: .with { $0.major = UInt32(Int(AgentProtocolCompatibility.major)) },
                 dependencyObservations: [Self.healthyOverlayObservation()])
             let agentID = try await app.agentService.registerAgent(
                 registration, agentName: "nacl-controller", siteID: try site.requireID(),
@@ -480,15 +480,15 @@ final class NetworkACLControllerTests {
             let message = try await app.desiredStateAssembler.assemble(
                 agentId: agentID.uuidString)
             #expect(message.networksAuthoritative)
-            let byID = Dictionary(uniqueKeysWithValues: message.networks.map { ($0.networkId, $0) })
-            let desiredACLs = try #require(byID[networkID]?.networkACLs)
+            let byID = Dictionary(uniqueKeysWithValues: message.networks.values.map { ($0.networkID, $0) })
+            let desiredACLs = try #require(byID[networkID.uuidString]?.networkAcLs.values)
             #expect(desiredACLs.count == 1)
-            #expect(desiredACLs.first?.id == aclID)
+            #expect(desiredACLs.first?.id == aclID.uuidString)
             #expect(desiredACLs.first?.generation == 1)
             #expect(
-                desiredACLs.first?.rules.map { "\($0.direction):\($0.ruleNumber)" }
+                desiredACLs.first?.rules.values.map { "\($0.direction):\($0.ruleNumber)" }
                     == ["ingress:10", "ingress:200", "egress:20"])
-            #expect(byID[try noACL.requireID()]?.networkACLs == [])
+            #expect(byID[try noACL.requireID().uuidString]?.networkAcLs.values == [])
         }
     }
 }

@@ -42,20 +42,20 @@ struct ResourceEnforcementCaptureTests {
         let observed = ObservedVMState(vmId: id, status: .running, observedGeneration: 7)
         let captured = await agent.captureResourceEnforcement(observedVMs: [observed], observedSandboxes: [])
         let enforcement = try #require(captured.enforcement)
-        #expect(enforcement.inventoryComplete && enforcement.acknowledgements.isEmpty)
-        #expect(captured.resources.availableCPUMicroUnits == 8_000_000 - reservation.cpuMicroUnits)
-        #expect(captured.resources.memoryAccounting?.workloadEffectiveBytes == reservation.effectiveMemoryBytes)
+        #expect(enforcement.inventoryComplete && enforcement.acknowledgements.values.isEmpty)
+        #expect(captured.resources.availableCpuMicroUnits == 8_000_000 - reservation.cpuMicroUnits)
+        #expect(captured.resources.memoryAccounting.workloadEffectiveBytes == reservation.effectiveMemoryBytes)
         // A failed/in-progress retry withdraws the previous binding.
         await agent.resourceEnforcementWillConverge(item)
         #expect(await agent.enforcementApplicationCount() == 0)
         let failed = await agent.captureResourceEnforcement(observedVMs: [observed], observedSandboxes: [])
-        #expect(failed.enforcement?.acknowledgements.isEmpty == true)
+        #expect(failed.enforcement?.acknowledgements.values.isEmpty == true)
         #expect(failed.enforcement?.sequence == enforcement.sequence + 1)
         await agent.failEnforcementManifestPersistence()
         let incomplete = await agent.captureResourceEnforcement(observedVMs: [observed], observedSandboxes: [])
         #expect(incomplete.enforcement?.inventoryComplete == false)
-        #expect(incomplete.enforcement?.acknowledgements.isEmpty == true)
-        #expect(incomplete.resources.availableCPU == 0 && incomplete.resources.availableMemory == 0)
+        #expect(incomplete.enforcement?.acknowledgements.values.isEmpty == true)
+        #expect(incomplete.resources.availableCpu == 0 && incomplete.resources.availableMemory == 0)
         let restarted = Agent(
             agentID: "host", webSocketURL: "ws://localhost/agent/ws",
             configuration: runtimeTestConfiguration(
@@ -64,8 +64,8 @@ struct ResourceEnforcementCaptureTests {
         await restarted.prepareEnforcementCapture(id: id, spec: spec, backend: backend)
         let baseline = await restarted.captureResourceEnforcement(observedVMs: [observed], observedSandboxes: [])
         #expect(baseline.enforcement?.agentBootID != enforcement.agentBootID)
-        #expect(baseline.enforcement?.sequence == 0 && baseline.enforcement?.acknowledgements.isEmpty == true)
-        #expect(baseline.resources.memoryAccounting?.workloadEffectiveBytes == reservation.effectiveMemoryBytes)
+        #expect(baseline.enforcement?.sequence == 0 && baseline.enforcement?.acknowledgements.values.isEmpty == true)
+        #expect(baseline.resources.memoryAccounting.workloadEffectiveBytes == reservation.effectiveMemoryBytes)
         try await restarted.eventLoopGroup.shutdownGracefully()
         try await agent.eventLoopGroup.shutdownGracefully()
     }

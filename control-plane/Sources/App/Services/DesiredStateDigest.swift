@@ -1,6 +1,7 @@
 import Crypto
 import Foundation
 import StratoShared
+import SwiftProtobuf
 
 /// The ETag the desired-state long-poll serves (ADR 0001 stage 10): a
 /// SHA-256 over the assembled sync with its per-assembly noise normalized out.
@@ -56,14 +57,14 @@ enum DesiredStateDigest {
         // `200` carrying a fresh credential, and the parked case is precisely
         // the case where the agent has nothing to pull. The unconditional
         // re-fetch is the backstop for everything else.
-        ["sandboxes", "*", "registryCredential", "password"],
-        ["sandboxes", "*", "registryCredential", "expiresAt"],
+        ["sandboxes", "values", "*", "registryCredential", "password"],
+        ["sandboxes", "values", "*", "registryCredential", "expiresAt"],
         // The agent-update artifact link is re-resolved on every assembly and
         // may be presigned (`desiredAgentUpdateForSync`), so it churns on its
         // own. `sha256` stays and pins the artifact's identity far better than
         // a URL would, and `targetVersion` stays, so a real retarget is still a
         // change.
-        ["desiredAgentUpdate", "artifactURL"],
+        ["desiredAgentUpdate", "artifactUrl"],
     ]
 
     /// The ETag for `message`, as an opaque quoted token. Agents never compute
@@ -74,7 +75,7 @@ enum DesiredStateDigest {
 
     /// The bare hex digest, without ETag quoting. Exposed for tests.
     static func digest(of message: DesiredStateMessage) throws -> String {
-        let encoded = try WireProtocol.makeEncoder().encode(message)
+        let encoded = try message.jsonUTF8Data()
         guard var object = try JSONDecoder().decode(JSONValue.self, from: encoded).objectValue else {
             throw DigestError.notAnObject
         }

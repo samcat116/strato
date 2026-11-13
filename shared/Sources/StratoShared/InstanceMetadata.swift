@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 // MARK: - Instance Metadata
 
@@ -61,122 +62,11 @@ import Foundation
 /// agent serves exactly what the last sync said, with no fetch that can fail
 /// after a sync was applied. If the ceiling ever does need moving, the lever
 /// is an IMDS-specific limit below `maxBytes`, not a second transport.
-public struct InstanceMetadata: Codable, Sendable, Equatable {
-    /// The VM's id — the same UUID as `DesiredVMState.vmId`, restated here so a
-    /// renderer never has to reach outside the metadata it was handed.
-    public let instanceId: UUID
-    /// The VM's DNS label, when it has one — also the name it registers under
-    /// in its network's primary DNS zone (see `docs/architecture/dns.md`), so
-    /// the two must not drift.
-    ///
-    /// Optional because `VM.hostname` is (issue #770): VMs predating the column
-    /// have none, and nothing on this side may invent one. A slugified `name`
-    /// is precisely the lossy derivation the stored column exists to avoid, and
-    /// a hostname fabricated here would disagree with the zone — breaking the
-    /// no-drift invariant above in the one case it was written for. So the
-    /// renderer decides what an unset hostname looks like, exactly as with
-    /// `environment`, and a hostname-less VM still gets all the rest of this.
-    public let hostname: String?
-    /// The project owning the VM. Renderers expose it as the tenancy
-    /// identifier (EC2's account/owner slot); it is never an authorization
-    /// input — the IMDS serves whichever guest can reach it.
-    public let projectId: UUID
-    /// The VM's environment within its project (`production`, `staging`, ...),
-    /// when the project defines environments. Nil rather than the project's
-    /// default: the renderer decides what an unset environment looks like.
-    public let environment: String?
-    /// Placement, coarse: conventionally the VM's site name. One of the EC2
-    /// renderer's two placement keys.
-    ///
-    /// Populated here regardless of policy — whether a guest is *told* where it
-    /// runs is the renderer's call, not the model's, so that the decision lives
-    /// in one place instead of being baked into every assembler.
-    public let region: String?
-    /// Placement, fine: conventionally the name of the agent hosting the VM.
-    /// The other EC2 placement key, with the same disclosure caveat as
-    /// `region` — it names a specific host, so a renderer that emits it is
-    /// telling the guest which machine it shares.
-    public let availabilityZone: String?
-    /// The VM's NICs, in the order the control plane realized them (`net0`,
-    /// `net1`, ...). Empty for a VM with no interfaces; never partially
-    /// populated — a NIC the control plane knows about appears here even if the
-    /// guest has not configured it.
-    public let nics: [MetadataNIC]
-    /// SSH public keys to authorize for the guest's default user, the same set
-    /// carried on `VMSpec.sshAuthorizedKeys`. Duplicated deliberately: the spec
-    /// copy is what a *boot-time* provisioner consumes, this copy is what the
-    /// running guest can re-read after an operator rotates a key.
-    public let sshAuthorizedKeys: [String]
-    /// Caller-supplied cloud-init user data, verbatim and unvalidated beyond
-    /// what the create request already checked (see `CloudInitUserDataFormat`).
-    /// Nil when the caller supplied none — which is not the same as empty, and
-    /// renderers must keep the distinction: cloud-init treats a zero-length
-    /// user-data document as "provided, and does nothing".
-    public let userData: String?
-    /// Vendor data — Strato's own provisioning document, distinct from the
-    /// caller's `userData` so that platform config and tenant config never
-    /// have to be merged into one payload (cloud-init consumes them as
-    /// separate sources with separate precedence). Nil when the platform has
-    /// nothing to say.
-    public let vendorData: String?
-    /// Nil disables the Strato root daemon bootstrap; a release tag pins first-boot installation.
-    public let guestAgentRelease: String?
-    /// Free-form key/value labels from the VM's tags. Ordinary metadata, not
-    /// identity: nothing may authorize on a tag, because a guest reads its own
-    /// tags and an operator can set them to anything.
-    public let tags: [String: String]
-    /// How, and whether, the IMDS may vend this instance a SPIFFE identity
-    /// (phase 3). Nil means it may not — the conservative reading, and the one
-    /// every VM gets until identity ships.
-    public let identity: IdentityPolicy?
-
-    /// The per-VM capability carried by an IMDS-backed NoCloud seed URL.
-    ///
-    /// Stock NoCloud follows `seedfrom` with ordinary GETs and cannot perform
-    /// the IMDSv2 token handshake. This value lets the agent authenticate only
-    /// those three bootstrap document reads without weakening the ordinary
-    /// `/latest/*` tree. It is deliberately not rendered into any metadata
-    /// document; the agent copies it only into the VM's local seed ISO.
-    ///
-    /// Nil for an ISO-backed VM and for desired-state payloads produced before
-    /// STR-64. Although it rides the durable desired-state snapshot so agent
-    /// restarts do not invalidate an already-created ISO, it is a credential:
-    /// callers must never log this value or the seed URL containing it.
-    public let noCloudSeedToken: UUID?
-
-    /// Whether the metadata service answers this instance at all — Strato's
-    /// per-instance kill switch, `VM.metadataEnabled`, and the equivalent of
-    /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
-    ///
-    /// Distinct from `NetworkSpec.metadataEnabled` / `DesiredNetworkState`'s,
-    /// which is per **network** and decides whether the link-local endpoint is
-    /// published on that switch at all. The two compose as an AND from the
-    /// guest's side, and neither is derived from the other: the network switch
-    /// is realized by the localport, this one by the listener refusing the
-    /// caller and by an ACL that denies its port the address.
-    ///
-    /// ## Why it lives on the document rather than beside it
-    ///
-    /// It could as easily have been a sibling of `metadata` on `DesiredVMState`.
-    /// Carrying it *inside* buys two things that separate fields cannot:
-    ///
-    /// - **It cannot drift from the payload it governs.** The agent's store,
-    ///   its durable copy and the snapshot pushed to a listener all move one
-    ///   value, so there is no second field to arrive late, be dropped by an
-    ///   older persisted record, or survive a restore without its policy.
-    /// - **It survives the fail-static path.** `MetadataStore` restores what the
-    ///   last sync said when the control plane is unreachable. A policy stored
-    ///   anywhere but next to the document would be the one thing that restore
-    ///   did not bring back — and an agent that comes up serving a VM its
-    ///   operator switched off is the exact failure this field exists to
-    ///   prevent.
-    ///
-    /// It is never rendered into a document: a disabled service publishes
-    /// nothing, so there is nothing for a guest to read this out of.
-    public let serviceEnabled: Bool
+public typealias InstanceMetadata = Strato_Agent_V1_InstanceMetadata
+extension Strato_Agent_V1_InstanceMetadata: Codable {
 
     /// Whether the service should answer this instance.
-    public var isServiceEnabled: Bool { serviceEnabled }
+    public var isServiceEnabled: Bool { _jsonServiceEnabled }
 
     public init(
         instanceId: UUID,
@@ -195,21 +85,22 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         noCloudSeedToken: UUID? = nil,
         serviceEnabled: Bool
     ) {
-        self.instanceId = instanceId
-        self.hostname = hostname
-        self.projectId = projectId
-        self.environment = environment
-        self.region = region
-        self.availabilityZone = availabilityZone
-        self.nics = nics
-        self.sshAuthorizedKeys = sshAuthorizedKeys
-        self.userData = userData
-        self.vendorData = vendorData
-        self.guestAgentRelease = guestAgentRelease
-        self.tags = tags
-        self.identity = identity
-        self.noCloudSeedToken = noCloudSeedToken
-        self.serviceEnabled = serviceEnabled
+        self.init()
+        self._jsonInstanceId = instanceId
+        self._jsonHostname = hostname
+        self._jsonProjectId = projectId
+        self._jsonEnvironment = environment
+        self._jsonRegion = region
+        self._jsonAvailabilityZone = availabilityZone
+        self._jsonNics = nics
+        self._jsonSshAuthorizedKeys = sshAuthorizedKeys
+        self._jsonUserData = userData
+        self._jsonVendorData = vendorData
+        self._jsonGuestAgentRelease = guestAgentRelease
+        self._jsonTags = tags
+        self._jsonIdentity = identity
+        self._jsonNoCloudSeedToken = noCloudSeedToken
+        self._jsonServiceEnabled = serviceEnabled
     }
 
     // Custom decode so the collections tolerate absence, matching `VMSpec`:
@@ -220,24 +111,52 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     // The identity fields and service policy are required current-contract
     // invariants. A missing service policy must fail the sync instead of
     // silently enabling metadata for a VM whose operator disabled it.
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        instanceId = try c.decode(UUID.self, forKey: .instanceId)
-        hostname = try c.decodeIfPresent(String.self, forKey: .hostname)
-        projectId = try c.decode(UUID.self, forKey: .projectId)
-        environment = try c.decodeIfPresent(String.self, forKey: .environment)
-        region = try c.decodeIfPresent(String.self, forKey: .region)
-        availabilityZone = try c.decodeIfPresent(String.self, forKey: .availabilityZone)
-        nics = try c.decodeIfPresent([MetadataNIC].self, forKey: .nics) ?? []
-        sshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
-        userData = try c.decodeIfPresent(String.self, forKey: .userData)
-        vendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
-        guestAgentRelease = try c.decodeIfPresent(String.self, forKey: .guestAgentRelease)
-        tags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
-        identity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
-        noCloudSeedToken = try c.decodeIfPresent(UUID.self, forKey: .noCloudSeedToken)
-        serviceEnabled = try c.decode(Bool.self, forKey: .serviceEnabled)
+        _jsonInstanceId = try c.decode(UUID.self, forKey: .instanceId)
+        _jsonHostname = try c.decodeIfPresent(String.self, forKey: .hostname)
+        _jsonProjectId = try c.decode(UUID.self, forKey: .projectId)
+        _jsonEnvironment = try c.decodeIfPresent(String.self, forKey: .environment)
+        _jsonRegion = try c.decodeIfPresent(String.self, forKey: .region)
+        _jsonAvailabilityZone = try c.decodeIfPresent(String.self, forKey: .availabilityZone)
+        _jsonNics = try c.decodeIfPresent([MetadataNIC].self, forKey: .nics) ?? []
+        _jsonSshAuthorizedKeys = try c.decodeIfPresent([String].self, forKey: .sshAuthorizedKeys) ?? []
+        _jsonUserData = try c.decodeIfPresent(String.self, forKey: .userData)
+        _jsonVendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
+        _jsonGuestAgentRelease = try c.decodeIfPresent(String.self, forKey: .guestAgentRelease)
+        _jsonTags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
+        _jsonIdentity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
+        _jsonNoCloudSeedToken = try c.decodeIfPresent(UUID.self, forKey: .noCloudSeedToken)
+        _jsonServiceEnabled = try c.decode(Bool.self, forKey: .serviceEnabled)
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case instanceId; case hostname; case projectId; case environment; case region; case availabilityZone; case nics;
+        case sshAuthorizedKeys; case userData; case vendorData; case guestAgentRelease; case tags; case identity;
+        case noCloudSeedToken; case serviceEnabled
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonInstanceId, forKey: .instanceId)
+        try container.encodeIfPresent(_jsonHostname, forKey: .hostname)
+        try container.encode(_jsonProjectId, forKey: .projectId)
+        try container.encodeIfPresent(_jsonEnvironment, forKey: .environment)
+        try container.encodeIfPresent(_jsonRegion, forKey: .region)
+        try container.encodeIfPresent(_jsonAvailabilityZone, forKey: .availabilityZone)
+        try container.encode(_jsonNics, forKey: .nics)
+        try container.encode(_jsonSshAuthorizedKeys, forKey: .sshAuthorizedKeys)
+        try container.encodeIfPresent(_jsonUserData, forKey: .userData)
+        try container.encodeIfPresent(_jsonVendorData, forKey: .vendorData)
+        try container.encodeIfPresent(_jsonGuestAgentRelease, forKey: .guestAgentRelease)
+        try container.encode(_jsonTags, forKey: .tags)
+        try container.encodeIfPresent(_jsonIdentity, forKey: .identity)
+        try container.encodeIfPresent(_jsonNoCloudSeedToken, forKey: .noCloudSeedToken)
+        try container.encode(_jsonServiceEnabled, forKey: .serviceEnabled)
+    }
+
 }
 
 // MARK: - Metadata NIC
@@ -254,55 +173,8 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
 /// netmask, because that is the form both renderer targets want — cloud-init's
 /// network-config v2 (`addresses: [10.0.0.5/24]`) and EC2's CIDR-block keys.
 /// The dotted form is derivable; the reverse needs a validity check.
-public struct MetadataNIC: Codable, Sendable, Equatable {
-    /// Stable device name (`net0`, `net1`, ...) from the interface's
-    /// `deviceName`, ordered by `orderIndex`. Stable across reboots and
-    /// re-realization, which the guest-visible kernel name is not.
-    public let deviceName: String
-    /// The NIC's MAC address. The EC2 renderer keys its whole interface tree on
-    /// this (`network/interfaces/macs/<mac>/`), and it is how a guest matches an
-    /// entry here to one of its own links.
-    public let macAddress: String
-    /// The logical network the NIC attaches to.
-    public let networkId: UUID
-    /// The network's name — a human label for the guest, exactly as on
-    /// `NetworkSpec.network`. Names are unique only within a project, so
-    /// nothing may key on it.
-    public let networkName: String
-    /// The allocated IPv4 address, or nil on a NIC with no v4 assignment.
-    public let ipAddress: String?
-    /// Prefix length of `ipAddress` within its subnet (24 for a /24).
-    public let prefixLength: Int?
-    /// The network's IPv4 gateway, when it has L3.
-    public let gateway: String?
-    /// The allocated IPv6 address in canonical RFC 5952 form, on a dual-stack
-    /// network.
-    public let ipv6Address: String?
-    /// Prefix length of `ipv6Address` (64 for tenant networks).
-    public let ipv6PrefixLength: Int?
-    /// The network's IPv6 gateway, when dual-stack.
-    public let gateway6: String?
-    /// Link MTU, when the network sets one.
-    public let mtu: Int?
-    /// Resolvers for this NIC's network; may be mixed-family, like
-    /// `DesiredNetworkState.dnsServers`. Carried because the IMDS has to be
-    /// able to tell a guest everything the seed ISO's static network config
-    /// used to, on networks where DHCP is off.
-    public let dnsServers: [String]
-    /// DNS search domain for this NIC's network, when set.
-    public let domainName: String?
-    /// Whether this NIC should ask the network's DHCP responder for its guest
-    /// configuration. The NoCloud-net renderer needs the same decision the
-    /// seed ISO renderer receives on `NetworkSpec`; an allocated address alone
-    /// cannot distinguish DHCP from static configuration.
-    public let dhcpEnabled: Bool
-    /// Whether this NIC's network publishes the link-local metadata endpoint.
-    /// Used only to render the on-link routes the existing seed ISO carries.
-    public let metadataEnabled: Bool
-    /// This network's link-local resolver addresses, or an empty list when the
-    /// resolver is unavailable. When present these replace `dnsServers` in
-    /// static guest configuration, exactly as in the seed ISO renderer.
-    public let resolverAddresses: [String]
+public typealias MetadataNIC = Strato_Agent_V1_MetadataNIC
+extension Strato_Agent_V1_MetadataNIC: Codable {
 
     public init(
         deviceName: String,
@@ -322,46 +194,75 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
         metadataEnabled: Bool = false,
         resolverAddresses: [String] = []
     ) {
-        self.deviceName = deviceName
-        self.macAddress = macAddress
-        self.networkId = networkId
-        self.networkName = networkName
-        self.ipAddress = ipAddress
-        self.prefixLength = prefixLength
-        self.gateway = gateway
-        self.ipv6Address = ipv6Address
-        self.ipv6PrefixLength = ipv6PrefixLength
-        self.gateway6 = gateway6
-        self.mtu = mtu
-        self.dnsServers = dnsServers
-        self.domainName = domainName
-        self.dhcpEnabled = dhcpEnabled
-        self.metadataEnabled = metadataEnabled
-        self.resolverAddresses = resolverAddresses
+        self.init()
+        self._jsonDeviceName = deviceName
+        self._jsonMacAddress = macAddress
+        self._jsonNetworkId = networkId
+        self._jsonNetworkName = networkName
+        self._jsonIpAddress = ipAddress
+        self._jsonPrefixLength = prefixLength
+        self._jsonGateway = gateway
+        self._jsonIpv6Address = ipv6Address
+        self._jsonIpv6PrefixLength = ipv6PrefixLength
+        self._jsonGateway6 = gateway6
+        self._jsonMtu = mtu
+        self._jsonDnsServers = dnsServers
+        self._jsonDomainName = domainName
+        self._jsonDhcpEnabled = dhcpEnabled
+        self._jsonMetadataEnabled = metadataEnabled
+        self._jsonResolverAddresses = resolverAddresses
     }
 
     // `dnsServers` tolerates absence for the same reason the collections on
     // `InstanceMetadata` do — a sender with nothing to put in a list may omit
     // it rather than fail the receiving agent's whole sync. Everything else is
     // either identifying (and required) or already `Optional`.
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        deviceName = try c.decode(String.self, forKey: .deviceName)
-        macAddress = try c.decode(String.self, forKey: .macAddress)
-        networkId = try c.decode(UUID.self, forKey: .networkId)
-        networkName = try c.decode(String.self, forKey: .networkName)
-        ipAddress = try c.decodeIfPresent(String.self, forKey: .ipAddress)
-        prefixLength = try c.decodeIfPresent(Int.self, forKey: .prefixLength)
-        gateway = try c.decodeIfPresent(String.self, forKey: .gateway)
-        ipv6Address = try c.decodeIfPresent(String.self, forKey: .ipv6Address)
-        ipv6PrefixLength = try c.decodeIfPresent(Int.self, forKey: .ipv6PrefixLength)
-        gateway6 = try c.decodeIfPresent(String.self, forKey: .gateway6)
-        mtu = try c.decodeIfPresent(Int.self, forKey: .mtu)
-        dnsServers = try c.decodeIfPresent([String].self, forKey: .dnsServers) ?? []
-        domainName = try c.decodeIfPresent(String.self, forKey: .domainName)
-        dhcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .dhcpEnabled) ?? false
-        metadataEnabled = try c.decodeIfPresent(Bool.self, forKey: .metadataEnabled) ?? false
-        resolverAddresses = try c.decodeIfPresent([String].self, forKey: .resolverAddresses) ?? []
+        _jsonDeviceName = try c.decode(String.self, forKey: .deviceName)
+        _jsonMacAddress = try c.decode(String.self, forKey: .macAddress)
+        _jsonNetworkId = try c.decode(UUID.self, forKey: .networkId)
+        _jsonNetworkName = try c.decode(String.self, forKey: .networkName)
+        _jsonIpAddress = try c.decodeIfPresent(String.self, forKey: .ipAddress)
+        _jsonPrefixLength = try c.decodeIfPresent(Int.self, forKey: .prefixLength)
+        _jsonGateway = try c.decodeIfPresent(String.self, forKey: .gateway)
+        _jsonIpv6Address = try c.decodeIfPresent(String.self, forKey: .ipv6Address)
+        _jsonIpv6PrefixLength = try c.decodeIfPresent(Int.self, forKey: .ipv6PrefixLength)
+        _jsonGateway6 = try c.decodeIfPresent(String.self, forKey: .gateway6)
+        _jsonMtu = try c.decodeIfPresent(Int.self, forKey: .mtu)
+        _jsonDnsServers = try c.decodeIfPresent([String].self, forKey: .dnsServers) ?? []
+        _jsonDomainName = try c.decodeIfPresent(String.self, forKey: .domainName)
+        _jsonDhcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .dhcpEnabled) ?? false
+        _jsonMetadataEnabled = try c.decodeIfPresent(Bool.self, forKey: .metadataEnabled) ?? false
+        _jsonResolverAddresses = try c.decodeIfPresent([String].self, forKey: .resolverAddresses) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceName; case macAddress; case networkId; case networkName; case ipAddress; case prefixLength;
+        case gateway; case ipv6Address; case ipv6PrefixLength; case gateway6; case mtu; case dnsServers;
+        case domainName; case dhcpEnabled; case metadataEnabled; case resolverAddresses
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonDeviceName, forKey: .deviceName)
+        try container.encode(_jsonMacAddress, forKey: .macAddress)
+        try container.encode(_jsonNetworkId, forKey: .networkId)
+        try container.encode(_jsonNetworkName, forKey: .networkName)
+        try container.encodeIfPresent(_jsonIpAddress, forKey: .ipAddress)
+        try container.encodeIfPresent(_jsonPrefixLength, forKey: .prefixLength)
+        try container.encodeIfPresent(_jsonGateway, forKey: .gateway)
+        try container.encodeIfPresent(_jsonIpv6Address, forKey: .ipv6Address)
+        try container.encodeIfPresent(_jsonIpv6PrefixLength, forKey: .ipv6PrefixLength)
+        try container.encodeIfPresent(_jsonGateway6, forKey: .gateway6)
+        try container.encodeIfPresent(_jsonMtu, forKey: .mtu)
+        try container.encode(_jsonDnsServers, forKey: .dnsServers)
+        try container.encodeIfPresent(_jsonDomainName, forKey: .domainName)
+        try container.encode(_jsonDhcpEnabled, forKey: .dhcpEnabled)
+        try container.encode(_jsonMetadataEnabled, forKey: .metadataEnabled)
+        try container.encode(_jsonResolverAddresses, forKey: .resolverAddresses)
     }
 
 }
@@ -380,34 +281,35 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
 ///
 /// Nil on `InstanceMetadata` is the conservative reading and the only one
 /// available today: no identity is vended.
-public struct IdentityPolicy: Codable, Sendable, Equatable {
-    /// The SPIFFE ID the instance may be issued documents for:
-    /// `spiffe://<trust-domain>/vm/<vm-uuid>`, the key the VM's workload
-    /// registration is filed under (STR-55). Authored by the control plane; the
-    /// agent never derives or extends it.
-    public let spiffeId: String
-    /// Audiences the IMDS may mint JWT-SVIDs for. Empty means none — a guest
-    /// asking for an audience outside this list is refused rather than served
-    /// a token nothing will accept.
-    public let audiences: [String]
-    /// Upper bound, in seconds, on the lifetime of a document handed to the
-    /// guest. Nil defers to the issuer's own default rather than meaning
-    /// "unbounded"; an identity document with no expiry is never the intent.
-    public let ttlSeconds: Int?
+public typealias IdentityPolicy = Strato_Agent_V1_IdentityPolicy
+extension Strato_Agent_V1_IdentityPolicy: Codable {
 
     public init(spiffeId: String, audiences: [String] = [], ttlSeconds: Int? = nil) {
-        self.spiffeId = spiffeId
-        self.audiences = audiences
-        self.ttlSeconds = ttlSeconds
+        self.init()
+        self._jsonSpiffeId = spiffeId
+        self._jsonAudiences = audiences
+        self._jsonTtlSeconds = ttlSeconds
     }
 
     // Tolerates an absent `audiences`, matching the rest of the metadata
     // collections; `spiffeId` stays required, since a policy that names no
     // identity authorizes nothing.
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        spiffeId = try c.decode(String.self, forKey: .spiffeId)
-        audiences = try c.decodeIfPresent([String].self, forKey: .audiences) ?? []
-        ttlSeconds = try c.decodeIfPresent(Int.self, forKey: .ttlSeconds)
+        _jsonSpiffeId = try c.decode(String.self, forKey: .spiffeId)
+        _jsonAudiences = try c.decodeIfPresent([String].self, forKey: .audiences) ?? []
+        _jsonTtlSeconds = try c.decodeIfPresent(Int.self, forKey: .ttlSeconds)
     }
+
+    private enum CodingKeys: String, CodingKey { case spiffeId; case audiences; case ttlSeconds }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonSpiffeId, forKey: .spiffeId)
+        try container.encode(_jsonAudiences, forKey: .audiences)
+        try container.encodeIfPresent(_jsonTtlSeconds, forKey: .ttlSeconds)
+    }
+
 }

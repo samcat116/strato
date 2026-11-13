@@ -78,14 +78,17 @@ struct CurrentSchemaBaselineTests {
             let upgradedCounts = try await catalogCounts(on: app.db)
 
             #expect(baselineMD5 == Self.expectedCatalogMD5)
-            // Keep the reviewed historical catalog independent of the pool cleanup.
+            // Keep reviewed historical catalogs independent of later protocol metadata.
+            let protocolSupport = AddAgentProtocolSupport()
+            try await protocolSupport.revert(on: app.db)
             let poolCleanup = RemoveReservedStoragePoolConfiguration()
             try await poolCleanup.revert(on: app.db)
             #expect(try await catalogMD5(on: app.db) == Self.expectedPrePoolCleanupCatalogMD5)
             try await poolCleanup.prepare(on: app.db)
+            try await protocolSupport.prepare(on: app.db)
             #expect(try await catalogMD5(on: app.db) == upgradedMD5)
             #expect(upgradedCounts.tables == 85)
-            #expect(upgradedCounts.columns == 1097)
+            #expect(upgradedCounts.columns == 1100)
             #expect(upgradedCounts.constraints == 391)
             #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
@@ -105,6 +108,7 @@ struct CurrentSchemaBaselineTests {
     @Test("The Apple backend constraint is the only change from the reviewed pre-Apple catalog")
     func appleBackendCatalogRoundTrip() async throws {
         try await withTestApp { app in
+            try await AddAgentProtocolSupport().revert(on: app.db)
             try await RemoveReservedStoragePoolConfiguration().revert(on: app.db)
             let migration = AddAppleVirtualizationBackend()
             #expect(try await self.catalogMD5(on: app.db) == Self.expectedPrePoolCleanupCatalogMD5)
@@ -118,7 +122,8 @@ struct CurrentSchemaBaselineTests {
     @Test("Update verification migration round trips without rewriting existing assignments")
     func updateHealthMigrationRoundTrip() async throws {
         try await withTestApp { app in
-            // This historical fixture predates the pool cleanup and Apple backend constraint.
+            // This historical fixture predates protocol metadata, pool cleanup, and the Apple backend constraint.
+            try await AddAgentProtocolSupport().revert(on: app.db)
             try await RemoveReservedStoragePoolConfiguration().revert(on: app.db)
             try await AddAppleVirtualizationBackend().revert(on: app.db)
             let migration = AddAgentUpdateHealthVerification()

@@ -81,7 +81,7 @@ public struct HypervisorReservationInventory: Sendable, Equatable {
         for (id, raw) in exact {
             rawTotal = rawTotal.addingSaturating(raw)
             let commitment: HostReservation
-            if let grant = admitted[id], raw.cpus <= grant.grantedCPUs,
+            if let grant = admitted[id], raw.cpus <= grant.grantedCpUs,
                 raw.memoryBytes
                     <= WorkloadMemoryReservation(
                         guestBytes: grant.guestCommitmentBytes, backendOverheadBytes: grant.backendOverheadBytes
@@ -424,16 +424,17 @@ public enum VMHostReservation {
         _ spec: VMSpec, hypervisorType: HypervisorType, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
-        if spec.resourceClass?.policy.kind == .burstable, let admitted = spec.admittedReservation {
+        if spec.hasResourceClass, spec.resourceClass.policy.kind == .burstable, spec.hasAdmittedReservation {
+            let admitted = spec.admittedReservation
             return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
         }
         let memory = WorkloadMemoryReservation.vm(
             memoryBytes: spec.memoryBytes, maxMemoryBytes: spec.maxMemoryBytes,
             hypervisorType: hypervisorType, architecture: architecture, qemuOverheadBytes: qemuOverheadBytes)
-        let policy = spec.resourceClass?.policy ?? .guaranteed
+        let policy = spec.hasResourceClass ? spec.resourceClass.policy : .guaranteed
         return HostReservation(
             memoryBytes: policy.memoryReservation(memory).effectiveBytes,
-            cpuMicroUnits: policy.cpuMicroUnits(cpus: spec.cpus))
+            cpuMicroUnits: policy.cpuMicroUnits(cpus: Int(spec.cpus)))
     }
 
     /// Reservation carried by the durable manifest. A QEMU entry written by a
@@ -445,7 +446,9 @@ public enum VMHostReservation {
         _ entry: VMManifestEntry, architecture: CPUArchitecture,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) -> HostReservation {
-        if entry.spec.resourceClass?.policy.kind == .burstable, entry.spec.admittedReservation != nil {
+        if entry.spec.hasResourceClass, entry.spec.resourceClass.policy.kind == .burstable,
+            entry.spec.hasAdmittedReservation
+        {
             return forSpec(
                 entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture,
                 qemuOverheadBytes: qemuOverheadBytes)
@@ -458,7 +461,7 @@ public enum VMHostReservation {
         let legacyReservation = max(entry.spec.memoryBytes, entry.spec.maxMemoryBytes)
         let fixedReservation = entry.realizedMemoryReservationBytes ?? legacyReservation
         return HostReservation(
-            cpus: entry.spec.cpus,
+            cpus: Int(entry.spec.cpus),
             memoryBytes: WorkloadMemoryReservation(
                 guestBytes: max(entry.spec.memoryBytes, fixedReservation),
                 backendOverheadBytes: qemuOverheadBytes
@@ -473,7 +476,7 @@ public enum SandboxHostReservation {
     public static func forManifestEntry(_ entry: VMManifestEntry) -> HostReservation {
         let base =
             entry.sandboxSpec.map(forSpec)
-            ?? HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes)
+            ?? HostReservation(cpus: Int(entry.spec.cpus), memoryBytes: entry.spec.memoryBytes)
         guard let record = entry.sandboxSuspension else { return base }
         var disk = max(record.checkpointBytes, record.storageReservationBytes ?? 0)
         if [.restoring, .resuming, .resumed].contains(record.phase) {
@@ -497,12 +500,13 @@ public enum SandboxHostReservation {
     }
 
     public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
-        if spec.resourceClass?.policy.kind == .burstable, let admitted = spec.admittedReservation {
+        if spec.hasResourceClass, spec.resourceClass.policy.kind == .burstable, spec.hasAdmittedReservation {
+            let admitted = spec.admittedReservation
             return HostReservation(memoryBytes: admitted.effectiveMemoryBytes, cpuMicroUnits: admitted.cpuMicroUnits)
         }
-        let policy = spec.resourceClass?.policy ?? .guaranteed
+        let policy = spec.hasResourceClass ? spec.resourceClass.policy : .guaranteed
         return HostReservation(
             memoryBytes: policy.memoryReservation(.sandbox(memoryBytes: spec.memoryBytes)).effectiveBytes,
-            cpuMicroUnits: policy.cpuMicroUnits(cpus: spec.cpus))
+            cpuMicroUnits: policy.cpuMicroUnits(cpus: Int(spec.cpus)))
     }
 }

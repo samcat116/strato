@@ -70,7 +70,7 @@ struct ResourceEnforcementProducerTests {
         let app = try application()
         let valid = ObservedVMState(vmId: key.id, status: .running, observedGeneration: app.generation)
         #expect(ResourceEnforcementProducer.canAcknowledge(valid, application: app))
-        for status in VMStatus.allCases where status != .running {
+        for status in VMStatus.knownCases where status != .running {
             #expect(
                 !ResourceEnforcementProducer.canAcknowledge(
                     ObservedVMState(vmId: key.id, status: status, observedGeneration: app.generation), application: app)
@@ -101,7 +101,7 @@ struct ResourceEnforcementProducerTests {
         let app = try application(key: sandboxKey)
         let valid = ObservedSandboxState(sandboxId: key.id, status: .running, observedGeneration: app.generation)
         #expect(ResourceEnforcementProducer.canAcknowledge(valid, application: app))
-        for status in SandboxStatus.allCases where status != .running {
+        for status in SandboxStatus.knownCases where status != .running {
             #expect(
                 !ResourceEnforcementProducer.canAcknowledge(
                     ObservedSandboxState(sandboxId: key.id, status: status, observedGeneration: app.generation),
@@ -128,6 +128,21 @@ struct ResourceEnforcementProducerTests {
         #expect(!ResourceEnforcementProducer.canAcknowledge(valid, application: try application()))
     }
 
+    @Test("An absent negative limit observation cannot authorize enforcement")
+    func missingLimitFlagIsNotFalse() throws {
+        let application = try application()
+        let complete = try evidence(application)
+        let encoded = try WireProtocol.makeEncoder().encode(complete)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["memoryHighUnlimited"] = ["availability": "unavailable"]
+        let incomplete = try WireProtocol.makeDecoder().decode(
+            WorkloadResourceLimitsEvidence.self, from: JSONSerialization.data(withJSONObject: object))
+        var producer = ResourceEnforcementProducer()
+        producer.begin(key, generation: application.generation)
+        producer.succeeded(application)
+        #expect(try finish(&producer, application, evidence: incomplete).acknowledgements.values.isEmpty)
+    }
+
     @Test("successful convergence binds the complete canonical footprint to the same net accounting snapshot")
     func positive() throws {
         var producer = ResourceEnforcementProducer()
@@ -135,7 +150,7 @@ struct ResourceEnforcementProducerTests {
         producer.begin(key, generation: application.generation)
         producer.succeeded(application)
         let snapshot = try finish(&producer, application, evidence: evidence(application))
-        let ack = try #require(snapshot.acknowledgements.first)
+        let ack = try #require(snapshot.acknowledgements.values.first)
         #expect(snapshot.inventoryComplete && snapshot.sequence == 0)
         #expect(ack.appliedGeneration == application.generation && ack.resourceClass == application.resourceClass)
         #expect(ack.accountedReservation == application.reservation && ack.runtimeGuestBytes == application.guestBytes)
@@ -162,7 +177,7 @@ struct ResourceEnforcementProducerTests {
             var producer = ResourceEnforcementProducer()
             producer.begin(key, generation: application.generation)
             producer.succeeded(application)
-            #expect(try finish(&producer, application, evidence: sample).acknowledgements.isEmpty)
+            #expect(try finish(&producer, application, evidence: sample).acknowledgements.values.isEmpty)
         }
     }
     @Test("incomplete inventory and CPU or memory footprint mismatches retain claims")
@@ -173,9 +188,9 @@ struct ResourceEnforcementProducerTests {
         producer.succeeded(application)
         let evidence = try evidence(application)
         let unknown = try finish(&producer, application, evidence: evidence, inventory: false)
-        #expect(!unknown.inventoryComplete && unknown.acknowledgements.isEmpty)
-        #expect(try finish(&producer, application, evidence: evidence, memoryDelta: 1).acknowledgements.isEmpty)
-        #expect(try finish(&producer, application, evidence: evidence, cpuDelta: 1).acknowledgements.isEmpty)
+        #expect(!unknown.inventoryComplete && unknown.acknowledgements.values.isEmpty)
+        #expect(try finish(&producer, application, evidence: evidence, memoryDelta: 1).acknowledgements.values.isEmpty)
+        #expect(try finish(&producer, application, evidence: evidence, cpuDelta: 1).acknowledgements.values.isEmpty)
     }
     @Test("accounting or application mutation across asynchronous readback discards the capture")
     func captureFences() throws {
@@ -200,7 +215,7 @@ struct ResourceEnforcementProducerTests {
                 token, before: raw, after: raw, ledgerRevisionBefore: 0, ledgerRevisionAfter: 0,
                 inventoryStable: true, evidence: samples, sampledAt: Date(), pageSize: 4096) == nil)
         producer.succeeded(application)  // stale completion cannot certify the new target.
-        #expect(try finish(&producer, application, evidence: samples[key]).acknowledgements.isEmpty)
+        #expect(try finish(&producer, application, evidence: samples[key]).acknowledgements.values.isEmpty)
     }
     @Test("report sequences advance; restart and failed retries require new successful convergence")
     func replayRestart() throws {
@@ -213,14 +228,14 @@ struct ResourceEnforcementProducerTests {
         let second = try finish(&producer, application, evidence: sample)
         #expect(first.agentBootID == second.agentBootID && second.sequence == first.sequence + 1)
         producer.begin(key, generation: application.generation)
-        #expect(try finish(&producer, application, evidence: sample).acknowledgements.isEmpty)
+        #expect(try finish(&producer, application, evidence: sample).acknowledgements.values.isEmpty)
         producer = ResourceEnforcementProducer()
-        #expect(producer.agentBootID != first.agentBootID)
+        #expect(producer.agentBootID.uuidString != first.agentBootID)
         producer.succeeded(application)  // manifests/readback alone are not adoption.
         let restarted = try finish(&producer, application, evidence: sample)
-        #expect(restarted.sequence == 0 && restarted.acknowledgements.isEmpty)
+        #expect(restarted.sequence == 0 && restarted.acknowledgements.values.isEmpty)
         producer.begin(key, generation: application.generation)
         producer.succeeded(application)
-        #expect(try finish(&producer, application, evidence: sample).acknowledgements.count == 1)
+        #expect(try finish(&producer, application, evidence: sample).acknowledgements.values.count == 1)
     }
 }

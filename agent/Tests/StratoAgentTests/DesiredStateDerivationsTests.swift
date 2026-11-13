@@ -11,7 +11,7 @@ struct DesiredStateDerivationsTests {
     private let group = UUID(uuidString: "00000000-0000-0000-0000-00000000000c")!
 
     @Test("Sandbox memberships and metadata networks are projected once")
-    func membershipsAndMetadata() {
+    func membershipsAndMetadata() throws {
         let message = DesiredStateMessage(
             vms: [],
             sandboxes: [
@@ -30,7 +30,7 @@ struct DesiredStateDerivationsTests {
                         network: "b-copy", networkId: networkB, metadataEnabled: true)),
             ])
 
-        let result = DesiredStateDerivations(message: message)
+        let result = try DesiredStateDerivations(message: message)
 
         #expect(result.metadataNetworkIDs == [networkA, networkB])
         #expect(result.portMemberships.count == 3)
@@ -42,7 +42,7 @@ struct DesiredStateDerivationsTests {
     }
 
     @Test("An absent resolver opinion stays absent")
-    func absentResolverOpinion() {
+    func absentResolverOpinion() throws {
         let message = DesiredStateMessage(
             vms: [],
             sandboxes: [
@@ -51,12 +51,12 @@ struct DesiredStateDerivationsTests {
                     network: NetworkSpec(network: "a", networkId: networkA))
             ])
 
-        #expect(DesiredStateDerivations(message: message).resolverNetworks == nil)
-        #expect(DesiredStateDerivations(message: DesiredStateMessage(vms: [])).resolverNetworks == [])
+        #expect(try DesiredStateDerivations(message: message).resolverNetworks == nil)
+        #expect(try DesiredStateDerivations(message: DesiredStateMessage(vms: [])).resolverNetworks == [])
     }
 
     @Test("Enabled resolvers are grouped by network and sorted")
-    func enabledResolvers() {
+    func enabledResolvers() throws {
         let message = DesiredStateMessage(
             vms: [],
             sandboxes: [
@@ -73,7 +73,7 @@ struct DesiredStateDerivationsTests {
                         resolverEnabled: true, resolverAddresses: ["169.254.1.1"])),
             ])
 
-        let resolvers = DesiredStateDerivations(message: message).resolverNetworks
+        let resolvers = try DesiredStateDerivations(message: message).resolverNetworks
 
         #expect(resolvers?.map(\.networkId) == [networkA, networkB])
         #expect(resolvers?[1].upstreams == ["1.1.1.1"])

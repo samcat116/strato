@@ -19,8 +19,8 @@ struct GuestConfigTests {
             desiredStatus: .running, generation: 19, guestConfig: config)
         let message = DesiredStateMessage(vms: [desired])
         let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
-        #expect(decoded.vms[0].guestConfig == config)
-        #expect(decoded.vms[0].generation == 19)
+        #expect(decoded._jsonVms[0]._jsonGuestConfig == config)
+        #expect(decoded._jsonVms[0]._jsonGeneration == 19)
     }
 
     @Test func olderPayloadAndNullAreInert() throws {
@@ -35,8 +35,8 @@ struct GuestConfigTests {
             if null { json["guestConfig"] = NSNull() }
             let data = try JSONSerialization.data(withJSONObject: json)
             let decoded = try WireProtocol.makeDecoder().decode(DesiredVMState.self, from: data)
-            #expect(decoded.guestConfig == nil)
-            #expect(decoded.generation == 3)
+            #expect(decoded._jsonGuestConfig == nil)
+            #expect(decoded._jsonGeneration == 3)
         }
     }
 
@@ -85,7 +85,7 @@ struct GuestConfigTests {
     }
 
     @Test func boundariesAndEmptyIntent() throws {
-        try GuestConfig().validate()
+        try GuestConfig.empty.validate()
         let files = (0..<4).map {
             GuestFile(
                 path: "/etc/test\($0)", content: String(repeating: "a", count: GuestConfig.maxFileBytes), mode: "0600")

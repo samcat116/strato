@@ -54,28 +54,32 @@ public actor StorageBackendRegistry {
     }
 
     public func backend(for storage: DesiredVolumeStorage) throws -> any StorageBackend {
-        switch storage {
+        try storage.validateProtocol()
+        switch storage.value {
         case .local:
             return local
-        case .ceph(let configuration):
+        case .ceph(let ceph):
+            let configuration = ceph.configuration
             let identity = CredentialIdentity(
-                clusterId: configuration.clusterId,
-                credentialId: configuration.credentialId)
+                clusterId: try UUID(protocolString: configuration.clusterID),
+                credentialId: try UUID(protocolString: configuration.credentialID))
             guard !revokedCredentials.contains(identity) else {
                 throw StorageBackendRegistryError.unavailable(
                     "the Ceph credential has been permanently revoked on this agent")
             }
             let key = CephCacheKey(
-                clusterId: configuration.clusterId,
+                clusterId: try UUID(protocolString: configuration.clusterID),
                 pool: configuration.pool,
                 namespace: configuration.namespace,
-                credentialId: configuration.credentialId)
+                credentialId: try UUID(protocolString: configuration.credentialID))
             if let cached = cephBackends[key], cached.configuration == configuration {
                 return cached.backend
             }
             let backend = makeCeph(configuration)
             cephBackends[key] = CephCacheEntry(configuration: configuration, backend: backend)
             return backend
+        case .none:
+            throw AgentProtocolDecodeError.invalidField
         }
     }
 
@@ -134,16 +138,16 @@ public actor StorageBackendRegistry {
         attachments: [DiskAttachment]
     ) -> Bool {
         storages.contains { storage in
-            guard case .ceph(let configuration) = storage else { return false }
-            return configuration.clusterId == clusterId
-                && configuration.credentialId == credentialId
+            guard case .ceph(let protocolCeph) = storage.value else { return false }
+            return UUID(uuidString: protocolCeph.configuration.clusterID) == clusterId
+                && UUID(uuidString: protocolCeph.configuration.credentialID) == credentialId
         }
             || attachments.contains { attachment in
                 guard
-                    case .rbd(_, _, _, _, _, let attachmentClusterId, let attachmentCredentialId, _) =
-                        attachment
+                    case .rbd(let protocolRbd) = attachment.value
                 else { return false }
-                return attachmentClusterId == clusterId && attachmentCredentialId == credentialId
+                return UUID(uuidString: protocolRbd.clusterID) == clusterId
+                    && UUID(uuidString: protocolRbd.credentialID) == credentialId
             }
     }
 
@@ -155,8 +159,8 @@ public actor StorageBackendRegistry {
     ) async throws -> [String: DiskAttachment] {
         var inventory = try await local.listVolumes()
         for desired in desiredVolumes {
-            guard case .ceph = desired.storage else { continue }
-            let id = desired.volumeId.uuidString
+            guard case .ceph = desired.storage.value else { continue }
+            let id = desired.volumeID
             let selected = try backend(for: desired.storage)
             if let attachment = try await selected.inspectVolume(volumeId: id) {
                 inventory[id] = attachment

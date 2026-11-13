@@ -43,13 +43,13 @@ final class DesiredStateDNSZoneTests {
         app: Application,
         named name: String,
         siteID: UUID? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion,
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major),
         resolverCapable: Bool = false
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
             on: app,
             named: name,
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             resolverCapable: resolverCapable,
             siteID: siteID)
     }
@@ -135,23 +135,23 @@ final class DesiredStateDNSZoneTests {
                 onAgent: peer, network: network, ipv4: "10.60.0.6")
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: controller)
-            let zones = try #require(sync.dnsZones)
+            let zones = try requiredDNSZones(sync)
             #expect(zones.count == 1)
             let assembled = zones[0]
-            #expect(assembled.zoneId == zone.id)
+            #expect(assembled.zoneID == zone.id?.uuidString)
             #expect(assembled.zoneName == "acme.internal")
-            #expect(assembled.networkIds == [try network.requireID()])
+            #expect(assembled.networkIds.values == [try network.requireID().uuidString])
 
-            let forward = assembled.records.filter { $0.type == "A" }
+            let forward = assembled.records.values.filter { $0.type == "A" }
             #expect(
                 forward.map(\.name).sorted() == ["here.acme.internal", "there.acme.internal"])
-            #expect(forward.first { $0.name == "there.acme.internal" }?.values == ["10.60.0.6"])
+            #expect(forward.first { $0.name == "there.acme.internal" }?.values.values == ["10.60.0.6"])
 
             // Both directions, so a reverse lookup from either VM resolves.
-            let reverse = assembled.records.filter { $0.type == "PTR" }
+            let reverse = assembled.records.values.filter { $0.type == "PTR" }
             #expect(reverse.map(\.name).sorted() == ["5.0.60.10.in-addr.arpa", "6.0.60.10.in-addr.arpa"])
             #expect(
-                reverse.first { $0.name == "6.0.60.10.in-addr.arpa" }?.values == ["there.acme.internal"])
+                reverse.first { $0.name == "6.0.60.10.in-addr.arpa" }?.values.values == ["there.acme.internal"])
         }
     }
 
@@ -179,8 +179,8 @@ final class DesiredStateDNSZoneTests {
             // Nil, not `[]`: the rows are the controller's, and an empty
             // opinion would have the peer sweep them.
             let peerSync = try await app.desiredStateAssembler.assemble(agentId: peer)
-            #expect(peerSync.dnsZones == nil)
-            #expect(try await app.desiredStateAssembler.assemble(agentId: controller).dnsZones != nil)
+            #expect(peerSync.hasDnsZones == false)
+            #expect(try await app.desiredStateAssembler.assemble(agentId: controller).hasDnsZones == true)
         }
     }
 
@@ -196,7 +196,7 @@ final class DesiredStateDNSZoneTests {
 
             // `[]`, not nil: the agent must remove any managed row it still
             // holds, which is what makes detaching the last zone take effect.
-            #expect(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones == [])
+            #expect(try requiredDNSZones(await app.desiredStateAssembler.assemble(agentId: agentId)).isEmpty)
         }
     }
 
@@ -217,15 +217,16 @@ final class DesiredStateDNSZoneTests {
                 network: network, ipv4: "10.65.0.5", ipv6: "fd65::5")
 
             let first = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
             // A dual-stack VM registers both families as separate RRsets: the
             // driver decides how to join them, not the wire.
-            #expect(first.records.filter { $0.name == "web.hash.internal" }.map(\.type).sorted() == ["A", "AAAA"])
+            #expect(
+                first.records.values.filter { $0.name == "web.hash.internal" }.map(\.type).sorted() == ["A", "AAAA"])
 
             // Re-assembling identical state must hash identically, or the agent
             // rewrites the whole record map on every sync.
             let again = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
             #expect(again.recordsHash == first.recordsHash)
 
             // An authored record the OVN driver can't express still moves the
@@ -233,9 +234,9 @@ final class DesiredStateDNSZoneTests {
             try await DNSRecord(zoneID: zoneID, name: "www", type: .cname, value: "web.hash.internal")
                 .save(on: app.db)
             let third = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
             #expect(third.recordsHash != first.recordsHash)
-            #expect(third.records.contains { $0.type == "CNAME" && $0.name == "www.hash.internal" })
+            #expect(third.records.values.contains { $0.type == "CNAME" && $0.name == "www.hash.internal" })
         }
     }
 
@@ -272,20 +273,20 @@ final class DesiredStateDNSZoneTests {
                 family: .ipv4, address: "10.69.0.9", prefixLength: 24, gateway: back.gateway
             ).save(on: app.db)
 
-            let zones = try #require(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones)
+            let zones = try requiredDNSZones(try await app.desiredStateAssembler.assemble(agentId: agentId))
             #expect(zones.count == 2)
             let assembledFront = try #require(zones.first { $0.zoneName == "front.internal" })
             let assembledBack = try #require(zones.first { $0.zoneName == "back.internal" })
             #expect(
-                assembledFront.records.first { $0.type == "A" }.map { ($0.name, $0.values) } ?? ("", [])
+                assembledFront.records.values.first { $0.type == "A" }.map { ($0.name, $0.values.values) } ?? ("", [])
                     == ("multi.front.internal", ["10.68.0.5"]))
             #expect(
-                assembledBack.records.first { $0.type == "A" }.map { ($0.name, $0.values) } ?? ("", [])
+                assembledBack.records.values.first { $0.type == "A" }.map { ($0.name, $0.values.values) } ?? ("", [])
                     == ("multi.back.internal", ["10.69.0.9"]))
             // Each zone's PTR points at the name published in that zone.
             #expect(
-                assembledFront.records.first { $0.type == "PTR" }?.values == ["multi.front.internal"])
-            #expect(assembledBack.records.first { $0.type == "PTR" }?.values == ["multi.back.internal"])
+                assembledFront.records.values.first { $0.type == "PTR" }?.values.values == ["multi.front.internal"])
+            #expect(assembledBack.records.values.first { $0.type == "PTR" }?.values.values == ["multi.back.internal"])
         }
     }
 
@@ -311,9 +312,9 @@ final class DesiredStateDNSZoneTests {
             ).save(on: app.db)
 
             let assembled = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
-            #expect(!assembled.records.contains { $0.name == "public.view.internal" })
-            #expect(assembled.records.contains { $0.name == "shared.view.internal" })
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
+            #expect(!assembled.records.values.contains { $0.name == "public.view.internal" })
+            #expect(assembled.records.values.contains { $0.name == "shared.view.internal" })
         }
     }
 
@@ -334,10 +335,10 @@ final class DesiredStateDNSZoneTests {
                 network: network, ipv4: "10.67.0.5")
 
             let assembled = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
             // Attachment grants resolution; registration is the primary
             // pointer, which this network doesn't have.
-            #expect(assembled.records.map(\.name) == ["db.services.internal"])
+            #expect(assembled.records.values.map(\.name) == ["db.services.internal"])
         }
     }
 
@@ -373,12 +374,12 @@ final class DesiredStateDNSZoneTests {
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: peer)
             #expect(sync.networksAuthoritative == false)
-            let zones = try #require(sync.dnsZones)
+            let zones = try requiredDNSZones(sync)
             #expect(zones.map(\.zoneName) == ["res.internal"])
             // Fleet-wide records still, and the peer knows it may not author
             // topology — which is how it decides to realize only the resolver
             // half.
-            #expect(zones[0].records.contains { $0.name == "res-vm.res.internal" })
+            #expect(zones[0].records.values.contains { $0.name == "res-vm.res.internal" })
         }
     }
 
@@ -410,7 +411,7 @@ final class DesiredStateDNSZoneTests {
                 app: app, project: project, named: "vm-idle", hostname: "idle-vm",
                 onAgent: controller, network: network, ipv4: "10.71.0.5")
 
-            #expect(try await app.desiredStateAssembler.assemble(agentId: peer).dnsZones == nil)
+            #expect(try await app.desiredStateAssembler.assemble(agentId: peer).hasDnsZones == false)
         }
     }
 
@@ -430,8 +431,11 @@ final class DesiredStateDNSZoneTests {
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             // Both halves, and they must agree: the network carrier authors the
             // localport and the DHCP row, the per-NIC copy reaches the chassis.
-            #expect(sync.networks.first?.resolverEnabled == true)
-            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == true)
+            #expect(sync.networks.values.first.map { $0.hasResolverEnabled && $0.resolverEnabled == true } == true)
+            #expect(
+                sync.vms.values.first?.spec.networks.values.first.map {
+                    $0.hasResolverEnabled && $0.resolverEnabled == true
+                } == true)
         }
     }
 
@@ -464,8 +468,11 @@ final class DesiredStateDNSZoneTests {
             let sync = try await app.desiredStateAssembler.assemble(agentId: controller)
             // False, not nil: the agent speaks v37, so the control plane has an
             // opinion — and that opinion is "not yet".
-            #expect(sync.networks.first?.resolverEnabled == false)
-            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == false)
+            #expect(sync.networks.values.first.map { $0.hasResolverEnabled && $0.resolverEnabled == false } == true)
+            #expect(
+                sync.vms.values.first?.spec.networks.values.first.map {
+                    $0.hasResolverEnabled && $0.resolverEnabled == false
+                } == true)
         }
     }
 
@@ -483,8 +490,11 @@ final class DesiredStateDNSZoneTests {
                 network: network, ipv4: "10.75.0.5")
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.networks.first?.resolverEnabled == false)
-            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == false)
+            #expect(sync.networks.values.first.map { $0.hasResolverEnabled && $0.resolverEnabled == false } == true)
+            #expect(
+                sync.vms.values.first?.spec.networks.values.first.map {
+                    $0.hasResolverEnabled && $0.resolverEnabled == false
+                } == true)
         }
     }
 
@@ -510,16 +520,16 @@ final class DesiredStateDNSZoneTests {
             try await record.save(on: app.db)
 
             let before = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
-            let cname = try #require(before.records.first { $0.type == "CNAME" })
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
+            let cname = try #require(before.records.values.first { $0.type == "CNAME" })
             #expect(cname.ttl == 60)
 
             record.ttl = 120
             try await record.save(on: app.db)
             let after = try #require(
-                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones.values.first)
             #expect(after.recordsHash != before.recordsHash)
-            #expect(after.records.first { $0.type == "CNAME" }?.ttl == 120)
+            #expect(after.records.values.first { $0.type == "CNAME" }?.ttl == 120)
         }
     }
 
@@ -531,4 +541,9 @@ final class DesiredStateDNSZoneTests {
             }
         }
     }
+}
+
+private func requiredDNSZones(_ message: DesiredStateMessage) throws -> [DesiredDNSZone] {
+    try #require(message.hasDnsZones)
+    return message.dnsZones.values
 }

@@ -200,7 +200,7 @@ struct ImageController: RouteCollection {
                 checksum: "",
                 storagePath: ImageObjectKey.artifact(
                     projectId: projectID, imageId: imageID,
-                    kind: ArtifactKind.diskImage.rawValue, filename: filename),
+                    kind: ArtifactKind.diskImage.protocolValue, filename: filename),
                 status: .pending,
                 sourceURL: sourceURL,
                 expectedChecksum: expectedChecksum
@@ -345,7 +345,7 @@ struct ImageController: RouteCollection {
                 let validated = try ImageValidationService.validateFilename(uploadedFilename)
                 return ImageObjectKey.artifact(
                     projectId: projectID, imageId: imageID,
-                    kind: ArtifactKind.diskImage.rawValue, filename: validated)
+                    kind: ArtifactKind.diskImage.protocolValue, filename: validated)
             }
         } catch {
             try await tempImage.delete(on: req.db)
@@ -523,7 +523,7 @@ struct ImageController: RouteCollection {
             maxBytes: Self.maxUploadBytes,
             validate: { header, fields in
                 let kind = queryKind ?? fields["kind"]
-                if kind == ArtifactKind.diskImage.rawValue || kind == ArtifactKind.rootfs.rawValue {
+                if kind == ArtifactKind.diskImage.protocolValue || kind == ArtifactKind.rootfs.protocolValue {
                     try ImageValidationService.validateImport(headerBytes: header)
                 }
             }
@@ -572,6 +572,8 @@ struct ImageController: RouteCollection {
             format = ImageValidationService.detectFormat(fromHeader: upload.headerBytes)
         case .kernel, .initramfs:
             format = nil
+        case .unspecified, .UNRECOGNIZED:
+            throw Abort(.badRequest, reason: "Unknown artifact kind")
         }
         let virtualSize = format.flatMap {
             ImageValidationService.virtualSize(
@@ -607,7 +609,7 @@ struct ImageController: RouteCollection {
             "Image artifact uploaded",
             metadata: [
                 "image_id": .string(imageID.uuidString),
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "filename": .string(filename),
                 "size": .stringConvertible(size),
             ])
@@ -659,12 +661,12 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: error.reason)
         }
         let filename = try ImageValidationService.validateArtifactFilename(
-            url.lastPathComponent.isEmpty ? kind.rawValue : url.lastPathComponent)
+            url.lastPathComponent.isEmpty ? kind.protocolValue : url.lastPathComponent)
         let expectedChecksum = try fetchRequest.checksum.map(normalizedExpectedChecksum(_:))
 
         // The storage layout mirrors uploaded artifacts: {project}/{image}/{kind}/{filename}.
         let relativePath = ImageObjectKey.artifact(
-            projectId: projectID, imageId: imageID, kind: kind.rawValue, filename: filename)
+            projectId: projectID, imageId: imageID, kind: kind.protocolValue, filename: filename)
 
         // Replace any existing artifact of this kind (unique on image_id, kind).
         if let existing = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() {
@@ -709,7 +711,7 @@ struct ImageController: RouteCollection {
             "Artifact fetch queued",
             metadata: [
                 "image_id": .string(imageID.uuidString),
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "source_url": .string(fetchRequest.sourceURL),
             ])
 
@@ -748,7 +750,7 @@ struct ImageController: RouteCollection {
         }
 
         guard let artifact = try await image.$artifacts.query(on: req.db).filter(\.$kind == kind).first() else {
-            throw Abort(.notFound, reason: "Image has no \(kind.rawValue) artifact")
+            throw Abort(.notFound, reason: "Image has no \(kind.protocolValue) artifact")
         }
 
         try? await req.application.imageObjectStore.delete(key: artifact.storagePath)
@@ -758,7 +760,7 @@ struct ImageController: RouteCollection {
 
         req.logger.info(
             "Image artifact deleted",
-            metadata: ["image_id": .string(imageID.uuidString), "kind": .string(kind.rawValue)])
+            metadata: ["image_id": .string(imageID.uuidString), "kind": .string(kind.protocolValue)])
 
         try await image.$artifacts.load(on: req.db)
         return ImageResponse(from: image)
@@ -914,7 +916,7 @@ struct ImageController: RouteCollection {
                     "imageId": .string(imageID.uuidString),
                     "strato.agent.identity": .string(agent.identity.key),
                     "organizationId": .string(agent.organizationID?.uuidString ?? "platform"),
-                    "artifact": .string(artifactKind.rawValue),
+                    "artifact": .string(artifactKind.protocolValue),
                 ])
 
             return try await serveImageFile(
@@ -1032,7 +1034,7 @@ struct ImageController: RouteCollection {
                 .filter(\.$status == .ready)
                 .first()
         else {
-            throw Abort(.notFound, reason: "Image has no ready \(artifactKind.rawValue) artifact")
+            throw Abort(.notFound, reason: "Image has no ready \(artifactKind.protocolValue) artifact")
         }
         return try await store.stream(
             key: artifact.storagePath, filename: artifact.filename, on: req)

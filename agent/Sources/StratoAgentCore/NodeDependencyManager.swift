@@ -65,7 +65,7 @@ public enum NodeDependencyRegistryError: Error, Equatable, CustomStringConvertib
     public var description: String {
         switch self {
         case .duplicate(let id):
-            return "dependency module \(id.rawValue) is registered more than once"
+            return "dependency module \(id.protocolValue) is registered more than once"
         }
     }
 }
@@ -117,7 +117,7 @@ public actor NodeDependencyManager {
                     do {
                         let inspection = try await StageBudget.run(
                             seconds: inspectionTimeoutSeconds,
-                            stage: "inspect node dependency \(id.rawValue)",
+                            stage: "inspect node dependency \(id.protocolValue)",
                             onTimeout: .abandon
                         ) {
                             await module.inspect()
@@ -143,7 +143,7 @@ public actor NodeDependencyManager {
             return values
         }
 
-        for (id, inspection) in results.sorted(by: { $0.0.rawValue < $1.0.rawValue }) {
+        for (id, inspection) in results.sorted(by: { $0.0.protocolValue < $1.0.protocolValue }) {
             guard let module = modules[id] else { continue }
             let observation = stabilize(inspection, for: module)
             logTransition(from: states[id]?.observation, to: observation)
@@ -165,8 +165,8 @@ public actor NodeDependencyManager {
         var state = states[module.id] ?? ModuleState()
         let previous = state.observation
         var functionalState = inspection.functionalState
-        var consecutiveFailures = previous?.consecutiveFailures ?? 0
-        var lastHealthyAt = previous?.lastHealthyAt
+        var consecutiveFailures = previous.map { Int($0.consecutiveFailures) } ?? 0
+        var lastHealthyAt = previous.flatMap { $0.optionalLastHealthyAt?.date }
 
         if module.desiredState == .disabled {
             functionalState = .healthy
@@ -223,7 +223,7 @@ public actor NodeDependencyManager {
     }
 
     private func snapshot() -> [NodeDependencyObservation] {
-        states.values.compactMap(\.observation).sorted { $0.id.rawValue < $1.id.rawValue }
+        states.values.compactMap(\.observation).sorted { $0.id.protocolValue < $1.id.protocolValue }
     }
 
     private func logTransition(
@@ -234,15 +234,16 @@ public actor NodeDependencyManager {
             previous?.functionalState != current.functionalState
                 || previous?.supervisorState != current.supervisorState
                 || previous?.compatibility != current.compatibility
-                || previous?.reason?.code != current.reason?.code
+                || previous.flatMap({ $0.optionalReason?.code })
+                    != current.optionalReason?.code
         else { return }
 
         let metadata: Logger.Metadata = [
-            "dependency": .string(current.id.rawValue),
-            "functionalState": .string(current.functionalState.rawValue),
-            "supervisorState": .string(current.supervisorState.rawValue),
-            "compatibility": .string(current.compatibility.rawValue),
-            "reasonCode": .string(current.reason?.code.rawValue ?? "none"),
+            "dependency": .string(current.id.protocolValue),
+            "functionalState": .string(current.functionalState.protocolValue),
+            "supervisorState": .string(current.supervisorState.protocolValue),
+            "compatibility": .string(current.compatibility.protocolValue),
+            "reasonCode": .string(current.hasReason ? current.reason.code.protocolValue : "none"),
         ]
         if current.functionalState == .unhealthy {
             logger.error("Node dependency became unavailable", metadata: metadata)

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 /// The contract behind `VolumeIOLimits` (STR-19).
 ///
@@ -21,13 +21,13 @@ struct VolumeIOLimitsTests {
 
     @Test func aSingleCapSurvivesNormalization() throws {
         let limits = try #require(VolumeIOLimits.normalized(iopsTotal: 500, bpsTotal: nil))
-        #expect(limits.iopsTotal == 500)
-        #expect(limits.bpsTotal == nil)
+        #expect(limits._jsonIopsTotal == 500)
+        #expect(limits._jsonBpsTotal == nil)
         #expect(limits.isEmpty == false)
 
         let bpsOnly = try #require(VolumeIOLimits.normalized(iopsTotal: nil, bpsTotal: 1 << 20))
-        #expect(bpsOnly.iopsTotal == nil)
-        #expect(bpsOnly.bpsTotal == 1 << 20)
+        #expect(bpsOnly._jsonIopsTotal == nil)
+        #expect(bpsOnly._jsonBpsTotal == 1 << 20)
     }
 
     @Test func anAllNilValueIsEmptyButNotEqualToNil() {
@@ -59,8 +59,8 @@ struct VolumeIOLimitsTests {
 
     @Test func roundTripsBothCaps() throws {
         let decoded = try roundTrip(VolumeIOLimits(iopsTotal: 500, bpsTotal: 1 << 20))
-        #expect(decoded.iopsTotal == 500)
-        #expect(decoded.bpsTotal == 1 << 20)
+        #expect(decoded._jsonIopsTotal == 500)
+        #expect(decoded._jsonBpsTotal == 1 << 20)
     }
 
     // MARK: - Field placement
@@ -78,9 +78,9 @@ struct VolumeIOLimitsTests {
             }
             """
         let decoded = try decodeJSON(DesiredVolumeState.self, from: json)
-        #expect(decoded.ioLimits == nil)
-        #expect(decoded.storage == .local)
-        #expect(decoded.sizeBytes == 10_737_418_240)
+        #expect(decoded._jsonIoLimits == nil)
+        #expect(decoded._jsonStorage == .local)
+        #expect(decoded._jsonSizeBytes == 10_737_418_240)
     }
 
     @Test func aPreV34ObservedVolumeStateDecodesWithNoLimits() throws {
@@ -92,7 +92,7 @@ struct VolumeIOLimitsTests {
             }
             """
         let decoded = try decodeJSON(ObservedVolumeState.self, from: json)
-        #expect(decoded.ioLimits == nil)
+        #expect(decoded._jsonIoLimits == nil)
     }
 
     @Test func desiredAndObservedStatesCarryLimitsOnTheWire() throws {
@@ -104,7 +104,7 @@ struct VolumeIOLimitsTests {
             format: "qcow2",
             ioLimits: VolumeIOLimits(iopsTotal: 500))
         #expect(try encodedKeys(desired).contains("ioLimits"))
-        #expect(try roundTrip(desired).ioLimits?.iopsTotal == 500)
+        #expect(try roundTrip(desired)._jsonIoLimits?._jsonIopsTotal == 500)
 
         let observed = ObservedVolumeState(
             volumeId: UUID(),
@@ -112,7 +112,7 @@ struct VolumeIOLimitsTests {
             observedGeneration: 1,
             ioLimits: VolumeIOLimits(iopsTotal: 500))
         #expect(try encodedKeys(observed).contains("ioLimits"))
-        #expect(try roundTrip(observed).ioLimits?.iopsTotal == 500)
+        #expect(try roundTrip(observed)._jsonIoLimits?._jsonIopsTotal == 500)
     }
 
     @Test func observedStateCarriesMeasuredRateOnTheWire() throws {
@@ -124,8 +124,8 @@ struct VolumeIOLimitsTests {
             ioObservedRate: VolumeIOObservedRate(iops: 487.5, bytesPerSecond: 1_024_000))
 
         let decoded = try roundTrip(observed)
-        #expect(decoded.ioObservedRate?.iops == 487.5)
-        #expect(decoded.ioObservedRate?.bytesPerSecond == 1_024_000)
+        #expect(decoded._jsonIoObservedRate?._jsonIops == 487.5)
+        #expect(decoded._jsonIoObservedRate?._jsonBytesPerSecond == 1_024_000)
     }
 
     /// An uncapped desired entry omits the key entirely, which is what the
@@ -147,7 +147,7 @@ struct VolumeIOLimitsTests {
             deviceName: VolumeDeviceName.disk(1),
             attachment: .file(path: "/var/lib/strato/volumes/v/volume.qcow2", format: .qcow2),
             ioLimits: VolumeIOLimits(bpsTotal: 1 << 20))
-        #expect(try roundTrip(spec).ioLimits?.bpsTotal == 1 << 20)
+        #expect(try roundTrip(spec)._jsonIoLimits?._jsonBpsTotal == 1 << 20)
 
         let json = """
             { "deviceName": "disk1", "readonly": false }

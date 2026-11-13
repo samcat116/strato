@@ -63,7 +63,7 @@ public struct SandboxIdleActivityObservation: Sendable {
 /// admission and the atomic destruction commit. Stored evidence is never
 /// restored from a journal: restart/reconnect starts with unknown activity.
 public struct SandboxIdleSuspensionAdmission: Sendable {
-    private var policy = SandboxIdlePolicy()
+    private var policy = SandboxIdlePolicy.defaults
     private var claimed: SandboxIdlePolicy.Evidence?
 
     public init() {}

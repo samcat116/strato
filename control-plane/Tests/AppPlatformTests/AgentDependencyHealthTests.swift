@@ -188,10 +188,10 @@ struct AgentDependencyHealthTests {
             at: .testing(now), factory: metrics)
         let libvirtAvailability = try metrics.expectGauge(
             "strato_agent_dependency_available",
-            [("agent", "node-1"), ("dependency", NodeDependencyID.libvirt.rawValue)])
+            [("agent", "node-1"), ("dependency", NodeDependencyID.libvirt.protocolValue)])
         let networkingAvailability = try metrics.expectGauge(
             "strato_agent_dependency_available",
-            [("agent", "node-1"), ("dependency", NodeDependencyID.ovnOvs.rawValue)])
+            [("agent", "node-1"), ("dependency", NodeDependencyID.ovnOvs.protocolValue)])
 
         Telemetry.recordRemovedDependenciesUnavailable(
             agentName: "node-1",
@@ -219,7 +219,7 @@ struct AgentDependencyHealthTests {
 
         let availability = try metrics.expectGauge(
             "strato_agent_dependency_available",
-            [("agent", "clock-node"), ("dependency", NodeDependencyID.libvirt.rawValue)])
+            [("agent", "clock-node"), ("dependency", NodeDependencyID.libvirt.protocolValue)])
         #expect(availability.lastValue == 1)
     }
 

@@ -52,7 +52,7 @@ struct DesiredStatePollerTests {
                 generation: 1)
         }
         let envelope = try MessageEnvelope(message: DesiredStateMessage(vms: vms))
-        return try WireProtocol.makeEncoder().encode(envelope)
+        return try WireProtocol.encodeEnvelope(envelope)
     }
 
     private static func ok(etag: String, vmCount: Int = 0) throws -> DesiredStatePollResponse {
@@ -79,7 +79,7 @@ struct DesiredStatePollerTests {
                     totalCPU: 1, availableCPU: 1,
                     totalMemory: 1 << 30, availableMemory: 1 << 30,
                     totalDisk: 1 << 34, availableDisk: 1 << 34)))
-        let body = try WireProtocol.makeEncoder().encode(envelope)
+        let body = try WireProtocol.encodeEnvelope(envelope)
         return DesiredStatePollResponse(status: 200, etag: "\"x\"", body: body)
     }
 
@@ -115,6 +115,30 @@ struct DesiredStatePollerTests {
         #expect(await cp.validators == [nil])
         #expect(await log.envelopes.count == 1)
         #expect(await poller.lastSuccessfulFullRefetchAt != nil)
+    }
+
+    @Test("Unsupported required capabilities cannot seed the conditional ETag")
+    func unsupportedCapabilitiesDiscardETag() async throws {
+        var envelope = try MessageEnvelope(message: DesiredStateMessage(vms: []))
+        envelope.requiredCapabilities = ["future.required-feature"]
+        let response = DesiredStatePollResponse(
+            status: 200, etag: "unsupported", body: try WireProtocol.encodeEnvelope(envelope))
+        let cp = FakeControlPlane(responses: [.success(response)], fallback: .success(try Self.ok(etag: "valid")))
+        let log = DeliveryLog()
+        let agreement = try AgentProtocolCompatibility.negotiate(
+            local: AgentProtocolCompatibility.localOffer, remote: AgentProtocolCompatibility.localOffer,
+            inventorySessionID: UUID())
+        let poller = DesiredStatePoller(
+            fetch: { try await cp.answer(ifNoneMatch: $0) },
+            deliver: { await log.append($0) },
+            logger: Logger(label: "test"), protocolAgreement: agreement,
+            clock: TestClock(), randomUnit: { 1 })
+        await poller.runOnce()
+        #expect(await log.envelopes.isEmpty)
+        #expect(await poller.unusableResponses == 1)
+        await poller.runOnce()
+        #expect(await cp.validators == [nil, nil])
+        #expect(await log.envelopes.count == 1)
     }
 
     @Test("Subsequent fetches echo the last ETag")

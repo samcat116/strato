@@ -61,30 +61,36 @@ struct ObservedInventoryGuard {
     /// baseline, dilute the percentage, or imply deletion. Pending creates do
     /// not assert presence and therefore are not treated as lost resources.
     static func counts(for report: ObservedStateReport, on db: any Database) async throws -> [Section: Counts] {
-        let vms = try await VM.query(on: db).filter(\.$hypervisorId == report.agentId).all()
-        let sandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == report.agentId).all()
+        try report.validateProtocol()
+        var normalized = report
+        try normalized.normalizeProtocolIdentifiers()
+        let report = normalized
+        let vms = try await VM.query(on: db).filter(\.$hypervisorId == report.agentID).all()
+        let sandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == report.agentID).all()
         let establishedVMs = vms.filter { $0.isTerminating || $0.status.assertsAgentPresence }
         let establishedSandboxes = sandboxes.filter {
             $0.isTerminating || ($0.observedGeneration > 0 && $0.status.assertsAgentPresence)
         }
-        let vmIDs = Set(report.vms.map(\.vmId))
-        let sandboxIDs = Set(report.sandboxes.map(\.sandboxId))
+        let vmIDs = Set(try report.vms.values.map { try UUID(protocolString: $0.vmID) })
+        let sandboxIDs = Set(try report.sandboxes.values.map { try UUID(protocolString: $0.sandboxID) })
         var counts: [Section: Counts] = [
             .workloads: Counts(
                 placed: establishedVMs.count + establishedSandboxes.count,
                 destructiveAbsences: establishedVMs.filter { isAbsent($0.id, from: vmIDs) }.count
                     + establishedSandboxes.filter { isAbsent($0.id, from: sandboxIDs) }.count)
         ]
-        if let observations = report.volumes {
-            let ids = Set(observations.map(\.volumeId))
-            let volumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+        if report.hasVolumes {
+            let observations = report.volumes.values
+            let ids = Set(try observations.map { try UUID(protocolString: $0.volumeID) })
+            let volumes = try await VolumeService.volumes(onAgent: report.agentID, on: db)
             let established = volumes.filter { $0.isTerminating || ($0.observedGeneration > 0 && $0.status != .error) }
             counts[.volumes] = Counts(
                 placed: established.count,
                 destructiveAbsences: established.filter { isAbsent($0.id, from: ids) }.count)
         }
-        if let observations = report.snapshots {
-            let ids = Set(observations.map(\.snapshotId))
+        if report.hasSnapshots {
+            let observations = report.snapshots.values
+            let ids = Set(try observations.map { try UUID(protocolString: $0.snapshotID) })
             var snapshots = Counts()
             func include<A: SnapshotArtifactResource>(_ artifacts: [A]) {
                 let established = artifacts.filter {
@@ -93,9 +99,9 @@ struct ObservedInventoryGuard {
                 snapshots.placed += established.count
                 snapshots.destructiveAbsences += established.filter { isAbsent($0.id, from: ids) }.count
             }
-            include(try await VolumeSnapshot.placed(onAgent: report.agentId, on: db))
-            include(try await VMSnapshot.placed(onAgent: report.agentId, on: db))
-            include(try await SandboxSnapshot.placed(onAgent: report.agentId, on: db))
+            include(try await VolumeSnapshot.placed(onAgent: report.agentID, on: db))
+            include(try await VMSnapshot.placed(onAgent: report.agentID, on: db))
+            include(try await SandboxSnapshot.placed(onAgent: report.agentID, on: db))
             counts[.snapshots] = snapshots
         }
         return counts

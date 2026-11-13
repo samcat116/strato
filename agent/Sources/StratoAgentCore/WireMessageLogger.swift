@@ -33,10 +33,10 @@ public enum WireMessageLogger {
         ]
         addIdentifier(message.requestId, named: "requestId", to: &metadata)
         if let message = message as? any SessionCorrelatedWireMessage {
-            addIdentifier(message.sessionId, named: "sessionId", to: &metadata)
+            addIdentifier(message.sessionID, named: "sessionId", to: &metadata)
         }
         if let message = message as? any SyncCorrelatedWireMessage {
-            addIdentifier(message.syncId, named: "syncId", to: &metadata)
+            addIdentifier(message.syncID, named: "syncId", to: &metadata)
         }
 
         logger.debug("WebSocket message", metadata: metadata)
@@ -132,7 +132,7 @@ public enum WireMessageLogger {
 /// Explicit correlation allowlists. Adding a conformance is the review boundary
 /// for exposing another typed field to the privileged agent log.
 private protocol SessionCorrelatedWireMessage {
-    var sessionId: String { get }
+    var sessionID: String { get }
 }
 
 extension ConsoleConnectMessage: SessionCorrelatedWireMessage {}
@@ -150,7 +150,7 @@ extension GuestExecCloseMessage: SessionCorrelatedWireMessage {}
 extension GuestExecClosedMessage: SessionCorrelatedWireMessage {}
 
 private protocol SyncCorrelatedWireMessage {
-    var syncId: String { get }
+    var syncID: String { get }
 }
 
 extension DesiredStateMessage: SyncCorrelatedWireMessage {}

@@ -57,7 +57,7 @@ struct DesiredStatePollTests {
         } else {
             scopeID = try await builder.createOrganization(name: "Poll Fixture Org").requireID()
         }
-        return try await builder.createAgent(
+        let agent = try await builder.createAgent(
             named: name,
             hostname: "\(name).test",
             resources: AgentResources(
@@ -66,16 +66,35 @@ struct DesiredStatePollTests {
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
             siteID: siteID,
             organizationScope: .organization(scopeID))
+        let sessionID = UUID()
+        let sql = try #require(app.db as? any SQLDatabase)
+        try await sql.raw(
+            "UPDATE agents SET inventory_session_id = \(bind: sessionID) WHERE id = \(bind: agent.requireID())"
+        ).run()
+        try await AgentProtocolSession.persist(
+            AgentProtocolCompatibility.localOffer, agentID: agent.requireID(), sessionID: sessionID, on: app.db)
+        return agent
     }
 
     private func poll(
-        app: Application, port: Int, identity: String = "agent/poll-agent", ifNoneMatch: String? = nil
+        app: Application, port: Int, identity: String = "agent/poll-agent", ifNoneMatch: String? = nil,
+        inventorySessionID: UUID? = nil
     ) async throws -> ClientResponse {
         let header = xfccHeader(identity: identity)
+        let row = try await Agent.query(on: app.db).filter(\.$name == String(identity.split(separator: "/").last ?? ""))
+            .first()
+        let persisted: UUID?
+        if let row {
+            persisted = try await AgentProtocolSession.load(agentID: row.requireID(), on: app.db).id
+        } else {
+            persisted = nil
+        }
+        let sessionID = inventorySessionID ?? persisted ?? UUID()
         return try await app.client.get(URI(string: "http://127.0.0.1:\(port)\(Self.path)")) { req in
             req.headers.add(name: header.name, value: header.value)
+            req.headers.add(name: AgentProtocolCompatibility.sessionHeader, value: sessionID.uuidString)
             req.headers.add(
-                name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(WireProtocol.currentVersion))
+                name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(Int(AgentProtocolCompatibility.major)))
             if let ifNoneMatch {
                 req.headers.add(name: "If-None-Match", value: ifNoneMatch)
             }
@@ -84,8 +103,8 @@ struct DesiredStatePollTests {
 
     private func decodeSync(_ response: ClientResponse) throws -> DesiredStateMessage {
         let body = try #require(response.body)
-        let envelope = try WireProtocol.makeDecoder().decode(
-            MessageEnvelope.self, from: Data(body.readableBytesView))
+        #expect(response.headers.first(name: .contentType) == "application/protobuf")
+        let envelope = try WireProtocol.decodeEnvelope(Data(body.readableBytesView))
         #expect(envelope.type == .desiredState)
         return try envelope.decode(as: DesiredStateMessage.self)
     }
@@ -101,7 +120,7 @@ struct DesiredStatePollTests {
                 url: "https://example.test/agent", sha256: String(repeating: "ab", count: 32),
                 kind: .binary, tarballMember: "")
             try await agent.save(on: app.db)
-            let skew = String(WireProtocol.currentVersion + 1)
+            let skew = String(Int(AgentProtocolCompatibility.major) + 1)
             let headers: HTTPHeaders = [
                 "X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent",
                 AgentUpdateBridgeResponse.wireVersionHeader: skew,
@@ -127,7 +146,7 @@ struct DesiredStatePollTests {
         }
     }
 
-    @Test("Legacy matching-version polls and unassigned bridge fetches retain ordinary behavior")
+    @Test("Polls without a negotiated session are rejected while the update bridge stays independent")
     func matchingLegacyAndUnassignedBridge() async throws {
         try await withRunningPollApp { app, port in
             self.enableSPIRE(on: app)
@@ -135,17 +154,53 @@ struct DesiredStatePollTests {
             let headers: HTTPHeaders = ["X-Forwarded-Client-Cert": "URI=spiffe://strato.local/agent/poll-agent"]
             let ordinary = try await app.client.get(
                 URI(string: "http://127.0.0.1:\(port)" + Self.path), headers: headers)
-            #expect(ordinary.status == .ok)
-            _ = try self.decodeSync(ordinary)
+            #expect(ordinary.status == .conflict)
             let bridge = try await app.client.get(
                 URI(string: "http://127.0.0.1:\(port)" + AgentUpdateBridgeResponse.path), headers: headers)
             let body = try #require(bridge.body)
             let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(body.readableBytesView))
             #expect(response.update == nil)
-            #expect(response.workloadWireVersion == WireProtocol.currentVersion)
+            #expect(response.workloadWireVersion == Int(AgentProtocolCompatibility.major))
             let keys = try #require(
                 try JSONSerialization.jsonObject(with: Data(body.readableBytesView)) as? [String: Any])
             #expect(Set(keys.keys) == ["exchangeVersion", "workloadWireVersion"])
+        }
+    }
+
+    @Test("A parked poll cannot serve a superseded registration session")
+    func parkedPollRejectsSupersededSession() async throws {
+        try await withRunningPollApp { app, port in
+            self.enableSPIRE(on: app)
+            let agent = try await self.registerAgentRow(app: app, name: "poll-agent")
+            app.desiredStatePollHoldWindow = .seconds(30)
+            let session = try await AgentProtocolSession.load(agentID: agent.requireID(), on: app.db)
+            let first = try await self.poll(app: app, port: port)
+            let etag = try #require(first.headers.first(name: .eTag))
+            let parked = Task {
+                try await self.poll(app: app, port: port, ifNoneMatch: etag, inventorySessionID: session.id)
+            }
+            var isParked = false
+            for _ in 0..<200 {
+                isParked = await app.desiredStatePollRegistry.parkedAgentKeys
+                    .contains("spiffe://strato.local/agent/poll-agent")
+                if isParked { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            #expect(isParked)
+            let replacement = UUID()
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw(
+                "UPDATE agents SET inventory_session_id = \(bind: replacement) WHERE id = \(bind: agent.requireID())"
+            ).run()
+            try await AgentProtocolSession.persist(
+                AgentProtocolCompatibility.localOffer, agentID: agent.requireID(),
+                sessionID: replacement, on: app.db)
+            await app.desiredStatePollRegistry.ring(agentKey: "spiffe://strato.local/agent/poll-agent")
+            #expect(try await parked.value.status == .conflict)
+            let stale = try await self.poll(app: app, port: port, inventorySessionID: session.id)
+            #expect(stale.status == .conflict)
+            let current = try await self.poll(app: app, port: port)
+            #expect(current.status == .ok)
         }
     }
 
@@ -173,7 +228,7 @@ struct DesiredStatePollTests {
             #expect(response.status == .ok)
             #expect(response.headers.first(name: .eTag) != nil)
             let sync = try self.decodeSync(response)
-            #expect(sync.vms.map(\.vmId) == [vm.id!])
+            #expect(sync.vms.values.map(\.vmID) == [vm.id!.uuidString])
         }
     }
 
@@ -220,8 +275,8 @@ struct DesiredStatePollTests {
             let response = try await self.poll(app: app, port: port)
             #expect(response.status == .ok)
             let sync = try self.decodeSync(response)
-            #expect(sync.vms.map(\.vmId) == [vm.id!])
-            #expect(sync.vms.first?.spec.guestAgentEnabled == false)
+            #expect(sync.vms.values.map(\.vmID) == [vm.id!.uuidString])
+            #expect(sync.vms.values.first?.spec.guestAgentEnabled == false)
         }
     }
 
@@ -234,7 +289,7 @@ struct DesiredStatePollTests {
             let response = try await self.poll(app: app, port: port)
 
             #expect(response.status == .ok)
-            #expect(try self.decodeSync(response).vms.isEmpty)
+            #expect(try self.decodeSync(response).vms.values.isEmpty)
         }
     }
 
@@ -259,7 +314,7 @@ struct DesiredStatePollTests {
             let response = try await self.poll(app: app, port: port)
 
             #expect(response.status == .ok)
-            #expect(try self.decodeSync(response).vms.isEmpty)
+            #expect(try self.decodeSync(response).vms.values.isEmpty)
             let reloaded = try #require(try await VM.find(poison.id, on: app.db))
             #expect(reloaded.conditions.degraded?.reason.contains("cannot be assembled") == true)
         }
@@ -403,7 +458,7 @@ struct DesiredStatePollTests {
             let woken = try await parked.value
             #expect(woken.status == .ok)
             #expect(woken.headers.first(name: .eTag) != etag)
-            #expect(try self.decodeSync(woken).vms.map(\.vmId) == [vm.id!])
+            #expect(try self.decodeSync(woken).vms.values.map(\.vmID) == [vm.id!.uuidString])
         }
     }
 
@@ -543,7 +598,7 @@ struct DesiredStatePollTests {
 
             let woken = try await parked.value
             #expect(woken.status == .ok)
-            #expect(try self.decodeSync(woken).vms.map(\.vmId) == [vm.id!])
+            #expect(try self.decodeSync(woken).vms.values.map(\.vmID) == [vm.id!.uuidString])
         }
     }
 }

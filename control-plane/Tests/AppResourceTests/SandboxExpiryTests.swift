@@ -607,7 +607,7 @@ final class SandboxExpiryTests {
                 try await sql.raw(
                     "UPDATE sandboxes SET last_active_at = \(bind: now.date.addingTimeInterval(-400)) WHERE id = \(bind: sandbox.id)"
                 ).run()
-                var policy = SandboxIdlePolicy()
+                var policy = SandboxIdlePolicy.defaults
                 policy.enabled = true; policy.idleSeconds = idleSeconds
                 let guest = SandboxGuestIdleActivity(
                     sandboxId: try sandbox.requireID().uuidString, nonce: "fixture", probeId: UUID(),
@@ -644,7 +644,7 @@ final class SandboxExpiryTests {
             // changing eligibility likewise must not move the continuation.
             try await sql.raw("DELETE FROM sandboxes WHERE id = \(bind: id("10"))").run()
             try await sql.raw(
-                "UPDATE sandboxes SET desired_status = \(bind: DesiredSandboxStatus.stopped.rawValue) WHERE id = \(bind: id("30"))"
+                "UPDATE sandboxes SET desired_status = \(bind: DesiredSandboxStatus.stopped.protocolValue) WHERE id = \(bind: id("30"))"
             ).run()
             _ = try await insert("05")  // Behind the current cursor: discovered after wrap.
             let second = try await SandboxIdleFenceService.nominationCandidates(
@@ -713,7 +713,7 @@ final class SandboxExpiryTests {
             sandbox.generation = 7; sandbox.observedGeneration = 7
             sandbox.suspensionStorageEstimateBytes = 1024
             try await sandbox.save(on: app.db)
-            var policy = SandboxIdlePolicy(); policy.enabled = true; policy.idleSeconds = 0.000001
+            var policy = SandboxIdlePolicy.defaults; policy.enabled = true; policy.idleSeconds = 0.000001
             let incarnation = UUID(), connection = UUID(), residency = UUID(), monitor = UUID()
             let resolvedPolicy = policy
             @Sendable func report(_ sequence: UInt64, revision: Int64 = 0) -> SandboxIdleActivityReport {
@@ -835,7 +835,7 @@ final class SandboxExpiryTests {
             }
             #expect(try await SandboxIdleFenceService.state(id: id, on: app.db)?.received_at == issuedState.received_at)
             let wrongToken = SandboxAutomaticSuspensionFence(
-                operationId: fence.operationId,
+                operationId: try UUID(protocolString: fence.operationID),
                 generation: fence.generation, activityRevision: fence.activityRevision,
                 admissionToken: UUID(), guestProtocolVersion: 5)
             await #expect(throws: Abort.self) {

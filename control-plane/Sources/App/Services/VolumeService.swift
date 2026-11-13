@@ -259,7 +259,7 @@ enum VolumeService {
             UPDATE volumes
             SET reconciler_agent_id = \(bind: agentID)
             WHERE id = \(bind: volumeID)
-              AND desired_status = \(bind: DesiredVolumeStatus.present.rawValue)
+              AND desired_status = \(bind: DesiredVolumeStatus.present.protocolValue)
               AND generation = \(bind: expectedGeneration)
               AND reconciler_agent_id IS NULL
             RETURNING id

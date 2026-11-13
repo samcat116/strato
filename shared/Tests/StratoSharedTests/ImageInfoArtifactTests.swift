@@ -17,8 +17,8 @@ struct ImageInfoArtifactTests {
 
         let decoded = try JSONDecoder().decode(ImageInfo.self, from: JSONEncoder().encode(info))
 
-        #expect(decoded.architecture == .arm64)
-        #expect(decoded.artifact(ofKind: .diskImage)?.filename == "cloud.qcow2")
+        #expect(decoded._jsonArchitecture == .arm64)
+        #expect(decoded.artifact(ofKind: .diskImage)?._jsonFilename == "cloud.qcow2")
     }
 
     @Test("Payload without typed artifacts is rejected")

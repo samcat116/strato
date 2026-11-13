@@ -69,7 +69,7 @@ public actor GuestIdentityTokenCache {
             return cached.response
         }
 
-        let ttl = min(900, max(1, min(300, policy.ttlSeconds ?? 300)))
+        let ttl = min(900, max(1, min(300, policy.hasTtlSeconds ? Int(policy.ttlSeconds) : 300)))
         let pending: Pending
         let task: Task<GuestJWTSVIDResponse, Error>
         if let existing = inFlight[key], existing.policy == policy {
@@ -93,7 +93,7 @@ public actor GuestIdentityTokenCache {
             if inFlight[key]?.id == pending.id { inFlight.removeValue(forKey: key) }
             guard !task.isCancelled else { throw CancellationError() }
             let issuedAt = min(response.issuedAt ?? completedAt, completedAt)
-            guard response.spiffeId == policy.spiffeId,
+            guard response.spiffeId == policy.spiffeID,
                 response.audiences == [audience],
                 response.expiresAt > completedAt,
                 response.expiresAt.timeIntervalSince(issuedAt) <= TimeInterval(ttl)
@@ -116,10 +116,10 @@ public actor GuestIdentityTokenCache {
     /// Drop credentials and work that no longer match the authoritative policy.
     public func retain(policies: [UUID: IdentityPolicy]) {
         entries = entries.filter { key, entry in
-            policies[key.vmId] == entry.policy && entry.policy.audiences.contains(key.audience)
+            policies[key.vmId] == entry.policy && entry.policy.audiences.values.contains(key.audience)
         }
         for (key, pending) in inFlight
-        where policies[key.vmId] != pending.policy || !pending.policy.audiences.contains(key.audience) {
+        where policies[key.vmId] != pending.policy || !pending.policy.audiences.values.contains(key.audience) {
             pending.task.cancel()
             inFlight.removeValue(forKey: key)
         }

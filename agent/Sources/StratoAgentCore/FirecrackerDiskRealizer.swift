@@ -37,7 +37,7 @@ public actor LocalFirecrackerDiskRealizer: FirecrackerDiskRealizing {
     public init() {}
 
     public func realize(_ attachment: DiskAttachment, readOnly: Bool) async throws -> FirecrackerRealizedDisk {
-        guard case .rbd = attachment else {
+        guard case .rbd = attachment.value else {
             return FirecrackerRealizedDisk(
                 canonical: attachment, realized: attachment, readOnly: readOnly)
         }
@@ -104,8 +104,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         _ attachment: DiskAttachment, readOnly: Bool
     ) async throws -> FirecrackerRealizedDisk {
         guard
-            case .rbd(
-                let pool, let image, let namespace, let user, _, _, _, let configPath) = attachment
+            case .rbd(let protocolRbd) = attachment.value
         else {
             return FirecrackerRealizedDisk(
                 canonical: attachment, realized: attachment, readOnly: readOnly)
@@ -139,10 +138,10 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         }
         try DurableFileWriter().write(Data(), to: marker, permissions: 0o600)
         var arguments = [
-            "--conf", configPath,
-            "--name", "client.\(user)",
-            "--namespace", namespace,
-            "map", "\(pool)/\(image)",
+            "--conf", protocolRbd.configPath,
+            "--name", "client.\(protocolRbd.user)",
+            "--namespace", protocolRbd.namespace,
+            "map", "\(protocolRbd.pool)/\(protocolRbd.image)",
             "--options", "ms_mode=secure",
         ]
         if readOnly { arguments.append("--read-only") }
@@ -189,7 +188,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
     public func adopt(
         _ attachment: DiskAttachment, readOnly: Bool
     ) async throws -> FirecrackerRealizedDisk {
-        guard case .rbd = attachment else {
+        guard case .rbd = attachment.value else {
             return FirecrackerRealizedDisk(
                 canonical: attachment, realized: attachment, readOnly: readOnly)
         }
@@ -214,7 +213,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
     }
 
     public func release(_ disk: FirecrackerRealizedDisk) async throws {
-        guard case .rbd = disk.canonical else { return }
+        guard case .rbd = disk.canonical.value else { return }
         let key = mappingKey(for: disk.canonical, readOnly: disk.readOnly)
         guard var mapping = mappings[key] else { return }
         if mapping.references > 1 {
@@ -251,22 +250,22 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
 
     private func mappingKey(for attachment: DiskAttachment, readOnly: Bool) -> String {
         guard
-            case .rbd(
-                let pool, let image, let namespace, _, _, let clusterId,
-                let credentialId, _) = attachment
+            case .rbd(let protocolRbd) = attachment.value
         else { return String(describing: attachment) }
         return [
-            clusterId.uuidString.lowercased(), credentialId.uuidString.lowercased(),
-            pool, namespace, image,
+            protocolRbd.clusterID.lowercased(), protocolRbd.credentialID.lowercased(),
+            protocolRbd.pool, protocolRbd.namespace, protocolRbd.image,
             readOnly ? "ro" : "rw",
         ].joined(separator: "/")
     }
 
     private func uncertainMappingMarker(for attachment: DiskAttachment) -> String {
-        guard case .rbd(let pool, let image, let namespace, _, _, let clusterId, _, _) = attachment else {
+        guard case .rbd(let protocolRbd) = attachment.value else {
             preconditionFailure("Only RBD attachments have mapping markers")
         }
-        let coordinate = [clusterId.uuidString.lowercased(), pool, namespace, image].joined(separator: "/")
+        let coordinate = [
+            protocolRbd.clusterID.lowercased(), protocolRbd.pool, protocolRbd.namespace, protocolRbd.image,
+        ].joined(separator: "/")
         let digest = SHA256.hash(data: Data(coordinate.utf8)).map { String(format: "%02x", $0) }.joined()
         return mappingStatePath + ".building-" + digest
     }
@@ -296,8 +295,7 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         path: String, attachment: DiskAttachment, readOnly: Bool
     ) async throws -> Bool {
         guard
-            case .rbd(
-                let pool, let image, let namespace, let user, _, _, _, let configPath) = attachment,
+            case .rbd(let protocolRbd) = attachment.value,
             let deviceName = Self.deviceName(for: path)
         else { return false }
 
@@ -315,13 +313,13 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         }
         guard
             devices.contains(where: {
-                $0.device == path && $0.pool == pool && ($0.namespace ?? "") == namespace
-                    && $0.imageName == image
+                $0.device == path && $0.pool == protocolRbd.pool && ($0.namespace ?? "") == protocolRbd.namespace
+                    && $0.imageName == protocolRbd.image
             })
         else { return false }
 
         let sysfsRoot = "/sys/class/block/\(deviceName)"
-        let expectedFSID = try configuredFSID(at: configPath)
+        let expectedFSID = try configuredFSID(at: protocolRbd.configPath)
         let actualFSID: UUID
         let configInfo: String
         let readOnlyValue: String
@@ -345,7 +343,9 @@ public actor KRBDDiskRealizer: FirecrackerDiskRealizing {
         // non-secret facts we need and never propagate or log the raw string.
         let options = Set(
             configInfo.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map(String.init))
-        let expectedUser = user.hasPrefix("client.") ? String(user.dropFirst("client.".count)) : user
+        let expectedUser =
+            protocolRbd.user.hasPrefix("client.")
+            ? String(protocolRbd.user.dropFirst("client.".count)) : protocolRbd.user
         guard
             options.contains("name=\(expectedUser)")
                 || options.contains("name=client.\(expectedUser)"),

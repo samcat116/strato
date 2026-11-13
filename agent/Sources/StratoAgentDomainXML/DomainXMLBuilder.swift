@@ -263,11 +263,15 @@ public enum DomainXMLBuilder {
 
     /// The domain document for `input`, ready for `virDomainDefineXML`.
     public static func build(_ input: DomainXMLInput) throws -> String {
+        guard CPUArchitecture.knownCases.contains(input.architecture) else {
+            throw AgentProtocolDecodeError.invalidField
+        }
+        try input.spec.boot.validateProtocol()
         guard !input.vmId.isEmpty, !input.vmId.contains("/") else {
             throw DomainXMLBuilderError.invalidDomainName(input.vmId)
         }
         guard input.spec.cpus > 0 else {
-            throw DomainXMLBuilderError.invalidCPUCount(input.spec.cpus)
+            throw DomainXMLBuilderError.invalidCPUCount(Int(input.spec.cpus))
         }
         guard input.spec.memoryBytes > 0 else {
             throw DomainXMLBuilderError.invalidMemorySize(input.spec.memoryBytes)
@@ -337,7 +341,7 @@ public enum DomainXMLBuilder {
 
         domain.append(osNode(input, machine: machine))
         domain.append(featuresNode(input, machine: machine))
-        domain.append(cpuNode(input, hotplugBytes: hotplugBytes, maxCpus: maxCpus))
+        domain.append(cpuNode(input, hotplugBytes: hotplugBytes, maxCpus: Int(maxCpus)))
 
         // libvirt's own defaults, stated explicitly because the reconciler
         // depends on them: a guest shutdown must stop the domain (so the agent
@@ -363,10 +367,10 @@ public enum DomainXMLBuilder {
 
     private static func osNode(_ input: DomainXMLInput, machine: MachineProfile) -> DomainXMLNode {
         var kernelBoot: (kernel: String, initramfs: String?, cmdline: String?)?
-        switch input.spec.boot {
-        case .directKernel(let kernel, let initramfs, let cmdline):
-            kernelBoot = (kernel, initramfs, cmdline)
-        case .disk:
+        switch input.spec.boot.value {
+        case .directKernel(let boot):
+            kernelBoot = (boot.kernel, boot.optionalInitramfs, boot.optionalCmdline)
+        case .disk, .none:
             kernelBoot = nil
         }
 
@@ -492,7 +496,7 @@ public enum DomainXMLBuilder {
 
     private static func featuresNode(_ input: DomainXMLInput, machine: MachineProfile) -> DomainXMLNode? {
         let uefiBoot: Bool
-        if case .disk = input.spec.boot { uefiBoot = true } else { uefiBoot = false }
+        if case .disk = input.spec.boot.value { uefiBoot = true } else { uefiBoot = false }
 
         var features = DomainXMLNode("features")
         // ACPI is unconditional on x86, but on aarch64 libvirt only accepts it
@@ -544,7 +548,7 @@ public enum DomainXMLBuilder {
         _ input: DomainXMLInput, machine: MachineProfile, hotplugBytes: Int64
     ) throws -> DomainXMLNode {
         var devices = DomainXMLNode("devices")
-        let graphics = input.spec.console?.effectiveGraphics == .vnc
+        let graphics = input.spec.hasConsole && input.spec.console.effectiveGraphics == .vnc
 
         if let emulatorPath = input.emulatorPath {
             devices.append(DomainXMLNode("emulator", text: emulatorPath))
@@ -557,7 +561,7 @@ public enum DomainXMLBuilder {
         let bootOrders = derivedBootOrders(input.disks)
         for (index, disk) in input.disks.enumerated() {
             devices.append(
-                diskNode(
+                try diskNode(
                     attachment: disk.attachment, index: index, readonly: disk.readonly,
                     bootOrder: bootOrders[index],
                     volumeId: disk.volumeId, blockPolicy: disk.blockPolicy,
@@ -568,7 +572,7 @@ public enum DomainXMLBuilder {
             // `-drive …,if=virtio,readonly=on`. It is always last, so its
             // presence can never shift a data disk's target name.
             devices.append(
-                diskNode(
+                try diskNode(
                     attachment: .file(path: isoPath, format: .raw), index: input.disks.count, readonly: true,
                     bootOrder: nil, volumeId: nil, blockPolicy: nil))
         }
@@ -752,7 +756,7 @@ public enum DomainXMLBuilder {
     /// `virt`). Nothing here is a guess — every one was read off a `dumpxml` of
     /// the goldens defined against libvirt 12.0.0.
     static func declaredPCIDeviceCount(_ input: DomainXMLInput, hotplugBytes: Int64) -> Int {
-        let graphics = input.spec.console?.effectiveGraphics == .vnc
+        let graphics = input.spec.hasConsole && input.spec.console.effectiveGraphics == .vnc
         return input.disks.count
             + (input.cloudInitISOPath == nil ? 0 : 1)
             + input.networks.count
@@ -830,27 +834,32 @@ public enum DomainXMLBuilder {
         attachment: DiskAttachment, target: String, readonly: Bool, bootOrder: Int?,
         volumeId: String?, blockPolicy: AppliedBlockDevicePolicy? = nil,
         ioLimits: VolumeIOLimits? = nil
-    ) -> DomainXMLNode {
+    ) throws -> DomainXMLNode {
         let diskType: String
         let driverFormat: String
         let source: DomainXMLNode
         let authentication: DomainXMLNode?
-        switch attachment {
-        case .file(let path, let format):
+        try attachment.validateProtocol()
+        switch attachment.value {
+        case .file(let file):
+            let path = file.path
+            let format = file.format
             diskType = "file"
-            driverFormat = format.rawValue
+            driverFormat = format.protocolValue
             source = DomainXMLNode("source", [("file", path)])
             authentication = nil
-        case .blockDevice(let path):
+        case .blockDevice(let device):
+            let path = device.path
             diskType = "block"
-            driverFormat = DiskFormat.raw.rawValue
+            driverFormat = DiskFormat.raw.protocolValue
             source = DomainXMLNode("source", [("dev", path)])
             authentication = nil
-        case .rbd(
-            let pool, let image, let namespace, let user, let monEndpoints, _,
-            let credentialId, let configPath):
+        case .rbd(let rbd):
+            let pool = rbd.pool, image = rbd.image, namespace = rbd.namespace, user = rbd.user
+            let monEndpoints = rbd.monEndpoints.values, configPath = rbd.configPath
+            let credentialId = rbd.credentialID
             diskType = "network"
-            driverFormat = DiskFormat.raw.rawValue
+            driverFormat = DiskFormat.raw.protocolValue
             var networkSource = DomainXMLNode(
                 "source",
                 [
@@ -876,20 +885,22 @@ public enum DomainXMLBuilder {
                     children: [
                         DomainXMLNode(
                             "secret",
-                            [("type", "ceph"), ("uuid", credentialId.uuidString.lowercased())])
+                            [("type", "ceph"), ("uuid", credentialId.lowercased())])
                     ])
+        case .none:
+            throw AgentProtocolDecodeError.invalidField
         }
 
         var disk = DomainXMLNode("disk", [("type", diskType), ("device", "disk")])
         var driverAttributes: [(String, String?)] = [("name", "qemu"), ("type", driverFormat)]
-        if blockPolicy?.active == true {
-            driverAttributes.append(("cache", blockPolicy?.cacheMode?.rawValue))
-            driverAttributes.append(("io", blockPolicy?.ioMode?.rawValue))
-            if blockPolicy?.discard == true {
+        if let blockPolicy, blockPolicy.active {
+            driverAttributes.append(("cache", blockPolicy.optionalCacheMode?.protocolValue))
+            driverAttributes.append(("io", blockPolicy.optionalIoMode?.protocolValue))
+            if blockPolicy.discard {
                 driverAttributes.append(("discard", "unmap"))
                 driverAttributes.append(("detect_zeroes", "unmap"))
             }
-            driverAttributes.append(("queues", blockPolicy?.queueCount.map(String.init)))
+            driverAttributes.append(("queues", blockPolicy.hasQueueCount ? String(blockPolicy.queueCount) : nil))
         }
         disk.append(DomainXMLNode("driver", driverAttributes))
         disk.append(source)
@@ -899,14 +910,12 @@ public enum DomainXMLBuilder {
         disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
         if let ioLimits, !ioLimits.isEmpty {
             var iotune = DomainXMLNode("iotune")
-            iotune.append(
-                ioLimits.iopsTotal.map {
-                    DomainXMLNode("total_iops_sec", text: String($0))
-                })
-            iotune.append(
-                ioLimits.bpsTotal.map {
-                    DomainXMLNode("total_bytes_sec", text: String($0))
-                })
+            if ioLimits.hasIopsTotal {
+                iotune.append(DomainXMLNode("total_iops_sec", text: String(ioLimits.iopsTotal)))
+            }
+            if ioLimits.hasBpsTotal {
+                iotune.append(DomainXMLNode("total_bytes_sec", text: String(ioLimits.bpsTotal)))
+            }
             disk.append(iotune)
         }
         if readonly {
@@ -929,8 +938,8 @@ public enum DomainXMLBuilder {
         attachment: DiskAttachment, index: Int, readonly: Bool, bootOrder: Int?,
         volumeId: String?, blockPolicy: AppliedBlockDevicePolicy? = nil,
         ioLimits: VolumeIOLimits? = nil
-    ) -> DomainXMLNode {
-        diskNode(
+    ) throws -> DomainXMLNode {
+        try diskNode(
             attachment: attachment, target: targetDeviceName(index: index),
             readonly: readonly, bootOrder: bootOrder, volumeId: volumeId,
             blockPolicy: blockPolicy, ioLimits: ioLimits)
@@ -1003,8 +1012,9 @@ public enum DomainXMLBuilder {
     /// `aarch64` to libvirt and to QEMU.
     private static func libvirtArch(_ architecture: CPUArchitecture) -> String {
         switch architecture {
-        case .x86_64: return "x86_64"
+        case .x8664: return "x86_64"
         case .arm64: return "aarch64"
+        case .unspecified, .UNRECOGNIZED: return ""
         }
     }
 
@@ -1013,8 +1023,9 @@ public enum DomainXMLBuilder {
     /// this string.
     private static func machineType(_ architecture: CPUArchitecture) -> String {
         switch architecture {
-        case .x86_64: return "q35"
+        case .x8664: return "q35"
         case .arm64: return "virt"
+        case .unspecified, .UNRECOGNIZED: return ""
         }
     }
 

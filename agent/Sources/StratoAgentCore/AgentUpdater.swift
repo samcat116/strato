@@ -205,7 +205,7 @@ public struct AgentUpdater: Sendable {
             "Downloading agent update artifact",
             metadata: [
                 "url": .string(DesiredAgentUpdate.redactURL(artifactURL)),
-                "kind": .string(artifactKind.rawValue),
+                "kind": .string(artifactKind.protocolValue),
             ])
         let artifactPath = workspace + "/artifact"
         try await download(url, artifactPath)
@@ -218,6 +218,8 @@ public struct AgentUpdater: Sendable {
 
         let stagedBinary: String
         switch artifactKind {
+        case .unspecified, .UNRECOGNIZED:
+            throw AgentUpdateError.extractionFailed("Unsupported artifact kind")
         case .binary:
             stagedBinary = artifactPath
         case .tarball:

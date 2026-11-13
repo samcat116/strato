@@ -103,7 +103,7 @@ struct BlockDeviceInventoryTests {
         #expect(device.wwn == "0x5000CCA123ABCDEF")
         #expect(device.rotational == false)
         #expect(device.state == .available)
-        #expect(device.uses == [])
+        #expect(device.uses.values == [])
     }
 
     @Test("descendant filesystem, mount, partition, and LVM facts occupy the whole disk")
@@ -142,7 +142,7 @@ struct BlockDeviceInventoryTests {
         #expect(device.identity == .init(kind: .serial, value: "ROOT-1"))
         #expect(device.state == .inUse)
         #expect(
-            device.uses == [
+            device.uses.values == [
                 .childDevice, .filesystem, .lvmPhysicalVolume, .mounted, .partitionTable,
             ])
     }
@@ -177,10 +177,10 @@ struct BlockDeviceInventoryTests {
             }
             """)
 
-        #expect(devices[0].uses == [.childDevice, .mounted, .swap])
+        #expect(devices[0].uses.values == [.childDevice, .mounted, .swap])
         #expect(devices[0].state == .inUse)
-        #expect(devices[1].identity == nil)
-        #expect(devices[1].uses == [.readOnly])
+        #expect(!devices[1].hasIdentity)
+        #expect(devices[1].uses.values == [.readOnly])
         #expect(devices[1].state == .inUse)
     }
 
@@ -208,7 +208,7 @@ struct BlockDeviceInventoryTests {
 
         #expect(devices[0].state == .faulted)
         #expect(devices[1].state == .faulted)
-        #expect(devices[1].uses == [.filesystem])
+        #expect(devices[1].uses.values == [.filesystem])
     }
 
     @Test("non-disk top-level nodes never become selectable rows")

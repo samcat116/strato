@@ -262,9 +262,9 @@ struct InitialNodeDependencyModuleTests {
             version: { "1.12.4" },
             svid: { .ready(expiresAt: now.addingTimeInterval(120)) },
             now: { now })
-        let observation = await expiring.inspect()
-        #expect(observation.functionalState == .degraded)
-        #expect(observation.reason?.code == .functionalProbeFailed)
+        let inspection = await expiring.inspect()
+        #expect(inspection.functionalState == .degraded)
+        #expect(inspection.reason?.code == .functionalProbeFailed)
     }
 
     @Test("Externally supervised Workload API does not require a local SPIRE installation")
@@ -279,10 +279,10 @@ struct InitialNodeDependencyModuleTests {
 
         let observation = try #require(await manager.refresh().first)
         #expect(observation.supervisorState == .notApplicable)
-        #expect(observation.installedVersion == nil)
+        #expect(!observation.hasInstalledVersion)
         #expect(observation.compatibility == .compatible)
         #expect(observation.functionalState == .healthy)
-        #expect(observation.reason == nil)
+        #expect(!observation.hasReason)
         #expect(observation.permitsDependentWork)
     }
 
@@ -302,10 +302,10 @@ struct InitialNodeDependencyModuleTests {
 
         let observation = try #require(await manager.refresh().first)
         #expect(observation.supervisorState == .notApplicable)
-        #expect(observation.installedVersion == nil)
+        #expect(!observation.hasInstalledVersion)
         #expect(observation.compatibility == .compatible)
         #expect(observation.functionalState == .healthy)
-        #expect(observation.reason == nil)
+        #expect(!observation.hasReason)
         #expect(observation.permitsDependentWork)
     }
 
@@ -327,7 +327,7 @@ struct InitialNodeDependencyModuleTests {
         #expect(observation.supervisorState == .inactive)
         #expect(observation.compatibility == .compatible)
         #expect(observation.functionalState == .unhealthy)
-        #expect(observation.reason?.code == .inactiveUnit)
+        #expect(observation.reason.code == .inactiveUnit)
         #expect(!observation.permitsDependentWork)
     }
 
@@ -369,7 +369,7 @@ struct InitialNodeDependencyModuleTests {
 
             let stoppedObservation = try #require(await stoppedManager.refresh().first)
             #expect(stoppedObservation.functionalState == .unhealthy)
-            #expect(stoppedObservation.reason?.code == expectedReason)
+            #expect(stoppedObservation.reason.code == expectedReason)
             #expect(!stoppedObservation.permitsDependentWork)
         }
     }
@@ -413,7 +413,7 @@ struct InitialNodeDependencyModuleTests {
         let identityObservation = try #require(await identityManager.refresh().first)
         #expect(identityObservation.supervisorState == .failed)
         #expect(identityObservation.functionalState == .unhealthy)
-        #expect(identityObservation.reason?.code == .failedUnit)
+        #expect(identityObservation.reason.code == .failedUnit)
         #expect(!identityObservation.permitsDependentWork)
 
         let systemd = SystemdHostAdapter(
@@ -431,7 +431,7 @@ struct InitialNodeDependencyModuleTests {
         let libvirtObservation = try #require(await libvirtManager.refresh().first)
         #expect(libvirtObservation.supervisorState == .failed)
         #expect(libvirtObservation.functionalState == .unhealthy)
-        #expect(libvirtObservation.reason?.code == .failedUnit)
+        #expect(libvirtObservation.reason.code == .failedUnit)
         #expect(!libvirtObservation.permitsDependentWork)
     }
 
@@ -443,12 +443,12 @@ struct InitialNodeDependencyModuleTests {
             version: { nil },
             svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
 
-        let observation = await fileIdentity.inspect()
-        #expect(observation.supervisorState == .notApplicable)
-        #expect(observation.installedVersion == nil)
-        #expect(observation.compatibility == .compatible)
-        #expect(observation.functionalState == .healthy)
-        #expect(observation.reason == nil)
+        let inspection = await fileIdentity.inspect()
+        #expect(inspection.supervisorState == .notApplicable)
+        #expect(inspection.installedVersion == nil)
+        #expect(inspection.compatibility == .compatible)
+        #expect(inspection.functionalState == .healthy)
+        #expect(inspection.reason == nil)
     }
 
     @Test("Libvirt enforces the exact version boundary")
@@ -513,7 +513,7 @@ struct InitialNodeDependencyModuleTests {
             let observation = try #require(await manager.refresh().first)
             #expect(observation.supervisorState == unit.supervisorState)
             #expect(observation.functionalState == .unhealthy)
-            #expect(observation.reason?.code == expectedReason)
+            #expect(observation.reason.code == expectedReason)
             #expect(!observation.permitsDependentWork)
         }
     }

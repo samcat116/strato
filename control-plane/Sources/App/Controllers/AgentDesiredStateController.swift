@@ -69,13 +69,13 @@ struct AgentDesiredStateController: RouteCollection {
             throw Abort(.unauthorized, reason: "Desired state requires an agent client certificate")
         }
         let agent = try await AgentMTLSAuthenticator.authenticateAgent(req: req)
-        // Bridge clients advertise their exact workload contract on every poll,
-        // including polls that outlive a control-plane cutover. Legacy matching
-        // clients retain their registration-only contract until bridge install.
-        if let version = req.headers.first(name: AgentUpdateBridgeResponse.wireVersionHeader),
-            version != String(WireProtocol.currentVersion)
-        {
-            throw Abort(.conflict, reason: "Workload wire version must match; use the update-only exchange")
+        guard
+            req.headers.first(name: AgentUpdateBridgeResponse.wireVersionHeader)
+                == String(AgentProtocolCompatibility.major),
+            let sessionHeader = req.headers.first(name: AgentProtocolCompatibility.sessionHeader),
+            let sessionID = UUID(uuidString: sessionHeader)
+        else {
+            throw Abort(.conflict, reason: "A current Protobuf registration session is required")
         }
 
         // Resolved by the SVID's full identity, not its bare name: two
@@ -93,6 +93,9 @@ struct AgentDesiredStateController: RouteCollection {
                 metadata: ["strato.agent.identity": .string(agent.identity.key)])
             throw Abort(.forbidden, reason: "No agent is registered for this identity")
         }
+
+        let protocolSession = try await AgentProtocolSession.load(
+            agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
 
         let agentKey = agent.identity.key
         // An absent `If-None-Match` is not a cache miss to be worked around —
@@ -124,6 +127,14 @@ struct AgentDesiredStateController: RouteCollection {
             // "cache assembled payloads" alternative is different in kind: it
             // grants against a *stale* placement and serves stale credentials.
             let message = try await req.application.desiredStateAssembler.assemble(agentId: agentId)
+            // A parked poll cannot outlive the registration whose capabilities
+            // authorized its assembly. Check again after every async assembly.
+            _ = try await AgentProtocolSession.load(
+                agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
+            let envelope = try MessageEnvelope(message: message)
+            try AgentProtocolCompatibility.require(
+                envelope.requirements, agreement: protocolSession.agreement,
+                offered: AgentProtocolCompatibility.localOffer)
             let etag = try DesiredStateDigest.etag(for: message)
             assemblies += 1
 
@@ -137,8 +148,8 @@ struct AgentDesiredStateController: RouteCollection {
                     "Desired-state poll served",
                     metadata: [
                         "strato.agent.id": .string(agentId),
-                        "syncId": .string(message.syncId),
-                        "vmCount": .stringConvertible(message.vms.count),
+                        "syncId": .string(message.syncID),
+                        "vmCount": .stringConvertible(message.vms.values.count),
                         "conditional": .stringConvertible(ifNoneMatch != nil),
                     ])
                 return response
@@ -146,6 +157,8 @@ struct AgentDesiredStateController: RouteCollection {
 
             if clock.now >= deadline {
                 Telemetry.recordDesiredStatePoll(mode: mode, outcome: .notModified)
+                _ = try await AgentProtocolSession.load(
+                    agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
                 return Self.notModifiedResponse(etag: etag)
             }
 
@@ -158,6 +171,8 @@ struct AgentDesiredStateController: RouteCollection {
                     "Desired-state poll exhausted its assembly budget; idling out the hold window",
                     metadata: ["strato.agent.id": .string(agentId)])
                 try? await Task.sleep(until: deadline, clock: clock)
+                _ = try await AgentProtocolSession.load(
+                    agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
                 return Self.notModifiedResponse(etag: etag)
             }
 
@@ -171,6 +186,8 @@ struct AgentDesiredStateController: RouteCollection {
             if parked == .refused {
                 Telemetry.recordDesiredStatePoll(mode: mode, outcome: .parkRefused)
                 try? await Task.sleep(until: deadline, clock: clock)
+                _ = try await AgentProtocolSession.load(
+                    agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
                 return Self.notModifiedResponse(etag: etag)
             }
 
@@ -185,7 +202,7 @@ struct AgentDesiredStateController: RouteCollection {
     private static func payloadResponse(message: DesiredStateMessage, etag: String) throws -> Response {
         let body = try WireProtocol.encodeEnvelope(message)
         let response = Response(status: .ok, body: .init(data: body))
-        response.headers.contentType = .json
+        response.headers.replaceOrAdd(name: .contentType, value: "application/protobuf")
         response.headers.replaceOrAdd(name: .eTag, value: etag)
         // The payload is per-agent and changes without notice; the ETag is the
         // only caching contract, and it is between the agent and the handler.

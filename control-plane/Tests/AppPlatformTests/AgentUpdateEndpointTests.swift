@@ -232,7 +232,8 @@ final class AgentUpdateEndpointTests {
             // re-resolve it from) and assembly hands it to the agent verbatim.
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
-            let update = try #require(sync.desiredAgentUpdate)
+            try #require(sync.hasDesiredAgentUpdate)
+            let update = sync.desiredAgentUpdate
             #expect(update.targetVersion == Self.target)
             #expect(update.artifactURL == "https://mirror.internal/strato-linux-x86_64.tar.gz?token=secret")
             #expect(update.sha256 == Self.validDigest)
@@ -396,9 +397,10 @@ final class AgentUpdateEndpointTests {
 
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
-            let update = try #require(sync.desiredAgentUpdate)
+            try #require(sync.hasDesiredAgentUpdate)
+            let update = sync.desiredAgentUpdate
             #expect(update.artifactKind == .binary)
-            #expect(update.tarballMember == nil)
+            #expect(!update.hasTarballMember)
         }
     }
 }

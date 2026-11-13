@@ -196,7 +196,10 @@ public enum NetworkACLBuilder {
         policyID: UUID,
         generation: Int64
     ) -> ACLSpec? {
-        guard let priority = priority(forRuleNumber: rule.ruleNumber) else { return nil }
+        let protocolName: String? = rule.optionalProtocolName
+        let portRangeMin: Int64? = rule.optionalPortRangeMin
+        let portRangeMax: Int64? = rule.optionalPortRangeMax
+        guard let priority = priority(forRuleNumber: Int(rule.ruleNumber)) else { return nil }
 
         let family: String
         switch rule.ethertype {
@@ -225,19 +228,19 @@ public enum NetworkACLBuilder {
         }
 
         switch rule.ethertype {
-        case "ipv4": guard IPv4CIDR(rule.remoteCIDR) != nil else { return nil }
-        case "ipv6": guard IPv6CIDR(rule.remoteCIDR) != nil else { return nil }
+        case "ipv4": guard IPv4CIDR(rule.remoteCidr) != nil else { return nil }
+        case "ipv6": guard IPv6CIDR(rule.remoteCidr) != nil else { return nil }
         default: return nil
         }
-        var clauses = [family, "\(peerField) == \(rule.remoteCIDR)"]
+        var clauses = [family, "\(peerField) == \(rule.remoteCidr)"]
 
-        switch rule.protocolName {
+        switch protocolName {
         case nil:
-            guard rule.portRangeMin == nil, rule.portRangeMax == nil else { return nil }
+            guard portRangeMin == nil, portRangeMax == nil else { return nil }
         case "tcp", "udp":
-            let proto = rule.protocolName!
+            let proto = protocolName!
             clauses.append(proto)
-            switch (rule.portRangeMin, rule.portRangeMax) {
+            switch (portRangeMin, portRangeMax) {
             case (nil, nil):
                 break
             case let (minimum?, maximum?)
@@ -254,7 +257,7 @@ public enum NetworkACLBuilder {
         case "icmp":
             let proto = rule.ethertype == "ipv6" ? "icmp6" : "icmp4"
             clauses.append(proto)
-            switch (rule.portRangeMin, rule.portRangeMax) {
+            switch (portRangeMin, portRangeMax) {
             case (nil, nil):
                 break
             case let (type?, nil) where (0...255).contains(type):
@@ -271,7 +274,7 @@ public enum NetworkACLBuilder {
 
         var externalIDs = baseExternalIDs(
             networkID: networkID, policyID: policyID, generation: generation)
-        externalIDs[NetworkACLRowIdentity.ruleIDKey] = rule.id.uuidString.lowercased()
+        externalIDs[NetworkACLRowIdentity.ruleIDKey] = rule.id.lowercased()
         externalIDs[NetworkACLRowIdentity.ruleKindKey] = NetworkACLRowIdentity.ruleKind
         return ACLSpec(
             direction: direction,
@@ -354,45 +357,46 @@ public enum NetworkACLReconciler {
         var protected: Set<String> = []
         var invalid: [InvalidNetworkACLPlan] = []
 
-        for network in networks.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString }) {
-            let switchName = OVNNaming.switchName(networkId: network.networkId)
-            guard let policies = network.networkACLs else {
+        for network in networks.sorted(by: { $0.networkID < $1.networkID }) {
+            let switchName = OVNNaming.switchName(networkId: validatedProtocolUUID(network.networkID))
+            guard network.hasNetworkAcLs else {
                 protected.insert(switchName)
                 continue
             }
+            let policies = network.networkAcLs.values
             hasOpinion = true
 
             guard policies.count <= 1 else {
                 protected.insert(switchName)
                 invalid.append(
                     InvalidNetworkACLPlan(
-                        networkID: network.networkId,
-                        policyIDs: policies.map(\.id),
-                        ruleIDs: policies.flatMap(\.rules).map(\.id),
+                        networkID: validatedProtocolUUID(network.networkID),
+                        policyIDs: policies.map { validatedProtocolUUID($0.id) },
+                        ruleIDs: policies.flatMap { $0.rules.values }.map { validatedProtocolUUID($0.id) },
                         reason: "a logical network may have at most one network ACL"))
                 continue
             }
             guard let policy = policies.first else { continue }
 
             guard policy.generation >= 1,
-                policy.rules.count <= NetworkACLBuilder.maximumRulesPerPolicy
+                policy.rules.values.count <= NetworkACLBuilder.maximumRulesPerPolicy
             else {
                 protected.insert(switchName)
                 invalid.append(
                     InvalidNetworkACLPlan(
-                        networkID: network.networkId,
-                        policyIDs: [policy.id],
-                        ruleIDs: policy.rules.map(\.id),
+                        networkID: validatedProtocolUUID(network.networkID),
+                        policyIDs: [validatedProtocolUUID(policy.id)],
+                        ruleIDs: policy.rules.values.map { validatedProtocolUUID($0.id) },
                         reason: policy.generation < 1
                             ? "network ACL generation must be positive"
                             : "a network ACL may contain at most \(NetworkACLBuilder.maximumRulesPerPolicy) rules"))
                 continue
             }
 
-            let sortedRules = policy.rules.sorted {
+            let sortedRules = policy.rules.values.sorted {
                 if $0.ruleNumber != $1.ruleNumber { return $0.ruleNumber < $1.ruleNumber }
                 if $0.direction != $1.direction { return $0.direction < $1.direction }
-                return $0.id.uuidString < $1.id.uuidString
+                return $0.id < $1.id
             }
             var seenRuleNumbers: Set<String> = []
             var built: [ACLSpec] = []
@@ -402,11 +406,11 @@ public enum NetworkACLReconciler {
                 guard seenRuleNumbers.insert(orderingKey).inserted,
                     let acl = NetworkACLBuilder.acl(
                         for: rule,
-                        networkID: network.networkId,
-                        policyID: policy.id,
+                        networkID: validatedProtocolUUID(network.networkID),
+                        policyID: validatedProtocolUUID(policy.id),
                         generation: policy.generation)
                 else {
-                    badRuleIDs.append(rule.id)
+                    badRuleIDs.append(validatedProtocolUUID(rule.id))
                     continue
                 }
                 built.append(acl)
@@ -416,8 +420,8 @@ public enum NetworkACLReconciler {
                 protected.insert(switchName)
                 invalid.append(
                     InvalidNetworkACLPlan(
-                        networkID: network.networkId,
-                        policyIDs: [policy.id],
+                        networkID: validatedProtocolUUID(network.networkID),
+                        policyIDs: [validatedProtocolUUID(policy.id)],
                         ruleIDs: badRuleIDs,
                         reason: "one or more network ACL rules cannot be expressed safely"))
                 continue
@@ -425,13 +429,13 @@ public enum NetworkACLReconciler {
 
             plans.append(
                 NetworkACLPlan(
-                    networkID: network.networkId,
-                    policyID: policy.id,
+                    networkID: validatedProtocolUUID(network.networkID),
+                    policyID: validatedProtocolUUID(policy.id),
                     switchName: switchName,
                     generation: policy.generation,
                     defaultDrops: NetworkACLBuilder.defaultDrops(
-                        networkID: network.networkId,
-                        policyID: policy.id,
+                        networkID: validatedProtocolUUID(network.networkID),
+                        policyID: validatedProtocolUUID(policy.id),
                         generation: policy.generation),
                     ruleDrops: built.filter { $0.action == "drop" },
                     rulePasses: built.filter { $0.action == "pass" }))
@@ -568,6 +572,7 @@ public enum NetworkACLReconciler {
         actuator: any NetworkACLActuator,
         logger: Logger
     ) async throws -> [ReconcileStepFailure] {
+        for network in networks { try network.validateProtocol() }
         let result = plan(networks: networks)
         guard result.hasOpinion else { return [] }
 
@@ -614,8 +619,8 @@ public enum NetworkACLReconciler {
         where !desiredSwitches.contains(row.switchName) && !protected.contains(row.switchName) {
             let affectedNetworkIDs = Set(
                 networks.filter {
-                    OVNNaming.switchName(networkId: $0.networkId) == row.switchName
-                }.map(\.networkId))
+                    OVNNaming.switchName(networkId: validatedProtocolUUID($0.networkID)) == row.switchName
+                }.map { validatedProtocolUUID($0.networkID) })
             if let failure = await observeAttempt(
                 logger,
                 "tear down network ACL on \(row.switchName)",

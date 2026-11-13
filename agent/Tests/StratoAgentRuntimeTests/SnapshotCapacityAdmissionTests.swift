@@ -10,8 +10,10 @@ import Testing
 struct SnapshotCapacityAdmissionTests {
     private let gib: Int64 = 1_073_741_824
 
-    @Test("a local snapshot reserves its parent's materialized virtual size")
-    func snapshotReservesMaterializedParentSize() async throws {
+    @Test(
+        "a local snapshot reserves its parent's materialized virtual size with explicit or inherited storage",
+        arguments: [true, false])
+    func snapshotReservesMaterializedParentSize(explicitStorage: Bool) async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("snapshot-capacity-admission-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -39,7 +41,7 @@ struct SnapshotCapacityAdmissionTests {
             desiredStatus: .present,
             generation: 1,
             sizeBytes: 10 * gib,
-            format: DiskFormat.qcow2.rawValue)
+            format: DiskFormat.qcow2.protocolValue)
         await agent.setDesiredVolumeForSnapshotCapacityTest(parentDesired)
 
         let desired = DesiredSnapshotState(
@@ -48,7 +50,7 @@ struct SnapshotCapacityAdmissionTests {
             parentId: parentId,
             desiredStatus: .present,
             generation: 1,
-            volumeStorage: .local)
+            volumeStorage: explicitStorage ? .local : nil)
         let item = ReconcileWorkItem(
             kind: .volumeSnapshot,
             id: snapshotId.uuidString,
@@ -61,6 +63,13 @@ struct SnapshotCapacityAdmissionTests {
         let state = await agent.snapshotCapacityStateForTest(snapshotId)
         #expect(state.reservedDiskBytes == 40 * gib)
         #expect(state.provisionalDiskBytes == 0)
+
+        try await agent.snapshotReconcileDelete(
+            ReconcileWorkItem(
+                kind: .volumeSnapshot, id: snapshotId.uuidString, generation: desired.generation,
+                steps: [.delete], target: .snapshot(desired)))
+        #expect(await agent.snapshotCapacityStateForTest(snapshotId).reservedDiskBytes == nil)
+        await agent.stop()
     }
 
     @Test("snapshot admission claims the materialized parent size")
@@ -93,7 +102,7 @@ struct SnapshotCapacityAdmissionTests {
                 desiredStatus: .present,
                 generation: 1,
                 sizeBytes: 10 * gib,
-                format: DiskFormat.qcow2.rawValue))
+                format: DiskFormat.qcow2.protocolValue))
 
         let desired = DesiredSnapshotState(
             snapshotId: snapshotId,
@@ -134,7 +143,7 @@ extension Agent {
     }
 
     fileprivate func setDesiredVolumeForSnapshotCapacityTest(_ desired: DesiredVolumeState) {
-        desiredVolumeStates[desired.volumeId.uuidString] = desired
+        desiredVolumeStates[desired.volumeID] = desired
     }
 
     fileprivate func snapshotCapacityStateForTest(

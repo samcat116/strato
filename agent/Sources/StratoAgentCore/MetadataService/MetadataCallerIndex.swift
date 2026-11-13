@@ -82,6 +82,7 @@ public enum MetadataCallerResolution: Sendable, Equatable {
 /// question.
 public struct MetadataCallerIndex: Sendable {
     private let byAddress: [MetadataCallerAddress: [UUID]]
+    private let invalidAddresses: Set<MetadataCallerAddress>
 
     /// The network this index answers for — every key comes from a NIC on it.
     public let networkId: UUID
@@ -89,18 +90,24 @@ public struct MetadataCallerIndex: Sendable {
     public init(networkId: UUID, instances: [InstanceMetadata]) {
         self.networkId = networkId
         var byAddress: [MetadataCallerAddress: Set<UUID>] = [:]
+        var invalidAddresses: Set<MetadataCallerAddress> = []
         for instance in instances {
-            for nic in instance.nics where nic.networkId == networkId {
+            for nic in instance.nics.values where UUID(uuidString: nic.networkID) == networkId {
                 for address in Self.addresses(of: nic) {
-                    byAddress[address, default: []].insert(instance.instanceId)
+                    if let instanceID = UUID(uuidString: instance.instanceID) {
+                        byAddress[address, default: []].insert(instanceID)
+                    } else {
+                        invalidAddresses.insert(address)
+                    }
                 }
             }
         }
+        self.invalidAddresses = invalidAddresses
         self.byAddress = byAddress.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
     }
 
     public func resolve(_ source: MetadataCallerAddress) -> MetadataCallerResolution {
-        guard let claimants = byAddress[source] else { return .unknown }
+        guard !invalidAddresses.contains(source), let claimants = byAddress[source] else { return .unknown }
         if claimants.count == 1 { return .vm(claimants[0]) }
         return .ambiguous(vmIds: claimants)
     }
@@ -108,10 +115,10 @@ public struct MetadataCallerIndex: Sendable {
     /// Every address a guest may legitimately send from on this NIC.
     private static func addresses(of nic: MetadataNIC) -> [MetadataCallerAddress] {
         var addresses: [MetadataCallerAddress] = []
-        if let ipAddress = nic.ipAddress, let v4 = IPv4Address(ipAddress) {
+        if nic.hasIpAddress, let v4 = IPv4Address(nic.ipAddress) {
             addresses.append(.v4(v4))
         }
-        if let ipv6Address = nic.ipv6Address, let v6 = IPv6Address(ipv6Address) {
+        if nic.hasIpv6Address, let v6 = IPv6Address(nic.ipv6Address) {
             // Through the parser rather than by string, so a non-canonical
             // spelling on the wire still matches what the kernel reports.
             addresses.append(.v6(v6))

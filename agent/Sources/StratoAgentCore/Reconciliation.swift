@@ -247,7 +247,17 @@ public actor Reconciler {
     /// enumerate its store must skip that family rather than treating unknown
     /// presence as empty.
     public func apply(_ message: DesiredStateMessage) async {
-        let tombstones = message.tombstones
+        // Validate direct callers as well as transport dispatch before metadata,
+        // planning, generation tracking, or workload effects can change.
+        var message = message
+        do {
+            try message.validateProtocol()
+            try message.normalizeProtocolIdentifiers()
+        } catch {
+            logger.error("Refusing invalid desired-state snapshot")
+            return
+        }
+        let tombstones = message.tombstones.values
 
         // Instance metadata is recorded before anything else this sync does,
         // and deliberately outside the presence guard below: the store is a
@@ -261,7 +271,7 @@ public actor Reconciler {
         // generation without inventing a hypervisor action, while hostname and
         // service-switch edits can still arrive at an equal generation. Routing
         // the document through actuation would drop both shapes of edit.
-        await recordMetadata(message.vms)
+        await recordMetadata(message.vms.values)
 
         // An agent that cannot enumerate its own workloads converges nothing
         // (STR-138). Every item this sync could plan rests on the presence
@@ -282,8 +292,8 @@ public actor Reconciler {
             logger.error(
                 "Ignoring desired-state sync: this host's workloads are unknown, so nothing can be converged against them",
                 metadata: [
-                    "syncId": .string(message.syncId),
-                    "desiredVMs": .stringConvertible(message.vms.count),
+                    "syncId": .string(message.syncID),
+                    "desiredVMs": .stringConvertible(message.vms.values.count),
                 ])
             // Nothing can be held against a host we cannot see, and last
             // sync's held set describes a reality we no longer observe.
@@ -295,7 +305,7 @@ public actor Reconciler {
         }
 
         await actuator.prepareManagedVolumeInventory(
-            from: message.vms, desiredVolumes: message.volumes)
+            from: message.vms.values, desiredVolumes: message.volumes.values)
 
         let presentVMs = await actuator.observedPresence()
         // The durable half of the reconciler's memory (STR-151). `lastApplied`
@@ -305,7 +315,7 @@ public actor Reconciler {
         // shared by both planners.
         let appliedEdges = await actuator.observedEdgeNonces()
         let vmPlan = Self.plan(
-            desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
+            desired: message.vms.values, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
             presentSizing: await actuator.observedSizing(), tombstones: tombstones,
             appliedEdges: appliedEdges,
             presentNetworks: await actuator.observedNetworkSpecs(),
@@ -320,15 +330,15 @@ public actor Reconciler {
         if let presentVolumes = await actuator.observedVolumePresence() {
             presentVolumeCount = presentVolumes.count
             volumePlan = Self.planVolumes(
-                desired: message.volumes, present: presentVolumes,
+                desired: message.volumes.values, present: presentVolumes,
                 lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
             plan.unrecognized += volumePlan.unrecognized
         } else {
             logger.error(
                 "Skipping the volume half of this sync: this host cannot enumerate its volume store",
                 metadata: [
-                    "syncId": .string(message.syncId),
-                    "desiredVolumes": .stringConvertible(message.volumes.count),
+                    "syncId": .string(message.syncID),
+                    "desiredVolumes": .stringConvertible(message.volumes.values.count),
                 ])
         }
 
@@ -344,15 +354,15 @@ public actor Reconciler {
                 presentSnapshotCounts[artifact.kind.workloadKind, default: 0] += 1
             }
             snapshotPlan = Self.planSnapshots(
-                desired: message.snapshots, present: presentSnapshots,
+                desired: message.snapshots.values, present: presentSnapshots,
                 lastApplied: appliedSnapshotGenerations(), tombstones: tombstones)
             plan.unrecognized += snapshotPlan.unrecognized
         } else {
             logger.error(
                 "Skipping the snapshot half of this sync: this host cannot enumerate the artifacts it holds",
                 metadata: [
-                    "syncId": .string(message.syncId),
-                    "desiredSnapshots": .stringConvertible(message.snapshots.count),
+                    "syncId": .string(message.syncID),
+                    "desiredSnapshots": .stringConvertible(message.snapshots.values.count),
                 ])
         }
 
@@ -362,7 +372,7 @@ public actor Reconciler {
             let presentSandboxes = await actuator.observedSandboxPresence()
             presentSandboxCount = presentSandboxes.count
             sandboxPlan = Self.planSandboxes(
-                desired: message.sandboxes, present: presentSandboxes,
+                desired: message.sandboxes.values, present: presentSandboxes,
                 lastApplied: appliedGenerations(kind: .sandbox), tombstones: tombstones,
                 appliedEdges: appliedEdges)
             plan.unrecognized += sandboxPlan.unrecognized
@@ -393,17 +403,17 @@ public actor Reconciler {
         let bootingVMIDs = Set(
             vmPlan.items.lazy.filter { $0.steps.contains(.boot) }.map(\.id))
         let bootVolumeIDs = Set(
-            message.vms.lazy
-                .filter { bootingVMIDs.contains($0.vmId.uuidString) }
-                .flatMap { $0.spec.volumes.lazy.filter { $0.bootOrder == 0 }.map(\.volumeId.uuidString) }
+            message.vms.values.lazy
+                .filter { bootingVMIDs.contains($0.vmID) }
+                .flatMap { $0.spec.volumes.values.lazy.filter { $0.hasBootOrder && $0.bootOrder == 0 }.map(\.volumeID) }
         )
         let (volumeData, volumeAttachment) = volumePlan.items.partitioned {
             $0.laneKeys.count == 1 || $0.steps.contains(.create)
                 || ($0.steps.contains(.resize) && bootVolumeIDs.contains($0.id))
         }
         let captureBeforeSuspension = Set(
-            message.sandboxes.compactMap {
-                $0.desiredStatus == .suspended ? $0.suspensionAfterSnapshotId?.uuidString : nil
+            message.sandboxes.values.compactMap {
+                $0.desiredStatus == .suspended && $0.hasSuspensionAfterSnapshotID ? $0.suspensionAfterSnapshotID : nil
             })
         let (requiredCaptures, remainingSnapshots) = snapshotPlan.items.partitioned {
             captureBeforeSuspension.contains($0.id) && $0.steps.contains(.create)
@@ -424,19 +434,19 @@ public actor Reconciler {
         ]
         population.merge(presentSnapshotCounts) { _, new in new }
         let refusalChanged = applyTeardownGuard(
-            to: &items, syncId: message.syncId, present: population)
+            to: &items, syncId: message.syncID, present: population)
 
         logger.debug(
             "Applying desired-state sync",
             metadata: [
-                "syncId": .string(message.syncId),
-                "desiredVMs": .stringConvertible(message.vms.count),
+                "syncId": .string(message.syncID),
+                "desiredVMs": .stringConvertible(message.vms.values.count),
                 "presentVMs": .stringConvertible(presentVMs.count),
-                "desiredSandboxes": .stringConvertible(message.sandboxes.count),
+                "desiredSandboxes": .stringConvertible(message.sandboxes.values.count),
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
-                "desiredVolumes": .stringConvertible(message.volumes.count),
+                "desiredVolumes": .stringConvertible(message.volumes.values.count),
                 "presentVolumes": .stringConvertible(presentVolumeCount),
-                "desiredSnapshots": .stringConvertible(message.snapshots.count),
+                "desiredSnapshots": .stringConvertible(message.snapshots.values.count),
                 "presentSnapshots": .stringConvertible(presentSnapshotCounts.values.reduce(0, +)),
                 "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
@@ -445,10 +455,10 @@ public actor Reconciler {
             logger.warning(
                 "Holding workloads the control plane did not account for; awaiting its decision",
                 metadata: [
-                    "syncId": .string(message.syncId),
+                    "syncId": .string(message.syncID),
                     "count": .stringConvertible(plan.unrecognized.count),
                     "workloadIds": .string(
-                        plan.unrecognized.map { "\($0.kind.rawValue):\($0.workloadId.uuidString)" }
+                        plan.unrecognized.map { "\($0.kind.protocolValue):\($0.workloadID)" }
                             .joined(separator: ",")),
                 ])
         }
@@ -520,7 +530,7 @@ public actor Reconciler {
         var refusedTeardowns = 0
         var refusedPresent = 0
 
-        for kind in WorkloadKind.allCases {
+        for kind in WorkloadKind.knownCases {
             let teardowns = items.filter { $0.isTombstone && $0.kind == kind }.count
             guard teardowns > 0 else { continue }
             let population = present[kind] ?? 0
@@ -528,7 +538,7 @@ public actor Reconciler {
                 continue
             }
             refusedKinds.insert(kind)
-            reasons.append("\(kind.rawValue): \(reason)")
+            reasons.append("\(kind.protocolValue): \(reason)")
             refusedTeardowns += teardowns
             refusedPresent += population
         }
@@ -551,7 +561,7 @@ public actor Reconciler {
             "Refusing this sync's workload teardowns; blast-radius guard tripped",
             metadata: [
                 "syncId": .string(syncId),
-                "kinds": .string(refusedKinds.map(\.rawValue).sorted().joined(separator: ",")),
+                "kinds": .string(refusedKinds.map(\.protocolValue).sorted().joined(separator: ",")),
                 "requestedTeardowns": .stringConvertible(refusedTeardowns),
                 "presentWorkloads": .stringConvertible(refusedPresent),
                 "reason": .string(reason),
@@ -608,15 +618,17 @@ public actor Reconciler {
             let outcome: MetadataWriteOutcome
             if entry.wantsAbsent {
                 outcome = await metadataStore.withdraw(
-                    entry.vmId, generation: entry.generation, because: .desiredAbsent)
+                    validatedProtocolUUID(entry.vmID), generation: entry.generation, because: .desiredAbsent)
             } else {
-                outcome = await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
+                outcome = await metadataStore.apply(
+                    entry.optionalMetadata, generation: entry.generation,
+                    for: validatedProtocolUUID(entry.vmID))
             }
             guard case .stale(let recorded) = outcome else { continue }
             logger.debug(
                 "Ignoring stale instance metadata; a newer sync is already recorded for this VM",
                 metadata: [
-                    "strato.vm.id": .string(entry.vmId.uuidString),
+                    "strato.vm.id": .string(entry.vmID),
                     "generation": .stringConvertible(entry.generation),
                     "recordedGeneration": .stringConvertible(recorded),
                 ])
@@ -628,7 +640,7 @@ public actor Reconciler {
         // ever reach it, and the restored payload would stay servable for the
         // life of the host. Runs after the loop so this sync's own writes have
         // already cleared their records' provisional mark.
-        let retired = await metadataStore.confirmRestored(namedBy: Set(desired.map(\.vmId)))
+        let retired = await metadataStore.confirmRestored(namedBy: Set(desired.map { validatedProtocolUUID($0.vmID) }))
         guard !retired.isEmpty else { return }
         logger.info(
             "Retired restored instance metadata the control plane no longer knows about",
@@ -660,7 +672,7 @@ public actor Reconciler {
             failure.generation == item.generation
         {
             let metadata: Logger.Metadata = [
-                "kind": .string(item.kind.rawValue),
+                "kind": .string(item.kind.protocolValue),
                 "workloadId": .string(item.id),
                 "generation": .stringConvertible(item.generation),
                 "lastError": .string(failure.lastError),
@@ -700,7 +712,7 @@ public actor Reconciler {
         case .vm(let desired):
             let observed = try await actuator.adoptVM(item)
             return Self.statusSteps(desired: desired.desiredStatus, observed: observed)
-                + (desired.desiredStatus == .running && desired.guestConfig?.isEmpty == false
+                + (desired.desiredStatus == .running && desired.hasGuestConfig && !desired.guestConfig.isEmpty
                     ? [.convergeGuestConfig] : [])
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
@@ -779,7 +791,7 @@ public actor Reconciler {
             logger.info(
                 "Workload converged to desired state",
                 metadata: [
-                    "kind": .string(item.kind.rawValue),
+                    "kind": .string(item.kind.protocolValue),
                     "workloadId": .string(item.id),
                     "generation": .stringConvertible(item.generation),
                 ])
@@ -802,7 +814,7 @@ public actor Reconciler {
                 logger.info(
                     "Workload convergence waiting on a dependency; will retry on the next sync",
                     metadata: [
-                        "kind": .string(item.kind.rawValue),
+                        "kind": .string(item.kind.protocolValue),
                         "workloadId": .string(item.id),
                         "generation": .stringConvertible(item.generation),
                         "waitingOn": .string(error.localizedDescription),
@@ -864,7 +876,7 @@ public actor Reconciler {
             failure.lastError = reason
             failures[ref] = failure
             var metadata: Logger.Metadata = [
-                "kind": .string(item.kind.rawValue),
+                "kind": .string(item.kind.protocolValue),
                 "workloadId": .string(item.id),
                 "generation": .stringConvertible(item.generation),
                 "attempt": .stringConvertible(failure.attempts),
@@ -945,7 +957,7 @@ public actor Reconciler {
                 logger.warning(
                     "Reconcile step still running",
                     metadata: [
-                        "kind": .string(item.kind.rawValue),
+                        "kind": .string(item.kind.protocolValue),
                         "workloadId": .string(item.id),
                         "generation": .stringConvertible(item.generation),
                         "phase": .string(phase),

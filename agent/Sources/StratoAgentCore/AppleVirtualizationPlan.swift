@@ -31,15 +31,17 @@ public struct AppleVirtualizationPlan: Sendable {
             try unsupported("Secure Boot and TPM")
         }
         if spec.guestAgentEnabled { try unsupported("guest execution") }
-        if spec.console?.effectiveGraphics == .vnc { try unsupported("VNC graphics") }
+        if spec.hasConsole && spec.console.effectiveGraphics == .vnc { try unsupported("VNC graphics") }
         if spec.metadataSource != .iso { try unsupported("IMDS; select ISO metadata") }
         if spec.hugepages || spec.sharedMemory { try unsupported("huge pages or shared memory") }
-        if spec.balloonTargetBytes != nil { try unsupported("balloon targets") }
-        if spec.resourceClass?.policy.kind == .burstable { try unsupported("burstable resource classes") }
-        if case .disk(let firmware) = spec.boot, firmware != nil {
+        if spec.hasBalloonTargetBytes { try unsupported("balloon targets") }
+        if spec.hasResourceClass && spec.resourceClass.policy.kind == .burstable {
+            try unsupported("burstable resource classes")
+        }
+        if case .disk(let disk) = spec.boot.value, disk.hasFirmware {
             try unsupported("custom firmware; EFI is provided by macOS")
         }
-        guard networks.count == spec.networks.count else {
+        guard networks.count == spec.networks.values.count else {
             throw HypervisorServiceError.invalidConfiguration("every NIC needs a resolved attachment")
         }
         for network in networks {
@@ -48,12 +50,13 @@ public struct AppleVirtualizationPlan: Sendable {
         }
         var paths = Set<String>()
         var disks: [Disk] = []
-        for volume in spec.volumes {
-            if volume.ioLimits?.isEmpty == false { try unsupported("volume I/O limits") }
+        for volume in spec.volumes.values {
+            if volume.hasIoLimits && !volume.ioLimits.isEmpty { try unsupported("volume I/O limits") }
             if volume.blockMode != .conservative { try unsupported("optimized block policies") }
-            guard case .file(let path, .raw)? = volume.attachment else {
+            guard volume.hasAttachment, case .file(let file) = volume.attachment.value, file.format == .raw else {
                 try unsupported("disks must be realized local raw images")
             }
+            let path = file.path
             guard paths.insert(URL(fileURLWithPath: path).standardizedFileURL.path).inserted else {
                 throw HypervisorServiceError.invalidConfiguration("duplicate disk attachment")
             }

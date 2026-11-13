@@ -21,7 +21,7 @@ struct HypervisorMemoryTests {
     func legacyReport() throws {
         let data = Data(#"{"type":"apple_virtualization","available":true,"accelerated":true}"#.utf8)
         let report = try JSONDecoder().decode(HypervisorSupport.self, from: data)
-        #expect(report.minimumMemoryBytes == nil)
+        #expect(report._jsonMinimumMemoryBytes == nil)
         #expect(!report.supportsMemorySize(512 << 20))
         #expect(HypervisorSupport(type: .qemu, available: true, accelerated: true).supportsMemorySize(1))
     }

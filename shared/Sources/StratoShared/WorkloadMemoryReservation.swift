@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 /// One host commitment. QEMU guest bytes include its realized virtio-mem region.
 /// Process overhead is charged once, independently of the guest grant.
@@ -26,6 +27,7 @@ public struct WorkloadMemoryReservation: Codable, Sendable, Equatable {
         case .qemu: overhead = qemuOverheadBytes
         case .firecracker: overhead = firecrackerOverheadBytes
         case .appleVirtualization: overhead = appleVirtualizationOverheadBytes
+        case .unspecified, .UNRECOGNIZED: overhead = .max
         }
         return Self(
             guestBytes: hypervisorType == .qemu
@@ -42,25 +44,50 @@ public struct WorkloadMemoryReservation: Codable, Sendable, Equatable {
 
 /// Physical memory remains physical. Consumers use remainingAllocatableBytes directly;
 /// neither the host reserve nor workload commitments may be subtracted again.
-public struct HostMemoryAccounting: Codable, Sendable, Equatable {
-    public let physicalBytes: Int64
-    public let hostReservedBytes: Int64
-    public let workloadEffectiveBytes: Int64
-    public let remainingAllocatableBytes: Int64
-    public let qemuOverheadBytes: Int64
+public typealias HostMemoryAccounting = Strato_Agent_V1_HostMemoryAccounting
+extension Strato_Agent_V1_HostMemoryAccounting: Codable {
 
     public init(
         physicalBytes: Int64, hostReservedBytes: Int64, workloadEffectiveBytes: Int64,
         inventoryKnown: Bool = true,
         qemuOverheadBytes: Int64 = WorkloadMemoryReservation.defaultQEMUOverheadBytes
     ) {
-        self.physicalBytes = max(0, physicalBytes)
-        self.hostReservedBytes = max(0, hostReservedBytes)
-        self.workloadEffectiveBytes = max(0, workloadEffectiveBytes)
-        self.qemuOverheadBytes = max(0, qemuOverheadBytes)
-        let afterHost = self.hostReservedBytes >= self.physicalBytes ? 0 : self.physicalBytes - self.hostReservedBytes
-        self.remainingAllocatableBytes =
-            !inventoryKnown || self.workloadEffectiveBytes >= afterHost
-            ? 0 : afterHost - self.workloadEffectiveBytes
+        self.init()
+        self._jsonPhysicalBytes = max(0, physicalBytes)
+        self._jsonHostReservedBytes = max(0, hostReservedBytes)
+        self._jsonWorkloadEffectiveBytes = max(0, workloadEffectiveBytes)
+        self._jsonQemuOverheadBytes = max(0, qemuOverheadBytes)
+        let afterHost =
+            self._jsonHostReservedBytes >= self._jsonPhysicalBytes
+            ? 0 : self._jsonPhysicalBytes - self._jsonHostReservedBytes
+        self._jsonRemainingAllocatableBytes =
+            !inventoryKnown || self._jsonWorkloadEffectiveBytes >= afterHost
+            ? 0 : afterHost - self._jsonWorkloadEffectiveBytes
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case physicalBytes; case hostReservedBytes; case workloadEffectiveBytes; case remainingAllocatableBytes;
+        case qemuOverheadBytes
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonPhysicalBytes = try container.decode(Int64.self, forKey: .physicalBytes)
+        self._jsonHostReservedBytes = try container.decode(Int64.self, forKey: .hostReservedBytes)
+        self._jsonWorkloadEffectiveBytes = try container.decode(Int64.self, forKey: .workloadEffectiveBytes)
+        self._jsonRemainingAllocatableBytes = try container.decode(Int64.self, forKey: .remainingAllocatableBytes)
+        self._jsonQemuOverheadBytes = try container.decode(Int64.self, forKey: .qemuOverheadBytes)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonPhysicalBytes, forKey: .physicalBytes)
+        try container.encode(_jsonHostReservedBytes, forKey: .hostReservedBytes)
+        try container.encode(_jsonWorkloadEffectiveBytes, forKey: .workloadEffectiveBytes)
+        try container.encode(_jsonRemainingAllocatableBytes, forKey: .remainingAllocatableBytes)
+        try container.encode(_jsonQemuOverheadBytes, forKey: .qemuOverheadBytes)
+    }
+
 }

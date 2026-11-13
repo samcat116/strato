@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 // MARK: - WebSocket Message Types
 
@@ -39,99 +40,17 @@ public enum MessageType: String, Codable, Sendable {
 
 // MARK: - Base Message Protocol
 
-public protocol WebSocketMessage: Codable, Sendable {
+public protocol WebSocketMessage: SwiftProtobuf.Message, Codable {
     var type: MessageType { get }
     var requestId: String { get }
-    var timestamp: Date { get }
+    var timestamp: Google_Protobuf_Timestamp { get }
 }
 
 // MARK: - Agent Messages
 
-public struct AgentRegisterMessage: WebSocketMessage {
+public typealias AgentRegisterMessage = Strato_Agent_V1_AgentRegisterMessage
+extension Strato_Agent_V1_AgentRegisterMessage: WebSocketMessage {
     public var type: MessageType { .agentRegister }
-    public let requestId: String
-    public let timestamp: Date
-    public let agentId: String
-    public let hostname: String
-    public let version: String
-    public let resources: AgentResources
-    /// Host CPU architecture.
-    public let architecture: CPUArchitecture
-    /// Every hypervisor on this host with probed availability and capabilities.
-    public let hypervisors: [HypervisorSupport]
-    /// Networking capability of this host. Nil means networking is disabled or
-    /// its host probe could not establish a usable mode.
-    public let networkCapability: NetworkCapability?
-    /// Exact wire/schema version the agent speaks. Registration is the sole
-    /// protocol-version handshake; peers must equal `WireProtocol.currentVersion`.
-    public let protocolVersion: Int
-    /// Whether this agent runs sandbox workloads (OCI-image Firecracker
-    /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
-    /// and reports them back in `ObservedStateReport.sandboxes`. The scheduler
-    /// keys placement on this explicit signal because the
-    /// separately installed runtime, not the wire version, determines support.
-    public let sandboxCapable: Bool
-    /// Whether this agent can realize a **sandbox NIC** (STR-103), as opposed
-    /// to merely running sandboxes.
-    ///
-    /// A second signal on top of `sandboxCapable`, and for a sharper version of
-    /// the same reason: the pieces a sandbox NIC needs are installed
-    /// independently of the agent binary, so no version and no other capability
-    /// implies them. It takes OVN/OVS networking (the veth + in-namespace TAP
-    /// recipe has no user-mode equivalent), the jailer barrier (the NIC lives in
-    /// the jail's network namespace, and an unjailed sandbox has none), and a
-    /// **guest image** whose init understands the config drive's `network`
-    /// block — and the guest image is a separately distributed artifact at
-    /// `sandbox_guest_image_path`, so an up-to-date agent can be paired with a
-    /// guest that would refuse the document.
-    ///
-    /// The control plane uses it twice: the scheduler refuses to place a
-    /// sandbox that has a NIC on a host without it, and desired-state assembly
-    /// withholds `SandboxSpec.network` from such a host — so an agent that
-    /// cannot realize a NIC is never handed one.
-    public let sandboxNetworkingCapable: Bool
-    /// Whether this host can give a guest an emulated TPM 2.0 — it has a
-    /// usable `swtpm` binary (issue #565). Like `sandboxCapable`, speaking the
-    /// wire version is deliberately not sufficient: the protocol carries
-    /// `MachineProfile.tpm`, but only a host with swtpm installed can realize
-    /// it, and a VM whose vTPM is silently dropped fails Windows setup with no
-    /// explanation.
-    public let tpmCapable: Bool
-    /// Host operating system, reported so the control plane can resolve the
-    /// right release artifact for an agent self-update (assets are published
-    /// per OS/arch pair).
-    public let operatingSystem: OperatingSystem
-    /// Descriptive hardware/platform/OS details for operators (CPU model,
-    /// kernel version, distribution, physical core count, boot time, ...).
-    /// Purely informational and entirely best-effort; any individual field the
-    /// agent could not probe is absent.
-    public let hostInfo: HostInfo?
-    /// Whether this host can actually run the per-network DNS resolver
-    /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
-    ///
-    /// Like `sandboxCapable` and `tpmCapable`, speaking the wire version is
-    /// deliberately not sufficient — a v37 build understands `resolverEnabled`,
-    /// but only a host with CoreDNS installed can answer on the resolver
-    /// address, and a guest pointed at an address nothing listens on loses
-    /// external name resolution entirely.
-    ///
-    /// The control plane combines this **across the whole site** before
-    /// enabling a network's resolver, because the DHCP option is authored once
-    /// per network by the topology authority while the listener is per
-    /// chassis: one incapable host would otherwise give a network DNS that
-    /// works until a VM lands somewhere else.
-    public let resolverCapable: Bool
-    /// Whether this host initialized the guest-facing instance metadata
-    /// service. This is independent of overlay networking: an OVN host may
-    /// disable the service in its agent configuration or lack a host tool the
-    /// listener supervisor needs.
-    public let metadataServiceCapable: Bool
-    /// Periodic, feature-scoped software dependency health. This is also sent
-    /// at registration so a newly connected agent is not placement-eligible in
-    /// the window before its first heartbeat.
-    /// Nil/empty advertises no burstable support. STR272 must supply verified backend evidence.
-    public let resourceClassEnforcement: [WorkloadResourceClassEnforcement]?
-    public let dependencyObservations: [NodeDependencyObservation]
 
     public init(
         requestId: String = UUID().uuidString,
@@ -143,7 +62,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         architecture: CPUArchitecture = .x86_64,
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion,
+        protocolOffer: Strato_Agent_V1_ProtocolOffer = AgentProtocolCompatibility.localOffer,
         sandboxCapable: Bool = false,
         sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
@@ -154,39 +73,90 @@ public struct AgentRegisterMessage: WebSocketMessage {
         resourceClassEnforcement: [WorkloadResourceClassEnforcement]? = nil,
         dependencyObservations: [NodeDependencyObservation] = []
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.agentId = agentId
-        self.hostname = hostname
-        self.version = version
-        self.resources = resources
-        self.architecture = architecture
-        self.hypervisors = hypervisors
-        self.networkCapability = networkCapability
-        self.protocolVersion = protocolVersion
-        self.sandboxCapable = sandboxCapable
-        self.sandboxNetworkingCapable = sandboxNetworkingCapable
-        self.tpmCapable = tpmCapable
-        self.operatingSystem = operatingSystem
-        self.hostInfo = hostInfo
-        self.resolverCapable = resolverCapable
-        self.metadataServiceCapable = metadataServiceCapable
-        self.resourceClassEnforcement = resourceClassEnforcement
-        self.dependencyObservations = dependencyObservations
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonAgentId = agentId
+        self._jsonHostname = hostname
+        self._jsonVersion = version
+        self._jsonResources = resources
+        self._jsonArchitecture = architecture
+        self._jsonHypervisors = hypervisors
+        self._jsonNetworkCapability = networkCapability
+        self._jsonProtocolOffer = protocolOffer
+        self._jsonSandboxCapable = sandboxCapable
+        self._jsonSandboxNetworkingCapable = sandboxNetworkingCapable
+        self._jsonTpmCapable = tpmCapable
+        self._jsonOperatingSystem = operatingSystem
+        self._jsonHostInfo = hostInfo
+        self._jsonResolverCapable = resolverCapable
+        self._jsonMetadataServiceCapable = metadataServiceCapable
+        self._jsonResourceClassEnforcement = resourceClassEnforcement
+        self._jsonDependencyObservations = dependencyObservations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case agentId; case hostname; case version; case resources; case architecture;
+        case hypervisors; case networkCapability; case protocolOffer; case sandboxCapable;
+        case sandboxNetworkingCapable; case tpmCapable; case operatingSystem; case hostInfo; case resolverCapable;
+        case metadataServiceCapable; case resourceClassEnforcement; case dependencyObservations
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonAgentId = try container.decode(String.self, forKey: .agentId)
+        self._jsonHostname = try container.decode(String.self, forKey: .hostname)
+        self._jsonVersion = try container.decode(String.self, forKey: .version)
+        self._jsonResources = try container.decode(AgentResources.self, forKey: .resources)
+        self._jsonArchitecture = try container.decode(CPUArchitecture.self, forKey: .architecture)
+        self._jsonHypervisors = try container.decode([HypervisorSupport].self, forKey: .hypervisors)
+        self._jsonNetworkCapability = try container.decodeIfPresent(NetworkCapability.self, forKey: .networkCapability)
+        self._jsonProtocolOffer = try container.decode(Strato_Agent_V1_ProtocolOffer.self, forKey: .protocolOffer)
+        self._jsonSandboxCapable = try container.decode(Bool.self, forKey: .sandboxCapable)
+        self._jsonSandboxNetworkingCapable = try container.decode(Bool.self, forKey: .sandboxNetworkingCapable)
+        self._jsonTpmCapable = try container.decode(Bool.self, forKey: .tpmCapable)
+        self._jsonOperatingSystem = try container.decode(OperatingSystem.self, forKey: .operatingSystem)
+        self._jsonHostInfo = try container.decodeIfPresent(HostInfo.self, forKey: .hostInfo)
+        self._jsonResolverCapable = try container.decode(Bool.self, forKey: .resolverCapable)
+        self._jsonMetadataServiceCapable = try container.decode(Bool.self, forKey: .metadataServiceCapable)
+        self._jsonResourceClassEnforcement = try container.decodeIfPresent(
+            [WorkloadResourceClassEnforcement].self, forKey: .resourceClassEnforcement)
+        self._jsonDependencyObservations = try container.decode(
+            [NodeDependencyObservation].self, forKey: .dependencyObservations)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonAgentId, forKey: .agentId)
+        try container.encode(_jsonHostname, forKey: .hostname)
+        try container.encode(_jsonVersion, forKey: .version)
+        try container.encode(_jsonResources, forKey: .resources)
+        try container.encode(_jsonArchitecture, forKey: .architecture)
+        try container.encode(_jsonHypervisors, forKey: .hypervisors)
+        try container.encodeIfPresent(_jsonNetworkCapability, forKey: .networkCapability)
+        try container.encode(_jsonProtocolOffer, forKey: .protocolOffer)
+        try container.encode(_jsonSandboxCapable, forKey: .sandboxCapable)
+        try container.encode(_jsonSandboxNetworkingCapable, forKey: .sandboxNetworkingCapable)
+        try container.encode(_jsonTpmCapable, forKey: .tpmCapable)
+        try container.encode(_jsonOperatingSystem, forKey: .operatingSystem)
+        try container.encodeIfPresent(_jsonHostInfo, forKey: .hostInfo)
+        try container.encode(_jsonResolverCapable, forKey: .resolverCapable)
+        try container.encode(_jsonMetadataServiceCapable, forKey: .metadataServiceCapable)
+        try container.encodeIfPresent(_jsonResourceClassEnforcement, forKey: .resourceClassEnforcement)
+        try container.encode(_jsonDependencyObservations, forKey: .dependencyObservations)
     }
 
 }
 
-public struct AgentHeartbeatMessage: WebSocketMessage {
+public typealias AgentHeartbeatMessage = Strato_Agent_V1_AgentHeartbeatMessage
+extension Strato_Agent_V1_AgentHeartbeatMessage: WebSocketMessage {
     public var type: MessageType { .agentHeartbeat }
-    public let requestId: String
-    public let timestamp: Date
-    public let agentId: String
-    public let resources: AgentResources
-    public let dependencyObservations: [NodeDependencyObservation]
-    /// Last host-resource sample gathered independently of this heartbeat.
-    /// Nil only before the first sampling pass or from a pre-v59 sender.
-    public let hostResourceTelemetry: HostResourceTelemetry?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -196,69 +166,166 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
         dependencyObservations: [NodeDependencyObservation] = [],
         hostResourceTelemetry: HostResourceTelemetry? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.agentId = agentId
-        self.resources = resources
-        self.dependencyObservations = dependencyObservations
-        self.hostResourceTelemetry = hostResourceTelemetry
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonAgentId = agentId
+        self._jsonResources = resources
+        self._jsonDependencyObservations = dependencyObservations
+        self._jsonHostResourceTelemetry = hostResourceTelemetry
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case agentId; case resources; case dependencyObservations;
+        case hostResourceTelemetry
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonAgentId = try container.decode(String.self, forKey: .agentId)
+        self._jsonResources = try container.decode(AgentResources.self, forKey: .resources)
+        self._jsonDependencyObservations = try container.decode(
+            [NodeDependencyObservation].self, forKey: .dependencyObservations)
+        self._jsonHostResourceTelemetry = try container.decodeIfPresent(
+            HostResourceTelemetry.self, forKey: .hostResourceTelemetry)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonAgentId, forKey: .agentId)
+        try container.encode(_jsonResources, forKey: .resources)
+        try container.encode(_jsonDependencyObservations, forKey: .dependencyObservations)
+        try container.encodeIfPresent(_jsonHostResourceTelemetry, forKey: .hostResourceTelemetry)
+    }
+
 }
 
-public struct AgentUnregisterMessage: WebSocketMessage {
+public typealias AgentUnregisterMessage = Strato_Agent_V1_AgentUnregisterMessage
+extension Strato_Agent_V1_AgentUnregisterMessage: WebSocketMessage {
     public var type: MessageType { .agentUnregister }
-    public let requestId: String
-    public let timestamp: Date
-    public let agentId: String
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         agentId: String
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.agentId = agentId
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonAgentId = agentId
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case agentId }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonAgentId = try container.decode(String.self, forKey: .agentId)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonAgentId, forKey: .agentId)
+    }
+
 }
 
 /// Shape of the artifact a `DesiredAgentUpdate` points at.
-public enum AgentUpdateArtifactKind: String, Codable, Sendable {
-    /// A gzipped tarball containing the agent binary as a member
-    /// (`DesiredAgentUpdate.tarballMember`) — the shape of the published
-    /// release assets, which bundle control plane and agent together.
-    case tarball = "tarball"
-    /// A bare executable: the downloaded file *is* the new agent binary.
-    case binary = "binary"
+public typealias AgentUpdateArtifactKind = Strato_Agent_V1_AgentUpdateArtifactKind
+extension Strato_Agent_V1_AgentUpdateArtifactKind: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .tarball: return "tarball"
+        case .binary: return "binary"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "tarball": self = .tarball
+        case "binary": self = .binary
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
-public struct AgentRegisterResponseMessage: WebSocketMessage {
+public typealias AgentRegisterResponseMessage = Strato_Agent_V1_AgentRegisterResponseMessage
+extension Strato_Agent_V1_AgentRegisterResponseMessage: WebSocketMessage {
     public var type: MessageType { .agentRegisterResponse }
-    public let requestId: String
-    public let timestamp: Date
-    public let agentId: String  // The database UUID assigned to this agent
-    public let name: String  // The human-readable name
-
-    /// Exact wire/schema version the control plane speaks. The agent refuses a
-    /// response that does not equal `WireProtocol.currentVersion`.
-    public let protocolVersion: Int
 
     public init(
         requestId: String,
         timestamp: Date = Date(),
         agentId: String,
         name: String,
-        protocolVersion: Int = WireProtocol.currentVersion
+        agreement: Strato_Agent_V1_ProtocolAgreement
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.agentId = agentId
-        self.name = name
-        self.protocolVersion = protocolVersion
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonAgentId = agentId
+        self._jsonName = name
+        self._jsonAgreement = agreement
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case agentId; case name; case agreement
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonAgentId = try container.decode(String.self, forKey: .agentId)
+        self._jsonName = try container.decode(String.self, forKey: .name)
+        self._jsonAgreement = try container.decode(Strato_Agent_V1_ProtocolAgreement.self, forKey: .agreement)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonAgentId, forKey: .agentId)
+        try container.encode(_jsonName, forKey: .name)
+        try container.encode(_jsonAgreement, forKey: .agreement)
+    }
+
 }
 
-public struct AgentResources: Codable, Sendable {
+public typealias AgentResources = Strato_Agent_V1_AgentResources
+extension Strato_Agent_V1_AgentResources: Codable {
     private enum CodingKeys: String, CodingKey {
         case totalCPU
         case availableCPU
@@ -269,18 +336,6 @@ public struct AgentResources: Codable, Sendable {
         case physicalFreeDisk
         case memoryAccounting, availableCPUMicroUnits
     }
-
-    public let availableCPUMicroUnits: Int64?
-    public let memoryAccounting: HostMemoryAccounting?
-    public let totalCPU: Int
-    public let availableCPU: Int
-    public let totalMemory: Int64
-    public let availableMemory: Int64
-    public let totalDisk: Int64
-    /// Provisioned local-disk bytes still available for new commitments.
-    public let availableDisk: Int64
-    /// Bytes physically free on the filesystem backing local volumes.
-    public let physicalFreeDisk: Int64
 
     public init(
         totalCPU: Int,
@@ -293,31 +348,48 @@ public struct AgentResources: Codable, Sendable {
         memoryAccounting: HostMemoryAccounting? = nil,
         availableCPUMicroUnits: Int64? = nil
     ) {
-        self.availableCPUMicroUnits = availableCPUMicroUnits
-        self.memoryAccounting = memoryAccounting
-        self.totalCPU = totalCPU
-        self.availableCPU = availableCPU
-        self.totalMemory = totalMemory
-        self.availableMemory = availableMemory
-        self.totalDisk = totalDisk
-        self.availableDisk = availableDisk
-        self.physicalFreeDisk = physicalFreeDisk ?? availableDisk
+        self.init()
+        self._jsonAvailableCPUMicroUnits = availableCPUMicroUnits
+        self._jsonMemoryAccounting = memoryAccounting
+        self._jsonTotalCPU = totalCPU
+        self._jsonAvailableCPU = availableCPU
+        self._jsonTotalMemory = totalMemory
+        self._jsonAvailableMemory = availableMemory
+        self._jsonTotalDisk = totalDisk
+        self._jsonAvailableDisk = availableDisk
+        self._jsonPhysicalFreeDisk = physicalFreeDisk ?? availableDisk
     }
 
-    public init(from decoder: Decoder) throws {
+    public init(from decoder: Swift.Decoder) throws {
+        self.init()
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.availableCPUMicroUnits = try container.decodeIfPresent(Int64.self, forKey: .availableCPUMicroUnits)
-        self.memoryAccounting = try container.decodeIfPresent(HostMemoryAccounting.self, forKey: .memoryAccounting)
-        self.totalCPU = try container.decode(Int.self, forKey: .totalCPU)
-        self.availableCPU = try container.decode(Int.self, forKey: .availableCPU)
-        self.totalMemory = try container.decode(Int64.self, forKey: .totalMemory)
-        self.availableMemory = try container.decode(Int64.self, forKey: .availableMemory)
-        self.totalDisk = try container.decode(Int64.self, forKey: .totalDisk)
-        self.availableDisk = try container.decode(Int64.self, forKey: .availableDisk)
-        self.physicalFreeDisk =
+        self._jsonAvailableCPUMicroUnits = try container.decodeIfPresent(Int64.self, forKey: .availableCPUMicroUnits)
+        self._jsonMemoryAccounting = try container.decodeIfPresent(HostMemoryAccounting.self, forKey: .memoryAccounting)
+        self._jsonTotalCPU = try container.decode(Int.self, forKey: .totalCPU)
+        self._jsonAvailableCPU = try container.decode(Int.self, forKey: .availableCPU)
+        self._jsonTotalMemory = try container.decode(Int64.self, forKey: .totalMemory)
+        self._jsonAvailableMemory = try container.decode(Int64.self, forKey: .availableMemory)
+        self._jsonTotalDisk = try container.decode(Int64.self, forKey: .totalDisk)
+        self._jsonAvailableDisk = try container.decode(Int64.self, forKey: .availableDisk)
+        self._jsonPhysicalFreeDisk =
             try container.decodeIfPresent(Int64.self, forKey: .physicalFreeDisk)
-            ?? self.availableDisk
+            ?? self._jsonAvailableDisk
     }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(_jsonAvailableCPUMicroUnits, forKey: .availableCPUMicroUnits)
+        try container.encodeIfPresent(_jsonMemoryAccounting, forKey: .memoryAccounting)
+        try container.encode(_jsonTotalCPU, forKey: .totalCPU)
+        try container.encode(_jsonAvailableCPU, forKey: .availableCPU)
+        try container.encode(_jsonTotalMemory, forKey: .totalMemory)
+        try container.encode(_jsonAvailableMemory, forKey: .availableMemory)
+        try container.encode(_jsonTotalDisk, forKey: .totalDisk)
+        try container.encode(_jsonAvailableDisk, forKey: .availableDisk)
+        try container.encode(_jsonPhysicalFreeDisk, forKey: .physicalFreeDisk)
+    }
+
 }
 
 // MARK: - Image Information
@@ -329,12 +401,8 @@ public struct AgentResources: Codable, Sendable {
 /// resolves it against the control-plane base URL it already dials and
 /// authenticates the fetch with its SPIFFE SVID over mTLS — there is no
 /// credential in the URL itself (issue #493).
-public struct ArtifactInfo: Codable, Sendable {
-    public let kind: ArtifactKind
-    public let filename: String
-    public let checksum: String
-    public let size: Int64
-    public let downloadURL: String
+public typealias ArtifactInfo = Strato_Agent_V1_ArtifactInfo
+extension Strato_Agent_V1_ArtifactInfo: Codable {
 
     public init(
         kind: ArtifactKind,
@@ -343,23 +411,44 @@ public struct ArtifactInfo: Codable, Sendable {
         size: Int64,
         downloadURL: String
     ) {
-        self.kind = kind
-        self.filename = filename
-        self.checksum = checksum
-        self.size = size
-        self.downloadURL = downloadURL
+        self.init()
+        self._jsonKind = kind
+        self._jsonFilename = filename
+        self._jsonChecksum = checksum
+        self._jsonSize = size
+        self._jsonDownloadURL = downloadURL
     }
+
+    private enum CodingKeys: String, CodingKey { case kind; case filename; case checksum; case size; case downloadURL }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(ArtifactKind.self, forKey: .kind)
+        self._jsonFilename = try container.decode(String.self, forKey: .filename)
+        self._jsonChecksum = try container.decode(String.self, forKey: .checksum)
+        self._jsonSize = try container.decode(Int64.self, forKey: .size)
+        self._jsonDownloadURL = try container.decode(String.self, forKey: .downloadURL)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encode(_jsonFilename, forKey: .filename)
+        try container.encode(_jsonChecksum, forKey: .checksum)
+        try container.encode(_jsonSize, forKey: .size)
+        try container.encode(_jsonDownloadURL, forKey: .downloadURL)
+    }
+
 }
 
 /// Contains information for the agent to download and cache an image.
 ///
 /// Every stored file is represented exactly once in `artifacts`. Hypervisor
 /// drivers select the kind they require and fail explicitly when it is absent.
-public struct ImageInfo: Codable, Sendable {
-    public let imageId: UUID
-    public let projectId: UUID
-    public let architecture: CPUArchitecture
-    public let artifacts: [ArtifactInfo]
+public typealias ImageInfo = Strato_Agent_V1_ImageInfo
+extension Strato_Agent_V1_ImageInfo: Codable {
 
     public init(
         imageId: UUID,
@@ -367,49 +456,82 @@ public struct ImageInfo: Codable, Sendable {
         architecture: CPUArchitecture,
         artifacts: [ArtifactInfo]
     ) {
-        self.imageId = imageId
-        self.projectId = projectId
-        self.architecture = architecture
-        self.artifacts = artifacts
+        self.init()
+        self._jsonImageId = imageId
+        self._jsonProjectId = projectId
+        self._jsonArchitecture = architecture
+        self._jsonArtifacts = artifacts
     }
 
     /// The artifact of a given kind, if present in the set.
     public func artifact(ofKind kind: ArtifactKind) -> ArtifactInfo? {
-        artifacts.first { $0.kind == kind }
+        _jsonArtifacts.first { $0._jsonKind == kind }
     }
+
+    private enum CodingKeys: String, CodingKey { case imageId; case projectId; case architecture; case artifacts }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonImageId = try container.decode(UUID.self, forKey: .imageId)
+        self._jsonProjectId = try container.decode(UUID.self, forKey: .projectId)
+        self._jsonArchitecture = try container.decode(CPUArchitecture.self, forKey: .architecture)
+        self._jsonArtifacts = try container.decode([ArtifactInfo].self, forKey: .artifacts)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonImageId, forKey: .imageId)
+        try container.encode(_jsonProjectId, forKey: .projectId)
+        try container.encode(_jsonArchitecture, forKey: .architecture)
+        try container.encode(_jsonArtifacts, forKey: .artifacts)
+    }
+
 }
 
 // MARK: - Response Messages
 
 /// An unsolicited registration, heartbeat, or unregister acknowledgement.
 /// `requestId` is retained for log correlation; no sender awaits it.
-public struct SuccessMessage: WebSocketMessage {
+public typealias SuccessMessage = Strato_Agent_V1_SuccessMessage
+extension Strato_Agent_V1_SuccessMessage: WebSocketMessage {
     public var type: MessageType { .success }
-    public let requestId: String
-    public let timestamp: Date
-    public let message: String?
 
     public init(
         requestId: String,
         timestamp: Date = Date(),
         message: String? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.message = message
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonMessage = message
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case message }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonMessage = try container.decodeIfPresent(String.self, forKey: .message)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encodeIfPresent(_jsonMessage, forKey: .message)
+    }
+
 }
 
-public struct ErrorMessage: WebSocketMessage {
+public typealias ErrorMessage = Strato_Agent_V1_ErrorMessage
+extension Strato_Agent_V1_ErrorMessage: WebSocketMessage {
     public var type: MessageType { .error }
-    public let requestId: String
-    public let timestamp: Date
-    public let error: String
-    public let details: String?
-    /// Machine-readable error classification (see `ErrorCode`). Optional so
-    /// peers that predate it decode fine; absent means unclassified, which
-    /// receivers must treat as potentially transient (safe to retry).
-    public let code: String?
 
     /// Well-known values for `code`.
     public enum ErrorCode {
@@ -434,12 +556,36 @@ public struct ErrorMessage: WebSocketMessage {
         details: String? = nil,
         code: String? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.error = error
-        self.details = details
-        self.code = code
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonError = error
+        self._jsonDetails = details
+        self._jsonCode = code
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case error; case details; case code }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonError = try container.decode(String.self, forKey: .error)
+        self._jsonDetails = try container.decodeIfPresent(String.self, forKey: .details)
+        self._jsonCode = try container.decodeIfPresent(String.self, forKey: .code)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonError, forKey: .error)
+        try container.encodeIfPresent(_jsonDetails, forKey: .details)
+        try container.encodeIfPresent(_jsonCode, forKey: .code)
+    }
+
 }
 
 /// A version-tolerant JSON tree for data whose complete schema is not owned by
@@ -454,7 +600,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
     case object([String: JSONValue])
     case null
 
-    public init(from decoder: Decoder) throws {
+    public init(from decoder: Swift.Decoder) throws {
         let container = try decoder.singleValueContainer()
 
         if container.decodeNil() {
@@ -480,7 +626,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Swift.Encoder) throws {
         var container = encoder.singleValueContainer()
 
         switch self {
@@ -533,21 +679,46 @@ public enum JSONValue: Codable, Sendable, Equatable {
 /// Only `console_connect` carries this — once a session exists both sides key
 /// it by `sessionId`, and the bytes in either direction are opaque, so
 /// `console_data` and `console_disconnect` stay stream-agnostic.
-public enum ConsoleStream: String, Codable, Sendable {
-    /// The text console: the serial socket, falling back to virtio-console.
-    case serial = "Serial"
-    /// The framebuffer: the VM's VNC socket, relayed as opaque RFB bytes.
-    case vnc = "Vnc"
+public typealias ConsoleStream = Strato_Agent_V1_ConsoleStream
+extension Strato_Agent_V1_ConsoleStream: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .serial: return "Serial"
+        case .vnc: return "Vnc"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "Serial": self = .serial
+        case "Vnc": self = .vnc
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
-public struct ConsoleConnectMessage: WebSocketMessage {
+public typealias ConsoleConnectMessage = Strato_Agent_V1_ConsoleConnectMessage
+extension Strato_Agent_V1_ConsoleConnectMessage: WebSocketMessage {
     public var type: MessageType { .consoleConnect }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let sessionId: String
-    /// Which console to attach.
-    public let stream: ConsoleStream
 
     public init(
         requestId: String = UUID().uuidString,
@@ -556,20 +727,43 @@ public struct ConsoleConnectMessage: WebSocketMessage {
         sessionId: String,
         stream: ConsoleStream = .serial
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
-        self.stream = stream
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
+        self._jsonStream = stream
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case vmId; case sessionId; case stream
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonSessionId = try container.decode(String.self, forKey: .sessionId)
+        self._jsonStream = try container.decode(ConsoleStream.self, forKey: .stream)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonSessionId, forKey: .sessionId)
+        try container.encode(_jsonStream, forKey: .stream)
+    }
+
 }
 
-public struct ConsoleDisconnectMessage: WebSocketMessage {
+public typealias ConsoleDisconnectMessage = Strato_Agent_V1_ConsoleDisconnectMessage
+extension Strato_Agent_V1_ConsoleDisconnectMessage: WebSocketMessage {
     public var type: MessageType { .consoleDisconnect }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let sessionId: String
 
     public init(
         requestId: String = UUID().uuidString,
@@ -577,20 +771,38 @@ public struct ConsoleDisconnectMessage: WebSocketMessage {
         vmId: String,
         sessionId: String
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case vmId; case sessionId }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonSessionId = try container.decode(String.self, forKey: .sessionId)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonSessionId, forKey: .sessionId)
+    }
+
 }
 
-public struct ConsoleDataMessage: WebSocketMessage {
+public typealias ConsoleDataMessage = Strato_Agent_V1_ConsoleDataMessage
+extension Strato_Agent_V1_ConsoleDataMessage: WebSocketMessage {
     public var type: MessageType { .consoleData }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let sessionId: String
-    public let data: String  // Base64 encoded bytes
 
     public init(
         requestId: String = UUID().uuidString,
@@ -599,11 +811,12 @@ public struct ConsoleDataMessage: WebSocketMessage {
         sessionId: String,
         data: String
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
-        self.data = data
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
+        self._jsonData = data
     }
 
     public init(
@@ -613,24 +826,45 @@ public struct ConsoleDataMessage: WebSocketMessage {
         sessionId: String,
         rawData: Data
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
-        self.data = rawData.base64EncodedString()
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
+        self.data = rawData
     }
 
     public var rawData: Data? {
-        Data(base64Encoded: data)
+        hasData ? data : nil
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case vmId; case sessionId; case data }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonSessionId = try container.decode(String.self, forKey: .sessionId)
+        self._jsonData = try container.decode(String.self, forKey: .data)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonSessionId, forKey: .sessionId)
+        try container.encode(_jsonData, forKey: .data)
+    }
+
 }
 
-public struct ConsoleConnectedMessage: WebSocketMessage {
+public typealias ConsoleConnectedMessage = Strato_Agent_V1_ConsoleConnectedMessage
+extension Strato_Agent_V1_ConsoleConnectedMessage: WebSocketMessage {
     public var type: MessageType { .consoleConnected }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let sessionId: String
 
     public init(
         requestId: String = UUID().uuidString,
@@ -638,20 +872,38 @@ public struct ConsoleConnectedMessage: WebSocketMessage {
         vmId: String,
         sessionId: String
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
     }
+
+    private enum CodingKeys: String, CodingKey { case requestId; case timestamp; case vmId; case sessionId }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonSessionId = try container.decode(String.self, forKey: .sessionId)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonSessionId, forKey: .sessionId)
+    }
+
 }
 
-public struct ConsoleDisconnectedMessage: WebSocketMessage {
+public typealias ConsoleDisconnectedMessage = Strato_Agent_V1_ConsoleDisconnectedMessage
+extension Strato_Agent_V1_ConsoleDisconnectedMessage: WebSocketMessage {
     public var type: MessageType { .consoleDisconnected }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let sessionId: String
-    public let reason: String?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -660,74 +912,180 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
         sessionId: String,
         reason: String? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.sessionId = sessionId
-        self.reason = reason
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonSessionId = sessionId
+        self._jsonReason = reason
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case vmId; case sessionId; case reason
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonSessionId = try container.decode(String.self, forKey: .sessionId)
+        self._jsonReason = try container.decodeIfPresent(String.self, forKey: .reason)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonSessionId, forKey: .sessionId)
+        try container.encodeIfPresent(_jsonReason, forKey: .reason)
+    }
+
 }
 
 // MARK: - Message Envelope
 
-public struct MessageEnvelope: Codable, Sendable {
-    public let type: MessageType
-    public let payload: Data
-
-    public init<T: WebSocketMessage>(message: T) throws {
-        self.type = message.type
-        self.payload = try WireProtocol.makeEncoder().encode(message)
-    }
-
-    public func decode<T: WebSocketMessage>(as messageType: T.Type) throws -> T {
-        return try WireProtocol.makeDecoder().decode(messageType, from: payload)
-    }
-}
-
-extension WireProtocol {
-    /// Encodes a wire message as an envelope-wrapped JSON payload.
-    public static func encodeEnvelope<T: WebSocketMessage>(_ message: T) throws -> Data {
-        try makeEncoder().encode(MessageEnvelope(message: message))
-    }
-}
-
 // MARK: - VM Log Messages
 
 /// Log level for VM log messages
-public enum VMLogLevel: String, Codable, CaseIterable, Sendable {
-    case debug = "debug"
-    case info = "info"
-    case warning = "warning"
-    case error = "error"
-    case unknown = "unknown"
+public typealias VMLogLevel = Strato_Agent_V1_VMLogLevel
+extension Strato_Agent_V1_VMLogLevel: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .debug: return "debug"
+        case .info: return "info"
+        case .warning: return "warning"
+        case .error: return "error"
+        case .unknown: return "unknown"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "debug": self = .debug
+        case "info": self = .info
+        case "warning": self = .warning
+        case "error": self = .error
+        case "unknown": self = .unknown
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.debug, .info, .warning, .error, .unknown] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// Source of the log message
-public enum VMLogSource: String, Codable, CaseIterable, Sendable {
-    case agent = "agent"
-    case unknown = "unknown"
+public typealias VMLogSource = Strato_Agent_V1_VMLogSource
+extension Strato_Agent_V1_VMLogSource: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .agent: return "agent"
+        case .unknown: return "unknown"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "agent": self = .agent
+        case "unknown": self = .unknown
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.agent, .unknown] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// Type of VM event
-public enum VMEventType: String, Codable, CaseIterable, Sendable {
-    case statusChange = "status_change"
-    case operation = "operation"
-    case error = "error"
-    case info = "info"
-    case unknown = "unknown"
+public typealias VMEventType = Strato_Agent_V1_VMEventType
+extension Strato_Agent_V1_VMEventType: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .statusChange: return "status_change"
+        case .operation: return "operation"
+        case .error: return "error"
+        case .info: return "info"
+        case .unknown: return "unknown"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "status_change": self = .statusChange
+        case "operation": self = .operation
+        case "error": self = .error
+        case "info": self = .info
+        case "unknown": self = .unknown
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.statusChange, .operation, .error, .info, .unknown] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// VM log message sent from agent to control plane
-public struct VMLogMessage: WebSocketMessage {
+public typealias VMLogMessage = Strato_Agent_V1_VMLogMessage
+extension Strato_Agent_V1_VMLogMessage: WebSocketMessage {
     public var type: MessageType { .vmLog }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let level: VMLogLevel
-    public let source: VMLogSource
-    public let eventType: VMEventType
-    public let message: String
-    public let operation: String?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -739,13 +1097,45 @@ public struct VMLogMessage: WebSocketMessage {
         message: String,
         operation: String? = nil
     ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.level = level
-        self.source = source
-        self.eventType = eventType
-        self.message = message
-        self.operation = operation
+        self.init()
+        self._jsonRequestId = requestId
+        self._jsonTimestamp = timestamp
+        self._jsonVmId = vmId
+        self._jsonLevel = level
+        self._jsonSource = source
+        self._jsonEventType = eventType
+        self._jsonMessage = message
+        self._jsonOperation = operation
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestId; case timestamp; case vmId; case level; case source; case eventType; case message; case operation
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonRequestId = try container.decode(String.self, forKey: .requestId)
+        self._jsonTimestamp = try container.decode(Date.self, forKey: .timestamp)
+        self._jsonVmId = try container.decode(String.self, forKey: .vmId)
+        self._jsonLevel = try container.decode(VMLogLevel.self, forKey: .level)
+        self._jsonSource = try container.decode(VMLogSource.self, forKey: .source)
+        self._jsonEventType = try container.decode(VMEventType.self, forKey: .eventType)
+        self._jsonMessage = try container.decode(String.self, forKey: .message)
+        self._jsonOperation = try container.decodeIfPresent(String.self, forKey: .operation)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonRequestId, forKey: .requestId)
+        try container.encode(_jsonTimestamp, forKey: .timestamp)
+        try container.encode(_jsonVmId, forKey: .vmId)
+        try container.encode(_jsonLevel, forKey: .level)
+        try container.encode(_jsonSource, forKey: .source)
+        try container.encode(_jsonEventType, forKey: .eventType)
+        try container.encode(_jsonMessage, forKey: .message)
+        try container.encodeIfPresent(_jsonOperation, forKey: .operation)
+    }
+
 }

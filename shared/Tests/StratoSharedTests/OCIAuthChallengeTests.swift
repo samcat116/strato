@@ -1,4 +1,4 @@
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("OCI Auth Challenge Parsing")

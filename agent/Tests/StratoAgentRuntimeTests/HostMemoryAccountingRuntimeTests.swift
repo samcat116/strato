@@ -29,7 +29,8 @@ struct HostMemoryAccountingRuntimeTests {
         let claim = try await original.seedClaimForAlreadyObservedVM()
         let resources = await original.getAgentResources()
         await original.releaseMemoryAccountingClaim(claim)
-        let accounting = try #require(resources.memoryAccounting)
+        try #require(resources.hasMemoryAccounting)
+        let accounting = resources.memoryAccounting
         #expect(accounting.workloadEffectiveBytes == (1536 + 384) * mib)
         #expect(accounting.hostReservedBytes == 1024 * mib)
         #expect(resources.availableMemory == (4096 - 1024 - 1920) * mib)

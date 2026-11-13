@@ -109,7 +109,7 @@ struct WireMessageLoggingTests {
             }
 
             LogLeakAssertions.expectNoSecrets(
-                fixture.sentinels + [fixture.envelope.payload.base64EncodedString()],
+                fixture.sentinels + [fixture.encodedFrame.base64EncodedString()],
                 in: entries)
             #expect(entry.metadata["payload"] == nil)
             #expect(entry.metadata["body"] == nil)
@@ -127,7 +127,7 @@ struct WireMessageLoggingTests {
             sessionId: "session-42",
             command: ["/bin/true"])
         let envelope = try MessageEnvelope(message: message)
-        let encodedFrame = try WireProtocol.makeEncoder().encode(envelope)
+        let encodedFrame = try WireProtocol.encodeEnvelope(envelope)
         let (logger, handler) = makeLogger()
 
         WireMessageLogger.log(
@@ -159,7 +159,7 @@ struct WireMessageLoggingTests {
     func identifiersAreEscapedAndBounded() throws {
         let requestId = "request\\\n\r\t" + String(repeating: "x", count: 256)
         let envelope = try MessageEnvelope(message: SuccessMessage(requestId: requestId))
-        let encodedFrame = try WireProtocol.makeEncoder().encode(envelope)
+        let encodedFrame = try WireProtocol.encodeEnvelope(envelope)
         let (logger, handler) = makeLogger()
 
         WireMessageLogger.log(
@@ -180,34 +180,21 @@ struct WireMessageLoggingTests {
         #expect(loggedRequestId.hasSuffix("..."))
     }
 
-    @Test("Malformed wire content cannot re-enter logs through decoder errors")
+    @Test("Handling failures and malformed frames never log workload content")
     func malformedWireContentDoesNotEnterDecoderErrorLogs() throws {
         let sentinel = "MALFORMED_BODY_SENTINEL_STR_283\nsecond-line"
-        let malformedBody = try WireProtocol.makeEncoder().encode(
-            RawGuestExecStart(
-                requestId: "request-malformed",
-                timestamp: sentinel,
-                resourceKind: "virtual_machine",
-                resourceId: "vm-1",
-                sessionId: "session-1",
-                command: ["/bin/true"]))
-        let encodedFrame = try WireProtocol.makeEncoder().encode(
-            RawEnvelope(type: .guestExecStart, payload: malformedBody))
-        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: encodedFrame)
+        let envelope = try MessageEnvelope(
+            message: GuestExecStartMessage(
+                requestId: "request-malformed", resourceKind: .virtualMachine,
+                resourceId: "vm-1", sessionKind: .interactive,
+                sessionId: "session-1", command: [sentinel]))
         let (logger, handler) = makeLogger()
-
-        do {
-            _ = try envelope.decode(as: GuestExecStartMessage.self)
-            Issue.record("malformed timestamp unexpectedly decoded")
-        } catch {
-            #expect(String(describing: error).contains("MALFORMED_BODY_SENTINEL_STR_283"))
-            WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
-        }
+        WireMessageLogger.logMessageHandlingFailure(envelope: envelope, logger: logger)
 
         let invalidOuterFrame = Data(
             #"{"type":"guest_exec_start","payload":"MALFORMED_OUTER_SENTINEL_STR_283"}"#.utf8)
         do {
-            _ = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: invalidOuterFrame)
+            _ = try WireProtocol.decodeEnvelope(invalidOuterFrame)
             Issue.record("malformed envelope unexpectedly decoded")
         } catch {
             WireMessageLogger.logEnvelopeDecodingFailure(
@@ -227,33 +214,11 @@ struct WireMessageLoggingTests {
             [
                 "MALFORMED_BODY_SENTINEL_STR_283",
                 "MALFORMED_OUTER_SENTINEL_STR_283",
-                envelope.payload.base64EncodedString(),
+                try WireProtocol.encodeEnvelope(envelope).base64EncodedString(),
             ],
             in: entries)
         #expect(entries[0].metadata.keys.sorted() == ["direction", "type"])
         #expect(entries[1].metadata.keys.sorted() == ["byteCount", "direction"])
-    }
-
-    @Test("Metadata logging never encodes or decodes the message payload")
-    func metadataLoggingDoesNotCodePayload() throws {
-        let message = CodingTrapMessage(
-            requestId: "request-no-coding",
-            secret: "CODING_TRAP_SECRET_STR_283")
-        let (logger, handler) = makeLogger()
-
-        WireMessageLogger.log(
-            message: message,
-            direction: .outbound,
-            byteCount: 16 << 20,
-            logger: logger)
-
-        let entry = try #require(handler.entries.first)
-        #expect(handler.entries.count == 1)
-        #expect(stringMetadata("requestId", in: entry) == "request-no-coding")
-        #expect(stringMetadata("byteCount", in: entry) == String(16 << 20))
-        LogLeakAssertions.expectNoSecrets(
-            ["CODING_TRAP_SECRET_STR_283"],
-            in: handler.entries)
     }
 
     private struct Fixture {
@@ -265,46 +230,6 @@ struct WireMessageLoggingTests {
         let expectedCorrelation: [String: String]
     }
 
-    private struct RawEnvelope: Encodable {
-        let type: MessageType
-        let payload: Data
-    }
-
-    private struct RawGuestExecStart: Encodable {
-        let requestId: String
-        let timestamp: String
-        let resourceKind: String
-        let resourceId: String
-        let sessionId: String
-        let command: [String]
-    }
-
-    private struct CodingTrapMessage: WebSocketMessage {
-        var type: MessageType { .sandboxLog }
-        let requestId: String
-        let timestamp = Date()
-        let secret: String
-
-        init(requestId: String, secret: String) {
-            self.requestId = requestId
-            self.secret = secret
-        }
-
-        init(from decoder: Decoder) throws {
-            Issue.record("wire metadata logging unexpectedly decoded the message")
-            throw CodingTrapError.unexpectedCoding
-        }
-
-        func encode(to encoder: Encoder) throws {
-            Issue.record("wire metadata logging unexpectedly encoded the message")
-            throw CodingTrapError.unexpectedCoding
-        }
-    }
-
-    private enum CodingTrapError: Error {
-        case unexpectedCoding
-    }
-
     private func fixture<T: WebSocketMessage>(
         _ message: T,
         sentinels: [String],
@@ -314,7 +239,7 @@ struct WireMessageLoggingTests {
         return try Fixture(
             message: message,
             envelope: envelope,
-            encodedFrame: WireProtocol.makeEncoder().encode(envelope),
+            encodedFrame: WireProtocol.encodeEnvelope(envelope),
             requestId: message.requestId,
             sentinels: sentinels,
             expectedCorrelation: expectedCorrelation)

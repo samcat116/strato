@@ -25,6 +25,14 @@ extension NetworkServiceLinux {
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
     ) async -> NetworkReconcileOutcome {
+        do {
+            for network in networks { try network.validateProtocol() }
+            for group in securityGroups ?? [] { try group.validateProtocol() }
+            for zone in dnsZones ?? [] { try zone.validateProtocol() }
+        } catch {
+            logger.error("Invalid network desired state; skipping reconciliation")
+            return .noOpinion
+        }
         topologyAuthority = authoritative
 
         // Advance replay protection before any fallible await. A partially
@@ -36,7 +44,7 @@ extension NetworkServiceLinux {
             for network in networks {
                 guard
                     networkGenerationLedger.accept(
-                        networkID: network.networkId, generation: network.generation)
+                        networkID: validatedProtocolUUID(network.networkID), generation: network.generation)
                 else {
                     logger.debug(
                         "Skipping stale network desired state",
@@ -44,7 +52,8 @@ extension NetworkServiceLinux {
                             "network": .string(network.name),
                             "generation": .stringConvertible(network.generation),
                             "accepted": .stringConvertible(
-                                networkGenerationLedger.acceptedGeneration(for: network.networkId)
+                                networkGenerationLedger.acceptedGeneration(
+                                    for: validatedProtocolUUID(network.networkID))
                                     ?? 0),
                         ])
                     stale.append(network)
@@ -131,7 +140,7 @@ extension NetworkServiceLinux {
             networks: current,
             actuator: self,
             logger: logger,
-            protectedNetworkIDs: Set(stale.map(\.networkId)))
+            protectedNetworkIDs: Set(stale.map { validatedProtocolUUID($0.networkID) }))
         lastObservedLoadBalancers = loadBalancerOutcome.observations
         networkFailures.append(contentsOf: loadBalancerOutcome.networkFailures)
         #else
@@ -151,7 +160,7 @@ extension NetworkServiceLinux {
                     ReconcileStepFailure(
                         message: failure.message,
                         classification: failure.classification,
-                        affectedNetworkIds: [network.networkId]))
+                        affectedNetworkIds: [validatedProtocolUUID(network.networkID)]))
             }
         }
 
@@ -169,7 +178,10 @@ extension NetworkServiceLinux {
                     zones: dnsZones,
                     networkIDsBySwitchName: Dictionary(
                         uniqueKeysWithValues: current.map {
-                            (OVNNaming.switchName(networkId: $0.networkId), $0.networkId)
+                            (
+                                OVNNaming.switchName(networkId: validatedProtocolUUID($0.networkID)),
+                                validatedProtocolUUID($0.networkID)
+                            )
                         }),
                     actuator: self,
                     logger: logger)
@@ -203,7 +215,7 @@ extension NetworkServiceLinux {
                 securityGroupTiersReady = result.networkACLTierReady
                 observedSecurityGroups = result.observations.map { observation in
                     if observation.status == .active {
-                        securityGroupGenerations[observation.id] = observation.observedGeneration
+                        securityGroupGenerations[validatedProtocolUUID(observation.id)] = observation.observedGeneration
                     }
                     return observation
                 }
@@ -223,13 +235,13 @@ extension NetworkServiceLinux {
         // Per-network nil remains no opinion; an explicit [] tears the policy
         // down. Stale networks are protected from the global observed-minus-
         // desired reap just like their topology is above.
-        if current.contains(where: { $0.networkACLs != nil }) {
+        if current.contains(where: { $0.hasNetworkAcLs }) {
             if securityGroupTiersReady {
                 do {
                     let failures = try await NetworkACLReconciler.reconcile(
                         networks: current,
                         protectedSwitchNames: Set(
-                            stale.map { OVNNaming.switchName(networkId: $0.networkId) }),
+                            stale.map { OVNNaming.switchName(networkId: validatedProtocolUUID($0.networkID)) }),
                         actuator: self,
                         logger: logger)
                     networkFailures.append(contentsOf: failures)
@@ -258,7 +270,7 @@ extension NetworkServiceLinux {
 
         let observedNetworks = current.map { network in
             let failure = networkFailures.first { failure in
-                failure.affectedNetworkIds?.contains(network.networkId) ?? true
+                failure.affectedNetworkIds?.contains(validatedProtocolUUID(network.networkID)) ?? true
             }
             if let failure {
                 return failedNetworkObservation(network, failure: failure)
@@ -266,9 +278,9 @@ extension NetworkServiceLinux {
                 // Stamp only after every topology/DHCP/NACL write completed.
                 // Equal generations still re-drive level-triggered side state.
                 networkGenerationLedger.recordObserved(
-                    networkID: network.networkId, generation: network.generation)
+                    networkID: validatedProtocolUUID(network.networkID), generation: network.generation)
                 return ObservedNetworkState(
-                    id: network.networkId,
+                    id: validatedProtocolUUID(network.networkID),
                     observedGeneration: network.generation,
                     status: .active)
             }
@@ -298,8 +310,9 @@ extension NetworkServiceLinux {
         failure: ReconcileStepFailure
     ) -> ObservedNetworkState {
         ObservedNetworkState(
-            id: network.networkId,
-            observedGeneration: networkGenerationLedger.observedGeneration(for: network.networkId),
+            id: validatedProtocolUUID(network.networkID),
+            observedGeneration: networkGenerationLedger.observedGeneration(
+                for: validatedProtocolUUID(network.networkID)),
             status: .error,
             lastError: failure.message,
             failedGeneration: network.generation,
@@ -323,8 +336,8 @@ extension NetworkServiceLinux {
     ) -> ObservedSecurityGroupState {
         let classification = (error as? any ClassifiableError)?.failureClassification ?? .transient
         return ObservedSecurityGroupState(
-            id: group.id,
-            observedGeneration: securityGroupGenerations[group.id] ?? 0,
+            id: validatedProtocolUUID(group.id),
+            observedGeneration: securityGroupGenerations[validatedProtocolUUID(group.id)] ?? 0,
             status: .error,
             lastError: error.localizedDescription,
             failedGeneration: group.generation,
@@ -387,7 +400,7 @@ extension NetworkServiceLinux {
                 networkId: network.networkId,
                 bindAddresses: ResolverSupervisionPolicy.bindable(
                     network.addresses, ipv6Available: ipv6),
-                zones: zones.filter { $0.networkIds.contains(network.networkId) },
+                zones: zones.filter { $0.networkIds.values.contains { UUID(uuidString: $0) == network.networkId } },
                 upstreams: network.upstreams,
                 searchDomain: network.searchDomain)
         }
@@ -735,19 +748,20 @@ extension NetworkServiceLinux {
         #if os(Linux)
         do {
             if !dhcpEnabled {
-                try await removeDHCPOptions(networkId: network.networkId, networkName: network.name)
+                try await removeDHCPOptions(
+                    networkId: validatedProtocolUUID(network.networkID), networkName: network.name)
                 return nil
             }
-            if let gateway = network.gateway, let cidr = IPv4CIDR(network.subnet) {
+            if network.hasGateway, let cidr = IPv4CIDR(network.subnet) {
                 // Masked, so the row key matches what the NIC path derives
                 // from ip+netmask (the stored subnet may carry host bits).
                 _ = try await ensureDHCPOptions(
-                    networkId: network.networkId,
+                    networkId: validatedProtocolUUID(network.networkID),
                     networkName: network.name,
                     subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
-                    gateway: gateway,
-                    dnsServers: network.dnsServers, domainName: network.domainName,
-                    leaseTime: network.leaseTime,
+                    gateway: network.gateway,
+                    dnsServers: network.dnsServers.values, domainName: network.optionalDomainName,
+                    leaseTime: network.optionalLeaseTime.map(Int.init),
                     // `== true`, matching how the topology plan reads these
                     // fields: a control plane with no opinion advertises no
                     // route rather than one to an address it never asked to
@@ -756,21 +770,22 @@ extension NetworkServiceLinux {
                     // address that may terminate nothing.
                     metadataEnabled: network.metadataEnabled,
                     resolverAddresses: network.resolverEnabled == true
-                        ? (network.resolverAddresses ?? []) : [])
+                        ? network.resolverAddresses.values : [])
             }
-            if let subnet6 = network.subnet6 {
+            if network.hasSubnet6 {
                 _ = try await ensureDHCPOptions6(
-                    networkId: network.networkId, networkName: network.name, subnet6: subnet6,
-                    dnsServers: network.dnsServers, domainName: network.domainName,
+                    networkId: validatedProtocolUUID(network.networkID), networkName: network.name,
+                    subnet6: network.subnet6,
+                    dnsServers: network.dnsServers.values, domainName: network.optionalDomainName,
                     resolverAddresses: network.resolverEnabled == true
-                        ? (network.resolverAddresses ?? []) : [])
+                        ? network.resolverAddresses.values : [])
             }
         } catch {
             logger.error(
                 "DHCP options convergence failed for network",
                 metadata: [
                     "network": .string(network.name),
-                    "networkId": .string(network.networkId.uuidString),
+                    "networkId": .string(network.networkID),
                     "error": .string(error.localizedDescription),
                 ])
             return ReconcileStepFailure(

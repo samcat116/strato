@@ -505,11 +505,11 @@ struct NetworkController: RouteCollection {
                     let currentV6AddressCount =
                         try await VMInterfaceAddress.query(on: db)
                         .filter(\.$logicalNetwork.$id == networkID)
-                        .filter(\.$family == IPFamily.ipv6.rawValue)
+                        .filter(\.$family == IPFamily.ipv6.protocolValue)
                         .count()
                         + (try await SandboxInterfaceAddress.query(on: db)
                             .filter(\.$logicalNetwork.$id == networkID)
-                            .filter(\.$family == IPFamily.ipv6.rawValue)
+                            .filter(\.$family == IPFamily.ipv6.protocolValue)
                             .count())
                     if requestedIPv6.subnet6 != current.subnet6 {
                         guard current.subnet6 == nil || currentV6AddressCount == 0 else {

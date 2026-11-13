@@ -307,7 +307,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         burstableEnforcement: WorkloadResourceClassEnforcement? = nil,
         suspensionRestoreLimit: Int = 2,
         suspensionRestoreTimeoutSeconds: Int = StageBudget.checkpointSeconds,
-        idlePolicy: SandboxIdlePolicy = SandboxIdlePolicy(),
+        idlePolicy: SandboxIdlePolicy = SandboxIdlePolicy.defaults,
         automaticSuspensionTransport: (any SandboxAutomaticSuspensionTransport)? = nil
     ) throws {
         guard (5...StageBudget.checkpointSeconds).contains(suspensionRestoreTimeoutSeconds) else {

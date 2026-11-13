@@ -194,8 +194,8 @@ struct SandboxSuspensionTests {
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: directory) }
         // These bytes exercise filesystem/journal recovery, not a VM restore.
-        for kind in SandboxSnapshotArtifactKind.allCases {
-            try Data("fixture-\(kind.rawValue)".utf8).write(
+        for kind in SandboxSnapshotArtifactKind.knownCases {
+            try Data("fixture-\(kind.protocolValue)".utf8).write(
                 to: URL(fileURLWithPath: directory + "/" + kind.filename))
         }
         let id = UUID()

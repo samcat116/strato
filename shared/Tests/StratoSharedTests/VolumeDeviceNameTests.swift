@@ -78,7 +78,7 @@ struct VolumeDeviceNameTests {
     func decodingValidates() throws {
         let legal = #"{"volumeId":"00000000-0000-0000-0000-0000000000AA","deviceName":"disk1","readonly":false}"#
         let decoded = try JSONDecoder().decode(VolumeSpec.self, from: Data(legal.utf8))
-        #expect(decoded.deviceName.rawValue == "disk1")
+        #expect(decoded._jsonDeviceName.rawValue == "disk1")
 
         let illegal = #"{"volumeId":"00000000-0000-0000-0000-0000000000AA","deviceName":"disk 1","readonly":false}"#
         #expect(throws: (any Error).self) {

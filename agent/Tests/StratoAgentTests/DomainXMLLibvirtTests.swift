@@ -87,7 +87,7 @@ struct DomainXMLLibvirtTests {
     /// which for a change CI never tests is the worst outcome available.
     static let emulatableArchitectures: Set<CPUArchitecture> = {
         Set(
-            CPUArchitecture.allCases.filter {
+            CPUArchitecture.knownCases.filter {
                 capabilities.contains("<arch name='\(libvirtArchName($0))'>")
             })
     }()
@@ -98,7 +98,7 @@ struct DomainXMLLibvirtTests {
             let end = capabilities.range(of: "</arch>", range: start.upperBound..<capabilities.endIndex)
         else { return nil }
         let name = String(capabilities[start.upperBound..<end.lowerBound])
-        return CPUArchitecture.allCases.first { libvirtArchName($0) == name }
+        return CPUArchitecture.knownCases.first { libvirtArchName($0) == name }
     }()
 
     /// libvirt's spelling, which is not the wire enum's: arm64 is `aarch64`.
@@ -264,7 +264,8 @@ struct DomainXMLLibvirtTests {
     static let hostBootROM: String? = hostArchitecture.flatMap { architecture in
         let candidates: [String]
         switch architecture {
-        case .x86_64:
+        case .unspecified, .UNRECOGNIZED: return nil
+        case .x8664:
             candidates = [
                 "/usr/share/qemu/bios-256k.bin", "/usr/share/seabios/bios-256k.bin",
                 "/usr/share/qemu/bios.bin", "/usr/share/ovmf/OVMF.fd", "/usr/share/edk2/ovmf/OVMF.fd",
@@ -364,7 +365,8 @@ struct DomainXMLLibvirtTests {
     /// has its own (conditional) fate. Dropping them is the same bargain
     /// `defineableScenarios` makes for architectures this host cannot emulate.
     static let hostResolvedScenarios: [HostFirmwareCase] = defineableScenarios.compactMap { scenario in
-        guard case .disk(let perVMPath) = scenario.input.spec.boot else { return nil }
+        guard case .disk(let disk) = scenario.input.spec.boot.value else { return nil }
+        let perVMPath = disk.hasFirmware ? disk.firmware : nil
         guard
             case .explicit(let firmware) = FirmwareResolver.domainFirmware(
                 secureBoot: scenario.input.spec.effectiveMachine.secureBoot,
@@ -527,7 +529,7 @@ struct DomainXMLLibvirtTests {
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
             firmware: .monolithic(path: bootROM))
-        let fragment = DomainDeviceXML.hotplugDisk(
+        let fragment = try DomainDeviceXML.hotplugDisk(
             attachment: .file(path: hotplugged.path, format: .raw), target: "vdz", readonly: false,
             volumeId: "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00")
 
@@ -686,7 +688,7 @@ struct DomainXMLLibvirtTests {
                 let before = try Self.run(["dumpxml", "--inactive", name]).output
                 let target = DomainDiskInventory.nextTargetDevice(
                     after: try DomainDiskInventory.disks(inDomainXML: before))
-                let fragment = DomainDeviceXML.hotplugDisk(
+                let fragment = try DomainDeviceXML.hotplugDisk(
                     attachment: .file(path: "/volumes/\(apiOrder).qcow2", format: .qcow2),
                     target: target, readonly: false, volumeId: volumeId)
                 #expect(try Self.attachConfig(fragment, to: name, called: "\(name)-\(apiOrder)"))
@@ -753,7 +755,7 @@ struct DomainXMLLibvirtTests {
                 let live = try Self.run(["dumpxml", name]).output
                 let target = DomainDiskInventory.nextTargetDevice(
                     after: try DomainDiskInventory.disks(inDomainXML: live))
-                let fragment = DomainDeviceXML.hotplugDisk(
+                let fragment = try DomainDeviceXML.hotplugDisk(
                     attachment: .file(path: try #require(paths[volumeId]), format: .raw),
                     target: target, readonly: false, volumeId: volumeId)
                 #expect(
@@ -850,7 +852,7 @@ struct DomainXMLLibvirtTests {
             // inactive domain. The files are never opened — a define does not
             // touch a disk's source.
             for (index, target) in ["vdw", "vdx", "vdy", "vdz"].enumerated() {
-                let fragment = DomainDeviceXML.hotplugDisk(
+                let fragment = try DomainDeviceXML.hotplugDisk(
                     attachment: .file(
                         path: "\(NSTemporaryDirectory())strato-widen-\(index).qcow2", format: .qcow2),
                     target: target, readonly: false,
@@ -904,11 +906,8 @@ struct DomainXMLLibvirtTests {
         // A grown size range, so the memory half of the pass runs too: this is a
         // VM whose ceiling was raised past what it was created with.
         let spec = scenario.input.spec
-        let grown = VMSpec(
-            cpus: spec.cpus, maxCpus: spec.maxCpus, memoryBytes: spec.memoryBytes,
-            maxMemoryBytes: spec.memoryBytes + 8 * 1024 * 1024 * 1024, boot: spec.boot,
-            machine: spec.machine, guestAgentEnabled: spec.guestAgentEnabled,
-            console: spec.console)
+        var grown = spec
+        grown.maxMemoryBytes = spec.memoryBytes + 8 * 1024 * 1024 * 1024
 
         try Self.withDefinedDomain(name: name, document: document) { defined in
             let widening = try DomainRedefinition.widening(

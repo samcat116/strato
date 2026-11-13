@@ -32,7 +32,7 @@ func runtimeTestConfiguration(
         legacySandboxJailerUidBase: AgentConfig.defaultSandboxJailerUidBase,
         sandboxWarmStart: true,
         sandboxSuspensionRestoreTimeoutSeconds: 1200,
-        sandboxIdlePolicy: SandboxIdlePolicy(),
+        sandboxIdlePolicy: SandboxIdlePolicy.defaults,
         sandboxWarmCacheMaxSizeBytes: nil,
         hypervisorType: hypervisorType,
         hardwareAccelerationEnabled: true,

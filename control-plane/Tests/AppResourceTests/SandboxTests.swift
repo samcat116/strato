@@ -69,7 +69,7 @@ final class SandboxTests {
         named agentName: String = "sandbox-agent",
         sandboxCapable: Bool? = nil,
         sandboxNetworkingCapable: Bool? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion,
+        protocolMajor: Int = Int(AgentProtocolCompatibility.major),
         architecture: CPUArchitecture? = nil,
         // Recent enough to remap a restored network device (STR-104), which is
         // what a networked fork places on. Tests probing that gate pass an
@@ -90,7 +90,7 @@ final class SandboxTests {
             // construction an overlay host — the two travel together here so a
             // test never has to remember to set both.
             networkCapability: (sandboxNetworkingCapable ?? false) ? .overlay : nil,
-            protocolVersion: protocolVersion,
+            protocolMajor: protocolMajor,
             sandboxCapable: sandboxCapable,
             sandboxNetworkingCapable: sandboxNetworkingCapable)
         // Establish inventory before placement; subsequent absence is ordinary reconciliation.
@@ -424,7 +424,7 @@ final class SandboxTests {
                 agentId: agentId,
                 createdByID: user.id!)
             snapshot.status = .ready
-            snapshot.architecture = CPUArchitecture.current.rawValue
+            snapshot.architecture = CPUArchitecture.current.protocolValue
             snapshot.guestControlProtocolVersion =
                 SandboxGuestControlProtocol.currentVersion
             snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
@@ -466,11 +466,11 @@ final class SandboxTests {
             #expect(fork.hypervisorId == agentId)
 
             let desired = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let forkState = try #require(desired.sandboxes.first { $0.sandboxId == forkID })
+            let forkState = try #require(desired.sandboxes.values.first { $0.sandboxID == forkID.uuidString })
             let expectedRef = SandboxSnapshotRef(
                 snapshotId: snapshot.id!, sourceSandboxId: source.id!)
             #expect(forkState.spec.restoreFrom == expectedRef)
-            #expect(forkState.registryCredential == nil)
+            #expect(!forkState.hasRegistryCredential)
 
             let forkNIC = try #require(
                 await SandboxNetworkInterface.query(on: app.db)
@@ -740,7 +740,7 @@ final class SandboxTests {
             snapshot.status = .ready
             snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
-            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.knownCases.map {
                 SandboxSnapshotExportedArtifact(
                     kind: $0, sizeBytes: 16, sha256: String(repeating: "0", count: 64))
             }
@@ -1314,14 +1314,14 @@ final class SandboxTests {
             try await sandbox.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.sandboxes.count == 1)
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.sandboxId == sandbox.id)
+            #expect(message.sandboxes.values.count == 1)
+            let entry = try #require(message.sandboxes.values.first)
+            #expect(entry.sandboxID == sandbox.id?.uuidString)
             #expect(entry.desiredStatus == .running)
             #expect(entry.generation == sandbox.generation)
             #expect(entry.spec.image == "ghcr.io/acme/worker:v1")
             #expect(entry.spec.cpus == 1)
-            #expect(entry.registryCredential == nil)
+            #expect(!entry.hasRegistryCredential)
         }
     }
 
@@ -1345,7 +1345,7 @@ final class SandboxTests {
             agentId: agentId,
             createdByID: user.id!)
         snapshot.status = .ready
-        snapshot.architecture = CPUArchitecture.current.rawValue
+        snapshot.architecture = CPUArchitecture.current.protocolValue
         snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
         snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
         try await snapshot.save(on: db)
@@ -1481,14 +1481,15 @@ final class SandboxTests {
             ).save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.sandboxes.first)
-            let spec = try #require(entry.spec.network)
+            let entry = try #require(message.sandboxes.values.first)
+            try #require(entry.spec.hasNetwork)
+            let spec = entry.spec.network
             #expect(spec.macAddress == "00:0c:29:ab:cd:ef")
             #expect(spec.ipAddress == "192.168.1.7")
             #expect(spec.network == network.name)
 
             // The sandbox's network is realized on its host too.
-            #expect(message.networks.contains { $0.name == network.name })
+            #expect(message.networks.values.contains { $0.name == network.name })
         }
     }
 
@@ -1514,10 +1515,10 @@ final class SandboxTests {
             ).save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.spec.network == nil)
+            let entry = try #require(message.sandboxes.values.first)
+            #expect(!entry.spec.hasNetwork)
             // The sandbox itself is still desired state; only its NIC is held back.
-            #expect(entry.sandboxId == sandbox.id)
+            #expect(entry.sandboxID == sandbox.id?.uuidString)
         }
     }
 
@@ -1548,8 +1549,9 @@ final class SandboxTests {
                 app: app, sandbox: created, sandboxCapable: true, sandboxNetworkingCapable: true)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
-            let spec = try #require(entry.spec.network)
+            let entry = try #require(message.sandboxes.values.first { $0.sandboxID == sandboxID.uuidString })
+            try #require(entry.spec.hasNetwork)
+            let spec = entry.spec.network
 
             let nic = try #require(
                 await SandboxNetworkInterface.query(on: app.db)
@@ -1559,7 +1561,7 @@ final class SandboxTests {
             #expect(spec.ipAddress == nic.ipv4Address?.address)
             // The default group the create transaction attached rides with it,
             // so the port is filtered from the moment it exists (STR-102).
-            #expect(spec.securityGroupIds?.isEmpty == false)
+            #expect(spec.hasSecurityGroupIds && !spec.securityGroupIds.values.isEmpty)
         }
     }
 
@@ -1591,13 +1593,13 @@ final class SandboxTests {
                 SandboxSpecBuilder.networkSpec(
                     from: nic, network: network, securityGroupIds: groupIDs,
                     agentRealizesSandboxNICs: true))
-            #expect(spec.securityGroupIds == groupIDs)
+            #expect(spec.securityGroupIds.values == groupIDs.map(\.uuidString))
             #expect(spec.macAddress == nic.macAddress)
             #expect(spec.ipAddress == "192.168.1.9")
             // Nil stays nil: "unmanaged", never "no groups".
             #expect(
                 SandboxSpecBuilder.networkSpec(
-                    from: nic, network: network, agentRealizesSandboxNICs: true)?.securityGroupIds == nil)
+                    from: nic, network: network, agentRealizesSandboxNICs: true)?.hasSecurityGroupIds == false)
         }
     }
 
