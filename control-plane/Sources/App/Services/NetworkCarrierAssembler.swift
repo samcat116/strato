@@ -50,7 +50,7 @@ extension DesiredStateAssembler {
         // many zones a site's networks attach.
         return try await DNSZoneAssembler.assemble(zones: names, on: db)
             .map { DNSZoneAssembler.desiredZone($0, networkIDs: networksByZone[$0.zoneId] ?? []) }
-            .sorted { $0.zoneId.uuidString < $1.zoneId.uuidString }
+            .sorted { $0.zoneID < $1.zoneID }
     }
 
     /// Whether every agent that could host a guest on this agent's networks can
@@ -145,7 +145,7 @@ extension DesiredStateAssembler {
                     let rhsDirection = rhs.direction == "ingress" ? 0 : 1
                     if lhsDirection != rhsDirection { return lhsDirection < rhsDirection }
                     if lhs.ruleNumber != rhs.ruleNumber { return lhs.ruleNumber < rhs.ruleNumber }
-                    return lhs.id.uuidString < rhs.id.uuidString
+                    return lhs.id < rhs.id
                 }
             byNetwork[acl.$logicalNetwork.id] = DesiredNetworkACL(
                 id: aclID, generation: acl.generation, rules: rules)
@@ -373,10 +373,10 @@ extension DesiredStateAssembler {
                         log: rule.log
                     )
                 }
-                .sorted { $0.id.uuidString < $1.id.uuidString }
+                .sorted { $0.id < $1.id }
                 return DesiredSecurityGroup(id: groupId, generation: group.generation, rules: rules)
             }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
+            .sorted { $0.id < $1.id }
     }
 
     /// Floating IPs (issue #344) the desired-state sync should carry, keyed by
@@ -524,6 +524,6 @@ extension DesiredStateAssembler {
                     externalIP: floatingIP.address,
                     logicalIP: loadBalancer.vip))
         }
-        return byNetwork.mapValues { $0.sorted { $0.externalIP < $1.externalIP } }
+        return byNetwork.mapValues { $0.sorted { $0.externalIp < $1.externalIp } }
     }
 }

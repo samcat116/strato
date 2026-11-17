@@ -508,11 +508,11 @@ struct MetadataResponderTests {
     func absentNetworkConfig() async {
         let metadata = Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.5")
         let withoutAddressing = InstanceMetadata(
-            instanceId: metadata.instanceId,
-            projectId: metadata.projectId,
+            instanceId: validatedProtocolUUID(metadata.instanceID),
+            projectId: validatedProtocolUUID(metadata.projectID),
             nics: [
                 MetadataNIC(
-                    deviceName: "net0", macAddress: metadata.nics[0].macAddress,
+                    deviceName: "net0", macAddress: metadata.nics.values[0].macAddress,
                     networkId: Self.networkA, networkName: "tenant",
                     ipAddress: "10.0.0.5")
             ],

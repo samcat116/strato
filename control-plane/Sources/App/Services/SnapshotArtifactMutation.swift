@@ -239,7 +239,7 @@ enum SnapshotArtifactMutation {
         guard info.supportsSnapshotArtifact(kind, at: instant) else {
             throw Abort(
                 .conflict,
-                reason: "Agent '\(agentId)' cannot capture \(kind.rawValue) artifacts "
+                reason: "Agent '\(agentId)' cannot capture \(kind.protocolValue) artifacts "
                     + "(the required snapshot backend is unavailable); "
                     + "place the workload on a host with a capable backend.")
         }

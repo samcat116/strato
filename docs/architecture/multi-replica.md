@@ -235,9 +235,10 @@ wire protocol version ≥ 2 (desired-state sync, agent ≥ the phase-2 release);
 older agents are rejected at registration with the terminal
 `unsupported_protocol_version` code so their operators know to upgrade.
 
-The current control plane requires an exact wire-version match at registration,
-so every accepted agent uses the desired-state pull transport. Mixed-version
-fleet transition behavior is not part of the live protocol.
+The current control plane accepts only Protobuf workload sessions whose protocol
+major matches its own (see [wire protocol](./wire-protocol.md#versioning)), so every
+accepted agent uses the desired-state pull transport. Within a major, additions are
+gated by negotiated capabilities rather than by a version match.
 
 ## Scaling
 

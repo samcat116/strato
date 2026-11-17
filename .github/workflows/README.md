@@ -61,7 +61,8 @@ the existing Actions workflows below. GitHub pull request checks remain in
 GitHub Actions.
 
 ### PR Validation (`build.yaml`)
-Runs on pull requests. Compile and lint only — no tests:
+Runs on pull requests. Broad Swift suites remain opt-in:
+- Agent Protocol Contract: pinned generation, schema compatibility, independent peer fixtures, and focused wire tests (always reported; configure this job as a required branch check).
 - Swift format lint, OpenAPI spec lint, frontend lint & build (GitHub-hosted)
 - Swift compile check — agent, CLI, generated API client, control plane
   (`swift-runners-strato` ARC scale set). `shared/` and `SwiftFirecracker/`

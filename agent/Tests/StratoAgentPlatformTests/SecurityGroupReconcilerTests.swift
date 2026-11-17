@@ -15,7 +15,7 @@ struct SecurityGroupReconcilerTests {
     private var peerPG: String { OVNNaming.portGroupName(securityGroupId: peerId) }
 
     @Test("VM port policy uses stable NIC slots and a legacy position fallback")
-    func vmPortMembershipSlots() {
+    func vmPortMembershipSlots() throws {
         let vmID = UUID()
         let legacy = NetworkSpec(
             network: "legacy", networkId: UUID(), securityGroupIds: [groupId])
@@ -33,7 +33,7 @@ struct SecurityGroupReconcilerTests {
             metadata: InstanceMetadata(
                 instanceId: vmID, projectId: UUID(), serviceEnabled: false))
 
-        let memberships = VMPortMembershipPlanner.memberships(for: [vm])
+        let memberships = try VMPortMembershipPlanner.memberships(for: [vm])
         #expect(memberships.map(\.portName) == ["vm-\(vmID.uuidString)", "vm-\(vmID.uuidString)-2"])
         #expect(memberships.map(\.securityGroupIds) == [[groupId], [peerId]])
         #expect(memberships.allSatisfy { $0.metadataDenied })
@@ -472,7 +472,7 @@ struct SecurityGroupReconcilerTests {
         let good = rule()
         let group = DesiredSecurityGroup(id: groupId, generation: 1, rules: [bad, good])
         let (plans, unexpressed) = SecurityGroupReconciler.plan(securityGroups: [group])
-        #expect(unexpressed == [bad.id])
+        #expect(unexpressed == [validatedProtocolUUID(bad.id)])
         #expect(plans[2].acls.count == 1)
     }
 
@@ -651,10 +651,10 @@ struct SecurityGroupReconcilerTests {
         // vm-A: the drop add failed, so no allow group was joined — a port in
         // allow groups without the drop group would be default-allow.
         #expect(!added.contains(Membership(port: "vm-A", group: pg)))
-        #expect(observations.first?.interfaceId == interfaceID)
+        #expect(observations.first?.interfaceID == interfaceID.uuidString)
         #expect(observations.first?.status == .error)
         #expect(observations.first?.failureClassification == .transient)
-        #expect(observations.first?.lastError != nil)
+        #expect(observations.first?.hasLastError == true)
         // vm-B: already default-denied, its allow group converged.
         #expect(added.contains(Membership(port: "vm-B", group: pg)))
     }
@@ -698,10 +698,10 @@ struct SecurityGroupReconcilerTests {
             securityGroups: [group], actuator: actuator, logger: Logger(label: "test"))
 
         #expect(result.observations.count == 1)
-        #expect(result.observations.first?.id == groupId)
+        #expect(result.observations.first?.id == groupId.uuidString)
         #expect(result.observations.first?.status == .error)
         #expect(result.observations.first?.failedGeneration == 2)
-        #expect(result.observations.first?.lastError?.contains("safety port group") == true)
+        #expect(result.observations.first?.lastError.contains("safety port group") == true)
     }
 }
 

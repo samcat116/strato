@@ -79,7 +79,7 @@ final class AgentOrganizationScopeTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion
+            protocolOffer: .with { $0.major = UInt32(Int(AgentProtocolCompatibility.major)) }
         )
     }
 

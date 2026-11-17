@@ -187,11 +187,11 @@ struct VMSpecBuilderTests {
         _ spec: VMSpec,
         sourceLocation: SourceLocation = #_sourceLocation
     ) throws -> (kernel: String, initramfs: String?, cmdline: String?) {
-        guard case .directKernel(let kernel, let initramfs, let cmdline) = spec.boot else {
+        guard case .directKernel(let boot) = spec.boot.value else {
             Issue.record("Expected direct kernel boot, got \(spec.boot)", sourceLocation: sourceLocation)
             throw TestAbort()
         }
-        return (kernel, initramfs, cmdline)
+        return (boot.kernel, boot.hasInitramfs ? boot.initramfs : nil, boot.hasCmdline ? boot.cmdline : nil)
     }
 
     // MARK: - Resource Configuration Tests
@@ -267,11 +267,11 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        guard case .disk(let firmware) = spec.boot else {
+        guard case .disk(let disk) = spec.boot.value else {
             Issue.record("Expected disk (firmware) boot, got \(spec.boot)")
             return
         }
-        #expect(firmware == "/vm/firmware")
+        #expect(disk.hasFirmware && disk.firmware == "/vm/firmware")
     }
 
     // MARK: - Volume Tests
@@ -283,13 +283,13 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.volumes.count == 1)
+        #expect(spec.volumes.values.count == 1)
         #expect(
-            spec.volumes.first?.attachment
+            spec.volumes.values.first?.attachment
                 == .file(path: "/var/lib/strato/volumes/boot/volume.qcow2", format: .qcow2))
-        #expect(spec.volumes.first?.readonly == false)
-        #expect(spec.volumes.first?.deviceName.rawValue == "disk0")
-        #expect(spec.volumes.first?.volumeId == UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
+        #expect(spec.volumes.values.first?.readonly == false)
+        #expect(spec.volumes.values.first?.deviceName == "disk0")
+        #expect(spec.volumes.values.first?.volumeID == "00000000-0000-4000-8000-000000000001")
     }
 
     /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
@@ -331,10 +331,10 @@ struct VMSpecBuilderTests {
         let attachments = diskAttachments(for: volumes)
         let forward = try VMSpecBuilder.volumeSpecs(
             from: volumes, diskAttachmentsByVolumeID: attachments
-        ).map(\.deviceName.rawValue)
+        ).map(\.deviceName)
         let reversed = try VMSpecBuilder.volumeSpecs(
             from: volumes.reversed(), diskAttachmentsByVolumeID: attachments
-        ).map(\.deviceName.rawValue)
+        ).map(\.deviceName)
 
         // Explicit boot orders first, then device name inside each tier.
         #expect(forward == ["disk1", "disk2", "disk3", "disk9"])
@@ -352,7 +352,7 @@ struct VMSpecBuilderTests {
             ).first)
 
         #expect(spec.blockMode == .cachedShared)
-        #expect(spec.appliedBlockPolicy == nil)
+        #expect(!spec.hasAppliedBlockPolicy)
     }
 
     @Test("Volumes with identical names and orders still sort deterministically")
@@ -371,11 +371,11 @@ struct VMSpecBuilderTests {
         #expect(
             try VMSpecBuilder.volumeSpecs(
                 from: volumes, diskAttachmentsByVolumeID: attachments
-            ).map(\.volumeId) == [first, second])
+            ).map(\.volumeID) == [first.uuidString, second.uuidString])
         #expect(
             try VMSpecBuilder.volumeSpecs(
                 from: volumes.reversed(), diskAttachmentsByVolumeID: attachments
-            ).map(\.volumeId) == [first, second])
+            ).map(\.volumeID) == [first.uuidString, second.uuidString])
     }
 
     @Test("An attached volume with no legal device name fails assembly")
@@ -403,8 +403,8 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.volumes.count == 1)
-        #expect(spec.volumes[0].attachment != nil)
+        #expect(spec.volumes.values.count == 1)
+        #expect(spec.volumes.values[0].hasAttachment)
     }
 
     // MARK: - Network Tests
@@ -423,12 +423,12 @@ struct VMSpecBuilderTests {
             from: vm, image: image, networkInterfaces: [interface],
             networks: networkIndex(for: interface))
 
-        #expect(spec.networks.count == 1)
-        #expect(spec.networks.first?.network == "default")
-        #expect(spec.networks.first?.networkId == interface.logicalNetworkID)
-        #expect(spec.networks.first?.macAddress == "52:54:00:12:34:56")
-        #expect(spec.networks.first?.ipAddress == "192.168.1.10")
-        #expect(spec.networks.first?.netmask == "255.255.255.0")
+        #expect(spec.networks.values.count == 1)
+        #expect(spec.networks.values.first?.network == "default")
+        #expect(spec.networks.values.first?.networkID == interface.logicalNetworkID.uuidString)
+        #expect(spec.networks.values.first?.macAddress == "52:54:00:12:34:56")
+        #expect(spec.networks.values.first?.ipAddress == "192.168.1.10")
+        #expect(spec.networks.values.first?.netmask == "255.255.255.0")
     }
 
     @Test("VMSpecBuilder passes the NIC's gateway through to the network spec")
@@ -441,7 +441,7 @@ struct VMSpecBuilderTests {
             from: vm, image: image, networkInterfaces: [interface],
             networks: networkIndex(for: interface))
 
-        #expect(spec.networks.first?.gateway == "192.168.1.1")
+        #expect(spec.networks.values.first?.gateway == "192.168.1.1")
     }
 
     @Test("networkSpecs populates DHCP/DNS from the matching logical network")
@@ -454,7 +454,7 @@ struct VMSpecBuilderTests {
         let specs = VMSpecBuilder.networkSpecs(from: [interface], networks: networks)
 
         #expect(specs.first?.dhcpEnabled == true)
-        #expect(specs.first?.dnsServers == ["1.1.1.1", "8.8.8.8"])
+        #expect(specs.first?.dnsServers.values == ["1.1.1.1", "8.8.8.8"])
         #expect(specs.first?.domainName == "corp.example.com")
         #expect(specs.first?.leaseTime == 7200)
     }
@@ -481,8 +481,8 @@ struct VMSpecBuilderTests {
             from: vm, image: image, networkInterfaces: [interface],
             networks: networkIndex(for: interface))
 
-        #expect(spec.networks.first?.ipAddress == nil)
-        #expect(spec.networks.first?.netmask == nil)
+        #expect(spec.networks.values.first?.hasIpAddress == false)
+        #expect(spec.networks.values.first?.hasNetmask == false)
     }
 
     @Test("VMSpecBuilder orders multiple interfaces by order index, then device name")
@@ -506,11 +506,11 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(
             from: vm, image: image, networkInterfaces: [second, first], networks: networks)
 
-        #expect(spec.networks.count == 2)
-        #expect(spec.networks.first?.macAddress == "52:54:00:00:00:01")
-        #expect(spec.networks.first?.network == "default")
-        #expect(spec.networks.last?.macAddress == "52:54:00:00:00:02")
-        #expect(spec.networks.last?.network == "backend")
+        #expect(spec.networks.values.count == 2)
+        #expect(spec.networks.values.first?.macAddress == "52:54:00:00:00:01")
+        #expect(spec.networks.values.first?.network == "default")
+        #expect(spec.networks.values.last?.macAddress == "52:54:00:00:00:02")
+        #expect(spec.networks.values.last?.network == "backend")
     }
 
     // MARK: - Console Tests
@@ -522,8 +522,8 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.console != nil)
-        #expect(spec.console?.effectiveGraphics == .headless)
+        #expect(spec.hasConsole)
+        #expect(spec.console.effectiveGraphics == .headless)
     }
 
     // MARK: - Image-Based Tests
@@ -540,12 +540,12 @@ struct VMSpecBuilderTests {
         #expect(spec.sharedMemory == false)
         #expect(spec.hugepages == false)
         #expect(spec.memoryBytes == 2048)
-        #expect(spec.volumes.count == 1)
-        guard case .disk(let firmware) = spec.boot else {
+        #expect(spec.volumes.values.count == 1)
+        guard case .disk(let disk) = spec.boot.value else {
             Issue.record("Expected disk (firmware) boot, got \(spec.boot)")
             return
         }
-        #expect(firmware == nil)
+        #expect(!disk.hasFirmware)
     }
 
     @Test("VMSpecBuilder uses image defaults when VM resources are unset")
@@ -586,8 +586,8 @@ struct VMSpecBuilderTests {
         #expect(spec.memoryBytes == 8192)
         #expect(spec.hugepages == true)
         #expect(spec.sharedMemory == true)
-        #expect(!spec.volumes.isEmpty)
-        #expect(!spec.networks.isEmpty)
+        #expect(!spec.volumes.values.isEmpty)
+        #expect(!spec.networks.values.isEmpty)
         #expect(!boot.kernel.isEmpty)
     }
 
@@ -600,9 +600,9 @@ struct VMSpecBuilderTests {
 
         #expect(spec.cpus == 2)
         #expect(spec.memoryBytes == 2048)
-        #expect(spec.volumes.count == 1)
-        #expect(spec.networks.isEmpty)
-        #expect(spec.userData == nil)
+        #expect(spec.volumes.values.count == 1)
+        #expect(spec.networks.values.isEmpty)
+        #expect(!spec.hasUserData)
     }
 
     @Test("VMSpecBuilder carries cloud-init user data verbatim")
@@ -644,13 +644,13 @@ struct VMSpecBuilderTests {
         vm.tpmEnabled = true
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-        #expect(spec.machine?.secureBoot == true)
-        #expect(spec.machine?.tpm == true)
+        #expect(spec.machine.secureBoot == true)
+        #expect(spec.machine.tpm == true)
 
         let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
-        #expect(specWithVolumes.machine?.secureBoot == true)
-        #expect(specWithVolumes.machine?.tpm == true)
+        #expect(specWithVolumes.machine.secureBoot == true)
+        #expect(specWithVolumes.machine.tpm == true)
     }
 
     @Test("A VM with no machine features sends the default profile, not garbage")
@@ -660,8 +660,8 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
         #expect(spec.effectiveMachine == .default)
-        #expect(spec.machine?.secureBoot == false)
-        #expect(spec.machine?.tpm == false)
+        #expect(spec.machine.secureBoot == false)
+        #expect(spec.machine.tpm == false)
     }
 
     // MARK: - Graphics console (issue #566)
@@ -687,12 +687,12 @@ struct VMSpecBuilderTests {
         vm.graphicsConsole = true
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
-        #expect(spec.console?.graphics == .vnc)
-        #expect(spec.console?.effectiveGraphics == .vnc)
+        #expect(spec.console.graphics == .vnc)
+        #expect(spec.console.effectiveGraphics == .vnc)
 
         let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
-        #expect(specWithVolumes.console?.graphics == .vnc)
+        #expect(specWithVolumes.console.graphics == .vnc)
     }
 
     /// The default is headless, and it reaches the agent as an *absent* field
@@ -709,8 +709,8 @@ struct VMSpecBuilderTests {
             VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: []),
             VMSpecBuilder.buildCanonicalVMSpec(from: vm, image: image, volumes: [], networkInterfaces: []),
         ] {
-            #expect(spec.console?.graphics == nil)
-            #expect(spec.console?.effectiveGraphics == .headless)
+            #expect(!spec.hasConsole || !spec.console.hasGraphics)
+            #expect(spec.console.effectiveGraphics == .headless)
 
             let json = String(decoding: try WireProtocol.makeEncoder().encode(spec), as: UTF8.self)
             #expect(!json.contains("graphics"))

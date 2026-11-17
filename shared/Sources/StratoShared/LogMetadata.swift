@@ -16,6 +16,7 @@ public enum LogMetadata {
         public static let agentIdentity = "strato.agent.identity"
         public static let vmID = "strato.vm.id"
         public static let sandboxID = "strato.sandbox.id"
+        public static let resourceID = "strato.resource.id"
         public static let projectID = "strato.project.id"
         public static let sessionID = "strato.session.id"
         public static let sessionKind = "strato.session.kind"
@@ -52,6 +53,7 @@ public enum LogMetadata {
         switch kind {
         case .virtualMachine: Key.vmID
         case .sandbox: Key.sandboxID
+        case .unspecified, .UNRECOGNIZED: Key.resourceID
         }
     }
 }

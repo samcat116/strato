@@ -75,7 +75,7 @@ public struct SnapshotArtifactTransfer: Sendable {
         } catch let error as TransferError {
             throw error
         } catch {
-            throw TransferError.uploadFailed(kind: kind.rawValue, reason: "\(error)")
+            throw TransferError.uploadFailed(kind: kind.protocolValue, reason: "\(error)")
         }
     }
 
@@ -96,7 +96,7 @@ public struct SnapshotArtifactTransfer: Sendable {
         let directory = (destinationPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
 
-        let kind = descriptor.kind.rawValue
+        let kind = descriptor.kind.protocolValue
         // Stage beside the destination so the final rename is atomic even on
         // hosts where the temp directory is a different filesystem.
         let stagingPath = destinationPath + ".partial." + UUID().uuidString

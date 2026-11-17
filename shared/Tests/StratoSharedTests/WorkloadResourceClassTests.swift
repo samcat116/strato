@@ -35,7 +35,7 @@ struct WorkloadResourceClassTests {
         let maximum = try WorkloadResourceClassPolicy(
             kind: .burstable, cpuAllocationRatio: 64,
             memoryAllocationRatio: 16, cpuWeight: 10000, memoryHighPercent: 99)
-        #expect(maximum.cpuWeight == 10000)
+        #expect(maximum._jsonCpuWeight == 10000)
     }
 
     @Test func fractionalCPUAndUndiscountedOverhead() throws {
@@ -58,7 +58,7 @@ struct WorkloadResourceClassTests {
         let nearOne = try WorkloadResourceClassPolicy(
             kind: .burstable, memoryAllocationRatio: Double(1).nextUp, memoryHighPercent: 80)
         let commitment = WorkloadAdmittedReservation(cpus: 1, memory: raw, policy: nearOne)
-        #expect(commitment.discountedGuestBytes <= commitment.guestCommitmentBytes)
+        #expect(commitment._jsonDiscountedGuestBytes <= commitment._jsonGuestCommitmentBytes)
         #expect(
             try JSONDecoder().decode(WorkloadAdmittedReservation.self, from: JSONEncoder().encode(commitment))
                 == commitment)
@@ -66,9 +66,9 @@ struct WorkloadResourceClassTests {
 
     @Test func runtimeGrantDenominatorAndRounding() throws {
         let limits = try WorkloadResourceClassPolicy.burstable.runtimeLimits(guestBytes: 101, backendOverheadBytes: 9)
-        #expect(limits.memoryHighBytes == 89)
-        #expect(limits.memoryMaxBytes == 110)
-        #expect(limits.cpuWeight == 100)
+        #expect(limits._jsonMemoryHighBytes == 89)
+        #expect(limits._jsonMemoryMaxBytes == 110)
+        #expect(limits._jsonCpuWeight == 100)
         #expect(throws: WorkloadResourceClassError.invalidRuntimeLimit) {
             try WorkloadResourceClassPolicy.burstable.runtimeLimits(guestBytes: .max, backendOverheadBytes: 1)
         }
@@ -91,8 +91,8 @@ struct WorkloadResourceClassTests {
         #expect(unchanged == admitted)
         let grown = admitted.growing(
             cpus: 2, memory: .init(guestBytes: 2048, backendOverheadBytes: 128), policy: edited)
-        #expect(grown.cpuMicroUnits == 750_000)
-        #expect(grown.discountedGuestBytes == 768)
+        #expect(grown._jsonCpuMicroUnits == 750_000)
+        #expect(grown._jsonDiscountedGuestBytes == 768)
         #expect(grown.effectiveMemoryBytes == 896)
         #expect(
             try WireProtocol.makeDecoder().decode(
@@ -106,7 +106,7 @@ struct WorkloadResourceClassTests {
         let spec = VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil), resourceClass: snapshot)
         let data = try WireProtocol.makeEncoder().encode(spec)
         let decoded = try WireProtocol.makeDecoder().decode(VMSpec.self, from: data)
-        #expect(decoded.resourceClass == snapshot)
+        #expect(decoded._jsonResourceClass == snapshot)
         let sandbox = SandboxSpec(image: "example.test/worker:v1", cpus: 1, memoryBytes: 1024, resourceClass: snapshot)
         #expect(
             try WireProtocol.makeDecoder().decode(SandboxSpec.self, from: WireProtocol.makeEncoder().encode(sandbox))
@@ -115,7 +115,7 @@ struct WorkloadResourceClassTests {
         json.removeValue(forKey: "resourceClass")
         #expect(
             try WireProtocol.makeDecoder().decode(VMSpec.self, from: JSONSerialization.data(withJSONObject: json))
-                .resourceClass == nil)
+                .hasResourceClass == false)
         var classJSON = try #require(
             try JSONSerialization.jsonObject(with: WireProtocol.makeEncoder().encode(snapshot)) as? [String: Any])
         #expect(classJSON["kind"] as? String == "burstable")
@@ -180,12 +180,12 @@ struct WorkloadResourceClassPageTests {
         let policy = try WorkloadResourceClassPolicy(kind: .burstable, memoryHighPercent: 99)
         let raw = try policy.runtimeLimits(guestBytes: 10000, backendOverheadBytes: 0)
         let aligned = try raw.aligned(pageSizeBytes: 4096)
-        #expect(raw.memoryHighBytes == 9900)
-        #expect(raw.memoryMaxBytes == 10000)
-        #expect(aligned.memoryHighBytes == 8192)
-        #expect(aligned.memoryMaxBytes == 12288)
-        #expect(aligned.memoryHighBytes / 1024 == 8)
-        #expect(aligned.memoryMaxBytes / 1024 == 12)
+        #expect(raw._jsonMemoryHighBytes == 9900)
+        #expect(raw._jsonMemoryMaxBytes == 10000)
+        #expect(aligned._jsonMemoryHighBytes == 8192)
+        #expect(aligned._jsonMemoryMaxBytes == 12288)
+        #expect(aligned._jsonMemoryHighBytes / 1024 == 8)
+        #expect(aligned._jsonMemoryMaxBytes / 1024 == 12)
     }
 
     @Test func invalidAndOverflowingAlignmentFailsClosed() throws {

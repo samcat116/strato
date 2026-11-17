@@ -264,7 +264,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             metadata: [
                 "strato.sandbox.id": .string(sandboxId),
                 "snapshotId": .string(snapshotId),
-                "mode": .string(mode.rawValue),
+                "mode": .string(mode.protocolValue),
             ])
         snapshots[snapshotId] = MockSnapshot(
             sandboxId: sandboxId,

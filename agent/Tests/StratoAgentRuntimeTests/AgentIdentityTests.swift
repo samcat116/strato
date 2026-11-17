@@ -11,7 +11,7 @@ struct AgentIdentityTests {
             Agent.simulatedHypervisorSupport().first(where: { $0.type == .qemu }))
 
         #expect(qemu.available)
-        #expect(qemu.supportsVolumeIOLimits == nil)
+        #expect(!qemu.hasSupportsVolumeIoLimits)
     }
     @Test("Simulated Apple hosts advertise usable memory bounds")
     func simulatedAppleMemoryBounds() throws {

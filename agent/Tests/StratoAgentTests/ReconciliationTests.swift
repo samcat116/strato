@@ -62,10 +62,12 @@ struct ReconciliationTests {
                 network: "b", networkId: UUID(), macAddress: "52:54:00:00:00:02"),
         ]
         let desired = legacy.enumerated().map { index, network in
-            NetworkSpec(
-                interfaceId: UUID(), deviceName: "net\(index)", orderIndex: index,
-                network: network.network, networkId: network.networkId,
-                macAddress: network.macAddress?.uppercased())
+            var updated = network
+            updated.interfaceID = UUID().uuidString
+            updated.deviceName = "net\(index)"
+            updated.orderIndex = Int64(index)
+            updated.macAddress = network.macAddress.uppercased()
+            return updated
         }
 
         #expect(VMNetworkInterfaceDiff.between(current: legacy, desired: desired).added.isEmpty)
@@ -149,7 +151,7 @@ struct ReconciliationTests {
         private(set) var performed: [(step: ReconcileStep, vmId: String)] = []
         private(set) var retiredGuestObservations: [Int64] = []
         func retireGuestConfigObservation(_ item: ReconcileWorkItem) {
-            if item.kind == .vm, item.desired?.guestConfig?.isEmpty != false {
+            if item.kind == .vm, item.desired.flatMap({ $0.hasGuestConfig ? $0.guestConfig : nil })?.isEmpty != false {
                 retiredGuestObservations.append(item.generation)
             }
         }
@@ -241,7 +243,7 @@ struct ReconciliationTests {
             case .delete: presence.removeValue(forKey: item.id)
             case .resize:
                 if let desired = item.desired {
-                    sizing[item.id] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
+                    sizing[item.id] = VMSizing(cpus: Int(desired.spec.cpus), memoryBytes: desired.spec.memoryBytes)
                 }
             case .reboot: presence[item.id] = .managed(.running)
             case .restore: presence[item.id] = .managed(.running)
@@ -287,7 +289,7 @@ struct ReconciliationTests {
                     generation: generation, guestConfig: config)
             ])
         }
-        await reconciler.apply(intent(7, .running, config: GuestConfig()))
+        await reconciler.apply(intent(7, .running, config: GuestConfig.empty))
         #expect(await reconciler.observedGeneration(for: id.uuidString) == 7)
         #expect(await actuator.performed.isEmpty)
         #expect(await actuator.retiredGuestObservations == [7])
@@ -483,9 +485,9 @@ struct ReconciliationTests {
         #expect(plan.items.isEmpty)
         #expect(plan.unrecognized.count == 1)
         #expect(plan.unrecognized[0].kind == .vm)
-        #expect(plan.unrecognized[0].workloadId == vmId)
+        #expect(plan.unrecognized[0].workloadID == vmId.uuidString)
         #expect(plan.unrecognized[0].observedGeneration == 4)
-        #expect(plan.unrecognized[0].status == VMStatus.running.rawValue)
+        #expect(plan.unrecognized[0].status == VMStatus.running.protocolValue)
     }
 
     @Test("An orphaned VM the sync omits is held too, and reports as orphaned")
@@ -906,7 +908,7 @@ struct ReconciliationTests {
         // no backend to ask, which is the whole reason the entry is quarantined.
         #expect(plan.items.isEmpty)
         #expect(plan.unrecognized.map(\.status) == ["quarantined"])
-        #expect(plan.unrecognized[0].workloadId == vmId)
+        #expect(plan.unrecognized[0].workloadID == vmId.uuidString)
     }
 
     // MARK: - Reconciler end to end
@@ -1212,7 +1214,7 @@ struct ReconciliationTests {
         let heldPresence = await actuator.presence
         #expect(heldPresence.count == 1)
         let held = await reconciler.unrecognizedWorkloads()
-        #expect(held.map(\.workloadId) == [vmId])
+        #expect(held.map(\.workloadID) == [vmId.uuidString])
         // The hold is reported immediately rather than waiting for the next
         // heartbeat: it is one half of a round trip the control plane can't
         // finish until it has seen it.

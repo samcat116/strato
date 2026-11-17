@@ -1,17 +1,13 @@
 import Foundation
 import Testing
 
-@testable import StratoShared
+import StratoShared
 
 /// The wire half of ADR 0001 stage 9 (STR-151): reboot and restore as monotonic
 /// nonces on the desired entry.
 ///
-/// What these pin is mostly *absence* semantics, because that is where the whole
-/// safety argument lives. Both fields are `Optional`, and every reading of a
-/// missing one has to be inert — a count of requests can only ever mean "nothing
-/// was asked for". If either ever encoded a zero, or decoded a missing key into
-/// something an agent could act on, a pre-v34 control plane would start
-/// rebooting guests.
+/// Missing nonces are inert; an explicitly present zero remains distinguishable
+/// from absence in the binary contract.
 @Suite("Edge nonces on the wire (STR-151)")
 struct EdgeNonceProtocolTests {
     private static let snapshotID = UUID(uuidString: "CCCCCCCC-9999-AAAA-BBBB-CCCCCCCCCCCC")!
@@ -40,41 +36,24 @@ struct EdgeNonceProtocolTests {
             ])
 
         let decoded = try throughEnvelope(message)
-        #expect(decoded.vms[0].rebootGeneration == 3)
-        #expect(decoded.vms[0].restore?.generation == 2)
-        #expect(decoded.vms[0].restore?.snapshotId == Self.snapshotID)
+        #expect(decoded.vms.values[0].rebootGeneration == 3)
+        #expect(decoded.vms.values[0].restore.generation == 2)
+        #expect(decoded.vms.values[0].restore.snapshotID == Self.snapshotID.uuidString)
         // A VM checkpoint lives inside the VM's own disks, so it never moves
         // hosts and a VM restore never stages artifacts.
-        #expect(decoded.vms[0].restore?.artifacts == nil)
+        #expect(!decoded.vms.values[0].restore.hasArtifacts)
     }
 
-    @Test("a VM that has never been restarted or restored puts nothing on the wire")
-    func absentNoncesOmitTheKeys() throws {
-        let keys = try encodedKeys(vm())
-        #expect(!keys.contains("rebootGeneration"))
-        #expect(!keys.contains("restore"))
-    }
-
-    /// The v34 skew case: a sync assembled by a pre-STR-151 control plane. It
-    /// must decode, and it must decode to "no opinion" rather than to a zero an
-    /// agent could compare against.
-    @Test("a pre-v34 sync decodes with both nonces absent")
-    func preV34SyncDecodes() throws {
-        // Built by encoding a v34 entry and deleting the two keys, so the
-        // fixture cannot drift out of date with the rest of `DesiredVMState`
-        // and start passing for the wrong reason.
-        let encoded = try encodeJSON(
-            vm(rebootGeneration: 3, restore: DesiredRestore(generation: 2, snapshotId: Self.snapshotID)))
-        var object = try #require(
-            try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        object.removeValue(forKey: "rebootGeneration")
-        object.removeValue(forKey: "restore")
-
-        let decoded = try decodeJSON(
-            DesiredVMState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(decoded.rebootGeneration == nil)
-        #expect(decoded.restore == nil)
-        #expect(decoded.generation == 4)
+    @Test("Absent edge nonces remain distinct from an explicitly present zero")
+    func absentNonces() throws {
+        let message = DesiredStateMessage(syncId: "presence", vms: [vm(), vm(rebootGeneration: 0)])
+        let decoded = try throughEnvelope(message)
+        try #require(decoded.vms.values.count == 2)
+        #expect(!decoded.vms.values[0].hasRebootGeneration)
+        #expect(!decoded.vms.values[0].hasRestore)
+        #expect(decoded.vms.values[1].hasRebootGeneration)
+        #expect(decoded.vms.values[1].rebootGeneration == 0)
+        #expect(!decoded.vms.values[1].hasRestore)
     }
 
     @Test("a sandbox restore carries its exported artifacts")
@@ -96,14 +75,17 @@ struct EdgeNonceProtocolTests {
             restore: DesiredRestore(
                 generation: 5, snapshotId: Self.snapshotID, artifacts: [artifact]))
 
-        let decoded = try roundTrip(entry)
-        #expect(decoded.restore?.generation == 5)
-        #expect(decoded.restore?.artifacts?.count == 1)
-        #expect(decoded.restore?.artifacts?.first?.sha256 == "abc123")
+        let message = try throughEnvelope(DesiredStateMessage(syncId: "restore", vms: [], sandboxes: [entry]))
+        let decoded = try #require(message.sandboxes.values.first)
+        #expect(decoded.hasRestore)
+        #expect(decoded.restore.hasArtifacts)
+        #expect(decoded.restore.generation == 5)
+        #expect(decoded.restore.artifacts.values.count == 1)
+        #expect(decoded.restore.artifacts.values.first?.sha256 == "abc123")
         // `restore` and `spec.restoreFrom` have different
         // meanings — an edge on an existing sandbox versus a fork's create
         // strategy — and nothing may conflate them.
-        #expect(decoded.spec.restoreFrom == nil)
+        #expect(!decoded.spec.hasRestoreFrom)
     }
 
 }

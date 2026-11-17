@@ -1,4 +1,7 @@
 strato
+!shared/proto/strato/
+!tests/agent-protocol-peers/baseline/strato/
+!tests/agent-protocol-peers/next/strato/
 Packages
 .build
 xcuserdata
@@ -32,6 +35,7 @@ Package.resolved
 !/SwiftFirecracker/Package.resolved
 !/cli/Package.resolved
 !/clients/swift/Package.resolved
+!/tests/agent-protocol-peers/Package.resolved
 
 
 # VitePress

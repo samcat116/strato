@@ -8,8 +8,8 @@ struct ResourceEnforcementSnapshotTests {
         let snapshot = try WorkloadResourceClassSnapshot(
             classID: WorkloadResourceClassSnapshot.burstableID, siteID: UUID(), revision: 3, policy: .burstable)
         let ledger = WorkloadAdmittedReservation(
-            cpus: 2, memory: .init(guestBytes: 16384, backendOverheadBytes: 4096), policy: snapshot.policy)
-        let limits = try snapshot.policy.runtimeLimits(guestBytes: 16384, backendOverheadBytes: 4096)
+            cpus: 2, memory: .init(guestBytes: 16384, backendOverheadBytes: 4096), policy: snapshot._jsonPolicy)
+        let limits = try snapshot._jsonPolicy.runtimeLimits(guestBytes: 16384, backendOverheadBytes: 4096)
         let ack = WorkloadEnforcementAcknowledgement(
             kind: .vm, workloadId: UUID(), appliedGeneration: 7, resourceClass: snapshot, backend: .qemuVM,
             accountedReservation: ledger, runtimeGuestBytes: 16384, pageSizeBytes: 4096,
@@ -20,6 +20,6 @@ struct ResourceEnforcementSnapshotTests {
         let decoded = try JSONDecoder().decode(
             ResourceEnforcementSnapshot.self, from: JSONEncoder().encode(report))
         #expect(decoded == report)
-        #expect(WireProtocol.currentVersion == 72)
+        #expect(Int(AgentProtocolCompatibility.major) == 1)
     }
 }

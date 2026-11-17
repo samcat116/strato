@@ -1,5 +1,5 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("QEMU block-device policy wire format")
@@ -18,7 +18,7 @@ struct BlockDevicePolicyWireTests {
                   "format": "qcow2"
                 }
                 """)
-        #expect(desired.blockMode == .conservative)
+        #expect(desired._jsonBlockMode == .conservative)
 
         let spec = try decodeJSON(
             VolumeSpec.self,
@@ -29,8 +29,8 @@ struct BlockDevicePolicyWireTests {
                   "readonly": false
                 }
                 """)
-        #expect(spec.blockMode == .conservative)
-        #expect(spec.appliedBlockPolicy == nil)
+        #expect(spec._jsonBlockMode == .conservative)
+        #expect(spec._jsonAppliedBlockPolicy == nil)
     }
 
     @Test("requested and applied policy round-trip independently")
@@ -46,18 +46,18 @@ struct BlockDevicePolicyWireTests {
         let desired = DesiredVolumeState(
             volumeId: UUID(), desiredStatus: .present, generation: 1,
             sizeBytes: 1 << 30, format: "qcow2", blockMode: .direct)
-        #expect(try roundTrip(desired).blockMode == .direct)
+        #expect(try roundTrip(desired)._jsonBlockMode == .direct)
 
         let observed = ObservedVolumeState(
-            volumeId: desired.volumeId, present: true, observedGeneration: 1,
+            volumeId: desired._jsonVolumeId, present: true, observedGeneration: 1,
             blockPolicy: policy)
-        #expect(try roundTrip(observed).blockPolicy == policy)
+        #expect(try roundTrip(observed)._jsonBlockPolicy == policy)
     }
 
     @Test("detached is explicit rather than agent silence")
     func inactivePolicy() throws {
         let policy = AppliedBlockDevicePolicy.inactive(requestedMode: .cachedShared)
-        #expect(policy.active == false)
+        #expect(policy._jsonActive == false)
         #expect(try roundTrip(policy) == policy)
     }
 }

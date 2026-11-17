@@ -12,8 +12,8 @@ wire v72.
 v65 is host density,
 and v66 is headroom; v67 is the coordinated resource-class schema.
 Do not independently allocate another version for STR272 fields while both
-changes remain unmerged. Exact-version agent/control-plane registration remains
-mandatory.
+changes remain unmerged. These numbers belong to the former JSON protocol; under
+the Protobuf contract both are part of the protocol major 1 baseline.
 
 ## Canonical snapshot
 

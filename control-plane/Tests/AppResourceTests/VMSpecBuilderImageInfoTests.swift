@@ -27,10 +27,10 @@ struct VMSpecBuilderImageInfoTests {
             kind: kind,
             format: format,
             architecture: .x86_64,
-            filename: "\(kind.rawValue).bin",
+            filename: "\(kind.protocolValue).bin",
             size: 5,
             checksum: String(repeating: checksum, count: 64),
-            storagePath: "p/\(kind.rawValue)"
+            storagePath: "p/\(kind.protocolValue)"
         )
     }
 
@@ -46,18 +46,18 @@ struct VMSpecBuilderImageInfoTests {
         let info = try VMSpecBuilder.buildImageInfo(from: image)
 
         #expect(info.architecture == .x86_64)
-        #expect(info.artifacts.count == 3)
+        #expect(info.artifacts.values.count == 3)
 
         // Each artifact URL is a control-plane-relative path selecting its own
         // kind — the agent resolves it against the base it dials and
         // authenticates with its SVID, so there is no signature to carry.
-        for artifact in info.artifacts {
+        for artifact in info.artifacts.values {
             #expect(artifact.downloadURL.hasPrefix("/api/projects/"))
-            #expect(artifact.downloadURL.contains("artifact=\(artifact.kind.rawValue)"))
+            #expect(artifact.downloadURL.contains("artifact=\(artifact.kind.protocolValue)"))
         }
 
         // URLs are distinct per artifact.
-        let urls = Set(info.artifacts.map(\.downloadURL))
+        let urls = Set(info.artifacts.values.map(\.downloadURL))
         #expect(urls.count == 3)
 
         #expect(info.artifact(ofKind: .diskImage)?.checksum == String(repeating: "d", count: 64))

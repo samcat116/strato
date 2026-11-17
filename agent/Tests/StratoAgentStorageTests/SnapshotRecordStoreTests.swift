@@ -150,19 +150,20 @@ struct SnapshotRecordStoreTests {
             let before = try String(contentsOfFile: path, encoding: .utf8)
             #expect(before.contains("key = secret"))
 
-            guard case .ceph(let configuration) = Self.cephStorage else {
+            guard case .ceph(let ceph) = Self.cephStorage.value else {
                 Issue.record("test fixture must be Ceph storage")
                 return
             }
+            let configuration = ceph.configuration
             let scrubbed = SnapshotRecordCredentialScrubber.removing(
-                clusterId: configuration.clusterId,
-                credentialId: configuration.credentialId,
+                clusterId: try UUID(protocolString: configuration.clusterID),
+                credentialId: try UUID(protocolString: configuration.credentialID),
                 from: [revokedId: revoked, localId: local])
             #expect(store.save(scrubbed))
 
             let after = try String(contentsOfFile: path, encoding: .utf8)
             #expect(!after.contains("key = secret"))
-            #expect(!after.contains(configuration.credentialId.uuidString))
+            #expect(!after.contains(configuration.credentialID))
             guard case .loaded(let loaded) = store.load() else {
                 Issue.record("expected scrubbed records to remain readable")
                 return

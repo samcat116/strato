@@ -21,6 +21,7 @@ public struct ControlPlaneWebSocketState: Sendable {
     private var nextGeneration: UInt64 = 0
     private var currentGeneration: Generation?
     private var connectedGenerationStorage: Generation?
+    private var registeredGeneration: Generation?
     private var intentionalClosures: Set<Generation> = []
 
     public init() {}
@@ -29,11 +30,24 @@ public struct ControlPlaneWebSocketState: Sendable {
         connectedGenerationStorage
     }
 
+    /// Workload frames require a registration accepted on the current socket.
+    public var canSendWorkload: Bool {
+        guard let connectedGenerationStorage else { return false }
+        return registeredGeneration == connectedGenerationStorage
+    }
+
+    public mutating func markRegistered(_ generation: Generation) -> Bool {
+        guard connectedGenerationStorage == generation else { return false }
+        registeredGeneration = generation
+        return true
+    }
+
     public mutating func beginConnection() -> Generation {
         nextGeneration &+= 1
         let generation = Generation(rawValue: nextGeneration)
         currentGeneration = generation
         connectedGenerationStorage = nil
+        registeredGeneration = nil
         return generation
     }
 
@@ -49,6 +63,7 @@ public struct ControlPlaneWebSocketState: Sendable {
         guard currentGeneration == generation else { return }
         currentGeneration = nil
         connectedGenerationStorage = nil
+        registeredGeneration = nil
         intentionalClosures.remove(generation)
     }
 
@@ -58,6 +73,7 @@ public struct ControlPlaneWebSocketState: Sendable {
         guard let generation = connectedGenerationStorage else { return nil }
         intentionalClosures.insert(generation)
         connectedGenerationStorage = nil
+        registeredGeneration = nil
         return generation
     }
 
@@ -67,6 +83,7 @@ public struct ControlPlaneWebSocketState: Sendable {
 
         currentGeneration = nil
         connectedGenerationStorage = nil
+        registeredGeneration = nil
         return wasIntentional ? .intentional : .unexpected
     }
 }

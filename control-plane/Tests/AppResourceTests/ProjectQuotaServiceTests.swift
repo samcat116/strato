@@ -107,7 +107,7 @@ struct QuotaUsageServiceTests {
         let actual = QuotaUsage(vcpus: 3, memoryGB: 2.0, storageGB: 20.0, vms: 3, sandboxes: 0, volumes: 0, networks: 0)
         let breakdown = QuotaVMBreakdown(
             byEnvironment: ["dev": 2, "prod": 1],
-            byStatus: [VMStatus.running.rawValue: 2, VMStatus.shutdown.rawValue: 1]
+            byStatus: [VMStatus.running.protocolValue: 2, VMStatus.shutdown.protocolValue: 1]
         )
 
         let response = QuotaUsageService.usageResponse(for: quota, actualUsage: actual, breakdown: breakdown)
@@ -127,8 +127,8 @@ struct QuotaUsageServiceTests {
 
         #expect(response.vmsByEnvironment["dev"] == 2)
         #expect(response.vmsByEnvironment["prod"] == 1)
-        #expect(response.vmsByStatus[VMStatus.running.rawValue] == 2)
-        #expect(response.vmsByStatus[VMStatus.shutdown.rawValue] == 1)
+        #expect(response.vmsByStatus[VMStatus.running.protocolValue] == 2)
+        #expect(response.vmsByStatus[VMStatus.shutdown.protocolValue] == 1)
         #expect(response.environment == "prod")
     }
 }

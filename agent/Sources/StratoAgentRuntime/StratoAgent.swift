@@ -233,7 +233,7 @@ private func launchAgent(options: AgentOptions) async throws {
             "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
             "sandboxGuestImagePath": .string(finalSandboxGuestImagePath),
             "sandboxJailerMode": .string(finalSandboxJailerMode.rawValue),
-            "hypervisorType": .string(finalHypervisorType.rawValue),
+            "hypervisorType": .string(finalHypervisorType.protocolValue),
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
             "qemuMemoryOverheadMB": .stringConvertible(
                 config.qemuMemoryOverheadMB ?? AgentConfig.defaultQEMUMemoryOverheadMB),

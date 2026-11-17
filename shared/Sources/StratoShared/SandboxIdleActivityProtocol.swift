@@ -1,51 +1,59 @@
 import Foundation
+import SwiftProtobuf
 
 /// Wire 69 policy provenance. Missing provenance remains an explicit/manual
 /// lifecycle request; malformed automatic provenance must never become manual.
-public struct SandboxAutomaticSuspensionFence: Codable, Equatable, Sendable {
-    public let operationId: UUID
-    public let generation: Int64
-    public let activityRevision: Int64
-    public let admissionToken: UUID
-    public let guestProtocolVersion: Int
+public typealias SandboxAutomaticSuspensionFence = Strato_Agent_V1_SandboxAutomaticSuspensionFence
+extension Strato_Agent_V1_SandboxAutomaticSuspensionFence: Codable {
 
     public init(
         operationId: UUID, generation: Int64, activityRevision: Int64, admissionToken: UUID,
         guestProtocolVersion: Int
     ) {
-        self.operationId = operationId
-        self.generation = generation
-        self.activityRevision = activityRevision
-        self.admissionToken = admissionToken
-        self.guestProtocolVersion = guestProtocolVersion
+        self.init()
+        self._jsonOperationId = operationId
+        self._jsonGeneration = generation
+        self._jsonActivityRevision = activityRevision
+        self._jsonAdmissionToken = admissionToken
+        self._jsonGuestProtocolVersion = guestProtocolVersion
     }
 
     public var isValid: Bool {
-        generation > 0 && activityRevision >= 0 && guestProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
+        _jsonGeneration > 0 && _jsonActivityRevision >= 0
+            && _jsonGuestProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationId; case generation; case activityRevision; case admissionToken; case guestProtocolVersion
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonOperationId = try container.decode(UUID.self, forKey: .operationId)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonActivityRevision = try container.decode(Int64.self, forKey: .activityRevision)
+        self._jsonAdmissionToken = try container.decode(UUID.self, forKey: .admissionToken)
+        self._jsonGuestProtocolVersion = try container.decode(Int.self, forKey: .guestProtocolVersion)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonOperationId, forKey: .operationId)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonActivityRevision, forKey: .activityRevision)
+        try container.encode(_jsonAdmissionToken, forKey: .admissionToken)
+        try container.encode(_jsonGuestProtocolVersion, forKey: .guestProtocolVersion)
+    }
+
 }
 
 /// Actual guest v5 evidence. This has the guest's snake-case JSON spelling,
 /// including when relayed in the agent report. Unknown fields never mean zero.
-public struct SandboxGuestIdleActivity: Codable, Equatable, Sendable {
-    public enum Coverage: String, Codable, Sendable { case complete, unknown }
-    public let sandboxId: String
-    public let nonce: String
-    public let probeId: UUID
-    public let monitorIncarnation: UUID
-    public let sampleSequence: UInt64
-    public let activityEpoch: UInt64
-    public let quietForMilliseconds: UInt64?
-    public let coverage: Coverage
-    public let trusted: Bool
-    public let activeExecSessionIds: [UUID]?
-    public let anonymousExecCount: UInt32?
-    public let pendingExecCount: UInt32?
-    public let workloadCpuMicroseconds: UInt64?
-    public let workloadReadBytes: UInt64?
-    public let workloadWriteBytes: UInt64?
-    public let externalSocketCount: UInt32?
-    public let nicCount: UInt32?
+public typealias SandboxGuestIdleActivity = Strato_Agent_V1_SandboxGuestIdleActivity
+extension Strato_Agent_V1_SandboxGuestIdleActivity: Codable {
+    public typealias Coverage = Strato_Agent_V1_SandboxGuestIdleCoverage
 
     public init(
         sandboxId: String, nonce: String, probeId: UUID, monitorIncarnation: UUID,
@@ -54,29 +62,31 @@ public struct SandboxGuestIdleActivity: Codable, Equatable, Sendable {
         pendingExecCount: UInt32?, workloadCpuMicroseconds: UInt64?, workloadReadBytes: UInt64?,
         workloadWriteBytes: UInt64?, externalSocketCount: UInt32?, nicCount: UInt32?
     ) {
-        self.sandboxId = sandboxId; self.nonce = nonce; self.probeId = probeId
-        self.monitorIncarnation = monitorIncarnation; self.sampleSequence = sampleSequence
-        self.activityEpoch = activityEpoch; self.quietForMilliseconds = quietForMilliseconds
-        self.coverage = coverage; self.trusted = trusted; self.activeExecSessionIds = activeExecSessionIds
-        self.anonymousExecCount = anonymousExecCount; self.pendingExecCount = pendingExecCount
-        self.workloadCpuMicroseconds = workloadCpuMicroseconds; self.workloadReadBytes = workloadReadBytes
-        self.workloadWriteBytes = workloadWriteBytes; self.externalSocketCount = externalSocketCount;
-        self.nicCount = nicCount
+        self.init()
+        self._jsonSandboxId = sandboxId; self._jsonNonce = nonce; self._jsonProbeId = probeId
+        self._jsonMonitorIncarnation = monitorIncarnation; self._jsonSampleSequence = sampleSequence
+        self._jsonActivityEpoch = activityEpoch; self._jsonQuietForMilliseconds = quietForMilliseconds
+        self._jsonCoverage = coverage; self._jsonTrusted = trusted;
+        self._jsonActiveExecSessionIds = activeExecSessionIds
+        self._jsonAnonymousExecCount = anonymousExecCount; self._jsonPendingExecCount = pendingExecCount
+        self._jsonWorkloadCpuMicroseconds = workloadCpuMicroseconds; self._jsonWorkloadReadBytes = workloadReadBytes
+        self._jsonWorkloadWriteBytes = workloadWriteBytes; self._jsonExternalSocketCount = externalSocketCount;
+        self._jsonNicCount = nicCount
     }
 
     public var hasCompleteQuiescentCoverage: Bool {
-        coverage == .complete && trusted && nicCount == 0 && externalSocketCount == 0
-            && anonymousExecCount == 0 && pendingExecCount == 0 && activeExecSessionIds?.isEmpty == true
-            && workloadCpuMicroseconds != nil && workloadReadBytes != nil && workloadWriteBytes != nil
-            && quietForMilliseconds.map { $0 <= 86_400_000 } == true && isBounded
+        _jsonCoverage == .complete && _jsonTrusted && _jsonNicCount == 0 && _jsonExternalSocketCount == 0
+            && _jsonAnonymousExecCount == 0 && _jsonPendingExecCount == 0 && _jsonActiveExecSessionIds?.isEmpty == true
+            && _jsonWorkloadCpuMicroseconds != nil && _jsonWorkloadReadBytes != nil && _jsonWorkloadWriteBytes != nil
+            && _jsonQuietForMilliseconds.map { $0 <= 86_400_000 } == true && isBounded
     }
 
     public var isBounded: Bool {
-        sandboxId.utf8.count <= 256 && nonce.utf8.count <= 256
-            && !sandboxId.isEmpty && !nonce.isEmpty
-            && sampleSequence > 0 && sampleSequence <= UInt64(Int64.max)
-            && activityEpoch <= UInt64(Int64.max)
-            && (activeExecSessionIds.map { $0.count <= 4096 && Set($0).count == $0.count } ?? true)
+        _jsonSandboxId.utf8.count <= 256 && _jsonNonce.utf8.count <= 256
+            && !_jsonSandboxId.isEmpty && !_jsonNonce.isEmpty
+            && _jsonSampleSequence > 0 && _jsonSampleSequence <= UInt64(Int64.max)
+            && _jsonActivityEpoch <= UInt64(Int64.max)
+            && (_jsonActiveExecSessionIds.map { $0.count <= 4096 && Set($0).count == $0.count } ?? true)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -89,6 +99,51 @@ public struct SandboxGuestIdleActivity: Codable, Equatable, Sendable {
         case workloadReadBytes = "workload_read_bytes", workloadWriteBytes = "workload_write_bytes"
         case externalSocketCount = "external_socket_count", nicCount = "nic_count"
     }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonSandboxId = try container.decode(String.self, forKey: .sandboxId)
+        self._jsonNonce = try container.decode(String.self, forKey: .nonce)
+        self._jsonProbeId = try container.decode(UUID.self, forKey: .probeId)
+        self._jsonMonitorIncarnation = try container.decode(UUID.self, forKey: .monitorIncarnation)
+        self._jsonSampleSequence = try container.decode(UInt64.self, forKey: .sampleSequence)
+        self._jsonActivityEpoch = try container.decode(UInt64.self, forKey: .activityEpoch)
+        self._jsonQuietForMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .quietForMilliseconds)
+        self._jsonCoverage = try container.decode(Coverage.self, forKey: .coverage)
+        self._jsonTrusted = try container.decode(Bool.self, forKey: .trusted)
+        self._jsonActiveExecSessionIds = try container.decodeIfPresent([UUID].self, forKey: .activeExecSessionIds)
+        self._jsonAnonymousExecCount = try container.decodeIfPresent(UInt32.self, forKey: .anonymousExecCount)
+        self._jsonPendingExecCount = try container.decodeIfPresent(UInt32.self, forKey: .pendingExecCount)
+        self._jsonWorkloadCpuMicroseconds = try container.decodeIfPresent(UInt64.self, forKey: .workloadCpuMicroseconds)
+        self._jsonWorkloadReadBytes = try container.decodeIfPresent(UInt64.self, forKey: .workloadReadBytes)
+        self._jsonWorkloadWriteBytes = try container.decodeIfPresent(UInt64.self, forKey: .workloadWriteBytes)
+        self._jsonExternalSocketCount = try container.decodeIfPresent(UInt32.self, forKey: .externalSocketCount)
+        self._jsonNicCount = try container.decodeIfPresent(UInt32.self, forKey: .nicCount)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonSandboxId, forKey: .sandboxId)
+        try container.encode(_jsonNonce, forKey: .nonce)
+        try container.encode(_jsonProbeId, forKey: .probeId)
+        try container.encode(_jsonMonitorIncarnation, forKey: .monitorIncarnation)
+        try container.encode(_jsonSampleSequence, forKey: .sampleSequence)
+        try container.encode(_jsonActivityEpoch, forKey: .activityEpoch)
+        try container.encodeIfPresent(_jsonQuietForMilliseconds, forKey: .quietForMilliseconds)
+        try container.encode(_jsonCoverage, forKey: .coverage)
+        try container.encode(_jsonTrusted, forKey: .trusted)
+        try container.encodeIfPresent(_jsonActiveExecSessionIds, forKey: .activeExecSessionIds)
+        try container.encodeIfPresent(_jsonAnonymousExecCount, forKey: .anonymousExecCount)
+        try container.encodeIfPresent(_jsonPendingExecCount, forKey: .pendingExecCount)
+        try container.encodeIfPresent(_jsonWorkloadCpuMicroseconds, forKey: .workloadCpuMicroseconds)
+        try container.encodeIfPresent(_jsonWorkloadReadBytes, forKey: .workloadReadBytes)
+        try container.encodeIfPresent(_jsonWorkloadWriteBytes, forKey: .workloadWriteBytes)
+        try container.encodeIfPresent(_jsonExternalSocketCount, forKey: .externalSocketCount)
+        try container.encodeIfPresent(_jsonNicCount, forKey: .nicCount)
+    }
+
 }
 
 public struct SandboxIdleGuestRequest: Codable, Sendable {
@@ -149,24 +204,8 @@ public struct SandboxIdleGuestResponse: Codable, Sendable {
 
 /// Ordered, owner-authenticated report. Receipt time is assigned by PostgreSQL;
 /// guest/agent wall clocks do not establish activity freshness.
-public struct SandboxIdleActivityReport: Codable, Equatable, Sendable {
-    public let agentIncarnation: UUID
-    public let connectionEpoch: UUID
-    public let residencyEpoch: UUID
-    public let sequence: UInt64
-    public let generation: Int64
-    public let activityEpoch: UInt64
-    public let evidenceAgeMilliseconds: UInt64
-    public let residentForMilliseconds: UInt64
-    public let guest: SandboxGuestIdleActivity?
-    public let activeExecSessionIds: [UUID]?
-    public let pendingCommandCount: Int?
-    public let hostPendingCommandCount: Int?
-    public let controlPlaneActivityRevision: Int64?
-    public let snapshotOrRestoreInProgress: Bool?
-    public let idleFenceSupported: Bool
-    public let hostQuietMilliseconds: UInt64?
-    public let policy: SandboxIdlePolicy?
+public typealias SandboxIdleActivityReport = Strato_Agent_V1_SandboxIdleActivityReport
+extension Strato_Agent_V1_SandboxIdleActivityReport: Codable {
 
     public init(
         agentIncarnation: UUID, connectionEpoch: UUID, residencyEpoch: UUID, sequence: UInt64,
@@ -176,27 +215,87 @@ public struct SandboxIdleActivityReport: Codable, Equatable, Sendable {
         hostQuietMilliseconds: UInt64? = nil, policy: SandboxIdlePolicy? = nil, hostPendingCommandCount: Int? = nil,
         controlPlaneActivityRevision: Int64? = nil
     ) {
-        self.agentIncarnation = agentIncarnation; self.connectionEpoch = connectionEpoch;
-        self.residencyEpoch = residencyEpoch
-        self.sequence = sequence; self.generation = generation; self.activityEpoch = activityEpoch
-        self.evidenceAgeMilliseconds = evidenceAgeMilliseconds; self.residentForMilliseconds = residentForMilliseconds
-        self.guest = guest; self.activeExecSessionIds = activeExecSessionIds;
-        self.pendingCommandCount = pendingCommandCount
-        self.snapshotOrRestoreInProgress = snapshotOrRestoreInProgress; self.idleFenceSupported = idleFenceSupported
-        self.hostQuietMilliseconds = hostQuietMilliseconds; self.policy = policy
-        self.hostPendingCommandCount = hostPendingCommandCount
-        self.controlPlaneActivityRevision = controlPlaneActivityRevision
+        self.init()
+        self._jsonAgentIncarnation = agentIncarnation; self._jsonConnectionEpoch = connectionEpoch;
+        self._jsonResidencyEpoch = residencyEpoch
+        self._jsonSequence = sequence; self._jsonGeneration = generation; self._jsonActivityEpoch = activityEpoch
+        self._jsonEvidenceAgeMilliseconds = evidenceAgeMilliseconds;
+        self._jsonResidentForMilliseconds = residentForMilliseconds
+        self._jsonGuest = guest; self._jsonActiveExecSessionIds = activeExecSessionIds;
+        self._jsonPendingCommandCount = pendingCommandCount
+        self._jsonSnapshotOrRestoreInProgress = snapshotOrRestoreInProgress;
+        self._jsonIdleFenceSupported = idleFenceSupported
+        self._jsonHostQuietMilliseconds = hostQuietMilliseconds; self._jsonPolicy = policy
+        self._jsonHostPendingCommandCount = hostPendingCommandCount
+        self._jsonControlPlaneActivityRevision = controlPlaneActivityRevision
     }
     public var isCompleteQuiet: Bool {
-        idleFenceSupported && guest?.hasCompleteQuiescentCoverage == true
-            && activeExecSessionIds?.isEmpty == true && pendingCommandCount == 0 && hostPendingCommandCount == 0
-            && snapshotOrRestoreInProgress == false
-            && evidenceAgeMilliseconds <= 30_000 && sequence > 0 && sequence <= UInt64(Int64.max)
-            && generation > 0
+        _jsonIdleFenceSupported && _jsonGuest?.hasCompleteQuiescentCoverage == true
+            && _jsonActiveExecSessionIds?.isEmpty == true && _jsonPendingCommandCount == 0
+            && _jsonHostPendingCommandCount == 0
+            && _jsonSnapshotOrRestoreInProgress == false
+            && _jsonEvidenceAgeMilliseconds <= 30_000 && _jsonSequence > 0 && _jsonSequence <= UInt64(Int64.max)
+            && _jsonGeneration > 0
     }
     public func isNewer(than old: Self) -> Bool {
-        agentIncarnation == old.agentIncarnation && connectionEpoch == old.connectionEpoch
-            && residencyEpoch == old.residencyEpoch && sequence > old.sequence && activityEpoch >= old.activityEpoch
-            && generation >= old.generation
+        _jsonAgentIncarnation == old._jsonAgentIncarnation && _jsonConnectionEpoch == old._jsonConnectionEpoch
+            && _jsonResidencyEpoch == old._jsonResidencyEpoch && _jsonSequence > old._jsonSequence
+            && _jsonActivityEpoch >= old._jsonActivityEpoch
+            && _jsonGeneration >= old._jsonGeneration
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentIncarnation; case connectionEpoch; case residencyEpoch; case sequence; case generation;
+        case activityEpoch; case evidenceAgeMilliseconds; case residentForMilliseconds; case guest;
+        case activeExecSessionIds; case pendingCommandCount; case hostPendingCommandCount;
+        case controlPlaneActivityRevision; case snapshotOrRestoreInProgress; case idleFenceSupported;
+        case hostQuietMilliseconds; case policy
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonAgentIncarnation = try container.decode(UUID.self, forKey: .agentIncarnation)
+        self._jsonConnectionEpoch = try container.decode(UUID.self, forKey: .connectionEpoch)
+        self._jsonResidencyEpoch = try container.decode(UUID.self, forKey: .residencyEpoch)
+        self._jsonSequence = try container.decode(UInt64.self, forKey: .sequence)
+        self._jsonGeneration = try container.decode(Int64.self, forKey: .generation)
+        self._jsonActivityEpoch = try container.decode(UInt64.self, forKey: .activityEpoch)
+        self._jsonEvidenceAgeMilliseconds = try container.decode(UInt64.self, forKey: .evidenceAgeMilliseconds)
+        self._jsonResidentForMilliseconds = try container.decode(UInt64.self, forKey: .residentForMilliseconds)
+        self._jsonGuest = try container.decodeIfPresent(SandboxGuestIdleActivity.self, forKey: .guest)
+        self._jsonActiveExecSessionIds = try container.decodeIfPresent([UUID].self, forKey: .activeExecSessionIds)
+        self._jsonPendingCommandCount = try container.decodeIfPresent(Int.self, forKey: .pendingCommandCount)
+        self._jsonHostPendingCommandCount = try container.decodeIfPresent(Int.self, forKey: .hostPendingCommandCount)
+        self._jsonControlPlaneActivityRevision = try container.decodeIfPresent(
+            Int64.self, forKey: .controlPlaneActivityRevision)
+        self._jsonSnapshotOrRestoreInProgress = try container.decodeIfPresent(
+            Bool.self, forKey: .snapshotOrRestoreInProgress)
+        self._jsonIdleFenceSupported = try container.decode(Bool.self, forKey: .idleFenceSupported)
+        self._jsonHostQuietMilliseconds = try container.decodeIfPresent(UInt64.self, forKey: .hostQuietMilliseconds)
+        self._jsonPolicy = try container.decodeIfPresent(SandboxIdlePolicy.self, forKey: .policy)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonAgentIncarnation, forKey: .agentIncarnation)
+        try container.encode(_jsonConnectionEpoch, forKey: .connectionEpoch)
+        try container.encode(_jsonResidencyEpoch, forKey: .residencyEpoch)
+        try container.encode(_jsonSequence, forKey: .sequence)
+        try container.encode(_jsonGeneration, forKey: .generation)
+        try container.encode(_jsonActivityEpoch, forKey: .activityEpoch)
+        try container.encode(_jsonEvidenceAgeMilliseconds, forKey: .evidenceAgeMilliseconds)
+        try container.encode(_jsonResidentForMilliseconds, forKey: .residentForMilliseconds)
+        try container.encodeIfPresent(_jsonGuest, forKey: .guest)
+        try container.encodeIfPresent(_jsonActiveExecSessionIds, forKey: .activeExecSessionIds)
+        try container.encodeIfPresent(_jsonPendingCommandCount, forKey: .pendingCommandCount)
+        try container.encodeIfPresent(_jsonHostPendingCommandCount, forKey: .hostPendingCommandCount)
+        try container.encodeIfPresent(_jsonControlPlaneActivityRevision, forKey: .controlPlaneActivityRevision)
+        try container.encodeIfPresent(_jsonSnapshotOrRestoreInProgress, forKey: .snapshotOrRestoreInProgress)
+        try container.encode(_jsonIdleFenceSupported, forKey: .idleFenceSupported)
+        try container.encodeIfPresent(_jsonHostQuietMilliseconds, forKey: .hostQuietMilliseconds)
+        try container.encodeIfPresent(_jsonPolicy, forKey: .policy)
+    }
+
 }

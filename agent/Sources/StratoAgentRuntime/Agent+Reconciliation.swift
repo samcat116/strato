@@ -56,13 +56,13 @@ extension Agent: ReconcileActuator {
     func observedSizing() async -> [String: VMSizing] {
         managedVMs.mapValues {
             VMSizing(
-                cpus: $0.spec.cpus, memoryBytes: $0.spec.memoryBytes,
-                balloonTargetBytes: $0.spec.balloonTargetBytes)
+                cpus: Int($0.spec.cpus), memoryBytes: $0.spec.memoryBytes,
+                balloonTargetBytes: $0.spec.optionalBalloonTargetBytes)
         }
     }
 
     func observedNetworkSpecs() async -> [String: [NetworkSpec]] {
-        managedVMs.mapValues { $0.spec.networks }
+        managedVMs.mapValues { $0.spec.networks.values }
     }
 
     func observedFirecrackerMMDSInterfaces() async -> [String: [String]] {
@@ -74,7 +74,7 @@ extension Agent: ReconcileActuator {
             // kill switch. Preserve that realized policy so this upgrade can
             // reconcile a disabled VM instead of assuming it already has none.
             guard entry.firecrackerMMDSPolicyApplied == true else { return [] }
-            return FirecrackerMMDSInterfacePlan.interfaceIDs(for: entry.spec.networks)
+            return FirecrackerMMDSInterfacePlan.interfaceIDs(for: entry.spec.networks.values)
         }
     }
 
@@ -123,7 +123,7 @@ extension Agent: ReconcileActuator {
                 managedSandboxes[item.id] = entry
                 changed = true
             }
-        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
+        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot, .unspecified, .UNRECOGNIZED:
             // Bytes have no edges; the reconciler never calls this for them.
             return
         }
@@ -143,7 +143,7 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.vmNotFound(item.id)
         }
         guard let service = getHypervisorService(for: entry.hypervisorType) else {
-            throw HypervisorServiceError.hypervisorNotInstalled(entry.hypervisorType.rawValue)
+            throw HypervisorServiceError.hypervisorNotInstalled(entry.hypervisorType.protocolValue)
         }
 
         // The manifest spec is what the surviving process was actually built
@@ -186,7 +186,7 @@ extension Agent: ReconcileActuator {
             }
             let metadata = await metadataForHypervisorCreate(desired)
             let desiredInterfaces = FirecrackerMMDSInterfacePlan.interfaceIDs(
-                for: desired.spec.networks,
+                for: desired.spec.networks.values,
                 metadataServiceEnabled: metadata?.isServiceEnabled ?? false)
             if !desiredInterfaces.isEmpty {
                 let realization = try await replaceFirecrackerMMDSPolicy(
@@ -228,7 +228,7 @@ extension Agent: ReconcileActuator {
         if entry.hypervisorType == .firecracker {
             let interfaces =
                 adoptedEntry.firecrackerMMDSInterfaces
-                ?? FirecrackerMMDSInterfacePlan.interfaceIDs(for: adoptedEntry.spec.networks)
+                ?? FirecrackerMMDSInterfacePlan.interfaceIDs(for: adoptedEntry.spec.networks.values)
             await service.restoreMetadataInterfaceInventory(
                 vmId: item.id, interfaces: interfaces)
             await refreshFirecrackerMetadata(vmId: item.id, using: service)
@@ -238,7 +238,7 @@ extension Agent: ReconcileActuator {
             "Orphaned VM re-adopted and managed again",
             metadata: [
                 "strato.vm.id": .string(item.id),
-                "status": .string(status.rawValue),
+                "status": .string(status.protocolValue),
             ])
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .operation,
@@ -335,7 +335,7 @@ extension Agent: ReconcileActuator {
             }
         } catch SandboxRuntimeError.adoptionTargetGone(let reason) {
             guard item.desiredSandbox != nil else { throw SandboxRuntimeError.sandboxNotFound(item.id) }
-            guard entry.sandboxSuspension == nil, item.desiredSandbox?.suspensionCheckpointId == nil else {
+            guard entry.sandboxSuspension == nil, item.desiredSandbox?.hasSuspensionCheckpointID != true else {
                 throw ConvergenceError.sourceNotReady(
                     "checkpoint-backed guest state cannot be replaced by an OCI create")
             }
@@ -360,7 +360,7 @@ extension Agent: ReconcileActuator {
             "Orphaned sandbox re-adopted and managed again",
             metadata: [
                 "strato.sandbox.id": .string(item.id),
-                "status": .string(status.rawValue),
+                "status": .string(status.protocolValue),
             ])
         return status
     }
@@ -464,20 +464,20 @@ extension Agent: ReconcileActuator {
     ) async {
         volumeAdoptionFailures = [:]
         desiredVolumeStates = Dictionary(
-            desiredVolumes.map { ($0.volumeId.uuidString, $0) },
+            desiredVolumes.map { (validatedProtocolUUID($0.volumeID).uuidString, $0) },
             uniquingKeysWith: { first, _ in first })
         desiredVMVolumeSpecs = Dictionary(
-            desiredVMs.map { ($0.vmId.uuidString, $0.spec.volumes) },
+            desiredVMs.map { (validatedProtocolUUID($0.vmID).uuidString, $0.spec.volumes.values) },
             uniquingKeysWith: { first, _ in first })
         guard let storageBackend, let storageBackends else { return }
         var formats: [UUID: DiskFormat] = [:]
         for volume in desiredVolumes {
-            formats[volume.volumeId] = DiskFormat(rawValue: volume.format)
+            formats[validatedProtocolUUID(volume.volumeID)] = DiskFormat(rawValue: volume.format)
         }
 
         var recoveredManifest = false
         for desiredVM in desiredVMs {
-            let vmId = desiredVM.vmId.uuidString
+            let vmId = validatedProtocolUUID(desiredVM.vmID).uuidString
             guard let quarantined = quarantinedWorkloads[vmId],
                 quarantined.effectiveKind == .vm,
                 let recovered = quarantined.recoveringManagedVolumeIdentities(
@@ -502,11 +502,12 @@ extension Agent: ReconcileActuator {
         }
 
         for desiredVM in desiredVMs {
-            for volume in desiredVM.spec.volumes where inventory[volume.volumeId.uuidString] == nil {
-                guard case .file(let existingPath, _) = volume.attachment else { continue }
-                let volumeId = volume.volumeId.uuidString
+            for volume in desiredVM.spec.volumes.values where inventory[volume.volumeID] == nil {
+                guard case .file(let file) = volume.attachment.value else { continue }
+                let existingPath = file.path
+                let volumeId = volume.volumeID
                 guard desiredVolumeStates[volumeId]?.storage == .local else { continue }
-                guard let format = formats[volume.volumeId] else {
+                guard let format = formats[validatedProtocolUUID(volume.volumeID)] else {
                     volumeAdoptionFailures[volumeId] =
                         "managed volume \(volumeId) has no supported desired format"
                     continue
@@ -521,7 +522,7 @@ extension Agent: ReconcileActuator {
                     logger.error(
                         "Failed to adopt historical VM disk as a managed volume",
                         metadata: [
-                            "strato.vm.id": .string(desiredVM.vmId.uuidString),
+                            "strato.vm.id": .string(validatedProtocolUUID(desiredVM.vmID).uuidString),
                             "volumeId": .string(volumeId),
                             "path": .string(existingPath),
                             "error": .string(error.localizedDescription),
@@ -532,16 +533,16 @@ extension Agent: ReconcileActuator {
     }
 
     /// Which VM each volume is plugged into, from the VM manifest entries'
-    /// `spec.volumes` — the durable attachment record. Orphans are included:
+    /// `spec.volumes.values` — the durable attachment record. Orphans are included:
     /// their disks are still presented to a process this agent has not
     /// re-adopted yet, so reporting them detached would plan a duplicate
     /// attach.
     func recordedVolumeAttachments() -> [String: (vmId: String, deviceName: String)] {
         var attachments: [String: (vmId: String, deviceName: String)] = [:]
         for (vmId, entry) in managedVMs.merging(orphanedVMs, uniquingKeysWith: { managed, _ in managed }) {
-            for volume in entry.spec.volumes {
-                attachments[volume.volumeId.uuidString] = (
-                    vmId: vmId, deviceName: volume.deviceName.rawValue
+            for volume in entry.spec.volumes.values {
+                attachments[volume.volumeID] = (
+                    vmId: vmId, deviceName: volume.deviceName
                 )
             }
         }
@@ -623,7 +624,9 @@ extension Agent: ReconcileActuator {
             return
         }
         do {
-            if step != .shutdown && step != .delete, item.desired?.spec.resourceClass?.policy.kind == .burstable {
+            if step != .shutdown && step != .delete, let desired = item.desired,
+                desired.spec.hasResourceClass, desired.spec.resourceClass.policy.kind == .burstable
+            {
                 throw HypervisorServiceError.invalidConfiguration(
                     "Burstable workloads require verified STR272 runtime enforcement")
             }
@@ -658,7 +661,7 @@ extension Agent: ReconcileActuator {
                 // Volume- and snapshot-only steps; both kinds were handled above
                 // and the planner never emits these for a VM or sandbox.
                 throw HypervisorServiceError.invalidConfiguration(
-                    "step \(step) is not applicable to a \(item.kind.rawValue) workload")
+                    "step \(step) is not applicable to a \(item.kind.protocolValue) workload")
             }
         } catch {
             if let claim = bootCapacityClaims.removeValue(forKey: item.id) {
@@ -792,7 +795,7 @@ extension Agent: ReconcileActuator {
                 // before libvirt accepts it would recreate the same false
                 // state as a failed hot attach.
                 try await service.convergeDiskBlockPolicies(
-                    vmId: item.id, volumes: reprobedQEMUSpec.volumes)
+                    vmId: item.id, volumes: reprobedQEMUSpec.volumes.values)
                 if let entry = managedVMs[item.id] ?? orphanedVMs[item.id] {
                     let updated = entry.with(spec: reprobedQEMUSpec)
                     if managedVMs[item.id] != nil {
@@ -810,7 +813,7 @@ extension Agent: ReconcileActuator {
             // the VM from the wrong volume while reconciliation reports success.
             if !item.steps.contains(.create) {
                 try await service.convergeDiskBootOrder(
-                    vmId: item.id, volumes: desired.spec.volumes)
+                    vmId: item.id, volumes: desired.spec.volumes.values)
             }
 
             // Existing IMDS VMs may carry a seed and persistent definition
@@ -822,8 +825,8 @@ extension Agent: ReconcileActuator {
                 desired.spec.metadataSource == .imds || desired.hypervisorType == .appleVirtualization
             {
                 let attachments = try await networkOrchestrator.prepareAttachments(
-                    vmId: item.id, networks: desired.spec.networks,
-                    metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+                    vmId: item.id, networks: desired.spec.networks.values,
+                    metadataDenied: desired.hasMetadata && !desired.metadata.isServiceEnabled)
                 let bootSpec =
                     desired.hypervisorType == .appleVirtualization
                     ? try await specWithRealizedVolumeAttachments(
@@ -831,7 +834,7 @@ extension Agent: ReconcileActuator {
                     : desired.spec
                 try await service.convergeGuestBootstrap(
                     vmId: item.id, spec: bootSpec,
-                    networkAttachments: attachments, metadata: desired.metadata)
+                    networkAttachments: attachments, metadata: desired.optionalMetadata)
                 if desired.hypervisorType == .appleVirtualization { appleBootSpec = bootSpec }
             }
             try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)
@@ -879,7 +882,7 @@ extension Agent: ReconcileActuator {
         }
         let service = try reconcileService(for: item.id)
         try await service.convergeDiskBootOrder(
-            vmId: item.id, volumes: desired.spec.volumes)
+            vmId: item.id, volumes: desired.spec.volumes.values)
         try await service.rebootVM(vmId: item.id)
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .operation,
@@ -894,14 +897,14 @@ extension Agent: ReconcileActuator {
     /// second time. The checkpoint lives inside the VM's own disks, so there is
     /// nothing to stage and nothing that can expire in the entry.
     func reconcileRestore(_ item: ReconcileWorkItem) async throws {
-        guard let restore = item.desired?.restore else {
+        guard let desired = item.desired, desired.hasRestore else {
             throw HypervisorServiceError.invalidConfiguration("restore work item without a restore nonce")
         }
         try await reconcileService(for: item.id).restoreVM(
-            vmId: item.id, snapshotId: restore.snapshotId.uuidString)
+            vmId: item.id, snapshotId: desired.restore.snapshotID)
         await sendVMLog(
             vmId: item.id, level: .info, eventType: .operation,
-            message: "VM restored from checkpoint \(restore.snapshotId.uuidString)",
+            message: "VM restored from checkpoint \(desired.restore.snapshotID)",
             operation: "restore")
     }
 

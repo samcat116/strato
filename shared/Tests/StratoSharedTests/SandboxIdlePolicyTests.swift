@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Sandbox idle eligibility (STR-313)")
 struct SandboxIdlePolicyTests {
@@ -17,13 +17,13 @@ struct SandboxIdlePolicyTests {
     }
 
     func policy() -> SandboxIdlePolicy {
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         return policy
     }
 
     @Test func automaticReclamationRequiresExplicitEnablement() {
-        #expect(SandboxIdlePolicy().evaluate(evidence(), at: now) == .disabled)
+        #expect(SandboxIdlePolicy.defaults.evaluate(evidence(), at: now) == .disabled)
         #expect(policy().evaluate(evidence(), at: now) == .eligible)
     }
 
@@ -41,7 +41,7 @@ struct SandboxIdlePolicyTests {
     @Test func exclusionsAndUnsupportedBackends() {
         var sample = evidence()
         var configuration = policy()
-        configuration.excludedSandboxIDs.insert(sample.sandboxID)
+        configuration._jsonExcludedSandboxIDs.insert(sample.sandboxID)
         #expect(configuration.evaluate(sample, at: now) == .excluded)
         sample.supportsFullSnapshot = false
         #expect(policy().evaluate(sample, at: now) == .unsupportedBackend)
@@ -109,10 +109,10 @@ struct SandboxIdlePolicyTests {
     @Test func invalidConfigurationFailsClosed() {
         for value in [0.0, -1, .infinity, .nan] {
             var configuration = policy()
-            configuration.idleSeconds = value
+            configuration._jsonIdleSeconds = value
             #expect(configuration.evaluate(evidence(), at: now) == .invalidConfiguration)
             configuration = policy()
-            configuration.restoreTimeoutSeconds = value
+            configuration._jsonRestoreTimeoutSeconds = value
             #expect(configuration.evaluate(evidence(), at: now) == .invalidConfiguration)
         }
     }

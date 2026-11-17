@@ -132,8 +132,9 @@ public struct VMManifestEntry: Codable, Sendable {
         self.kind = .sandbox
         self.hypervisorType = .firecracker
         self.spec = VMSpec(
-            cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil),
-            resourceClass: sandboxSpec.resourceClass, admittedReservation: sandboxSpec.admittedReservation)
+            cpus: Int(sandboxSpec.cpus), memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil),
+            resourceClass: sandboxSpec.optionalResourceClass,
+            admittedReservation: sandboxSpec.optionalAdmittedReservation)
         self.realizedMemoryReservationBytes = nil
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
@@ -193,19 +194,19 @@ public struct VMManifestEntry: Codable, Sendable {
     public func recordingAdoption(of desiredSpec: VMSpec) -> VMManifestEntry {
         if hypervisorType == .qemu {
             let policies = Dictionary(
-                spec.volumes.compactMap { volume in
-                    volume.appliedBlockPolicy.map { (volume.volumeId, $0) }
+                spec.volumes.values.compactMap { volume -> (String, AppliedBlockDevicePolicy)? in
+                    volume.hasAppliedBlockPolicy ? (volume.volumeID, volume.appliedBlockPolicy) : nil
                 },
                 uniquingKeysWith: { first, _ in first })
-            let adoptedVolumes = desiredSpec.volumes.map { volume in
-                volume.withAppliedBlockPolicy(policies[volume.volumeId])
+            let adoptedVolumes = desiredSpec.volumes.values.map { volume in
+                volume.withAppliedBlockPolicy(policies[volume.volumeID])
             }
             return with(spec: desiredSpec.withVolumes(adoptedVolumes))
         }
         guard hypervisorType == .firecracker, firecrackerMMDSPolicyApplied == true else {
             return with(spec: desiredSpec)
         }
-        return with(spec: desiredSpec.withNetworks(spec.networks))
+        return with(spec: desiredSpec.withNetworks(spec.networks.values))
     }
 
     /// Records the exact immutable MMDS allow-list installed in the current
@@ -231,24 +232,10 @@ public struct VMManifestEntry: Codable, Sendable {
     /// credited until that resize succeeds.
     public func reservingPositiveSizingGrowth(toward desired: VMSpec) -> VMManifestEntry {
         var copy = self
-        copy.spec = VMSpec(
-            cpus: max(spec.cpus, desired.cpus),
-            maxCpus: max(spec.maxCpus, desired.maxCpus),
-            memoryBytes: max(spec.memoryBytes, desired.memoryBytes),
-            maxMemoryBytes: max(spec.maxMemoryBytes, desired.maxMemoryBytes),
-            balloonTargetBytes: spec.balloonTargetBytes,
-            diskBytes: spec.diskBytes,
-            sharedMemory: spec.sharedMemory,
-            hugepages: spec.hugepages,
-            boot: spec.boot,
-            machine: spec.machine,
-            guestAgentEnabled: spec.guestAgentEnabled,
-            volumes: spec.volumes,
-            networks: spec.networks,
-            console: spec.console,
-            sshAuthorizedKeys: spec.sshAuthorizedKeys,
-            userData: spec.userData,
-            metadataSource: spec.metadataSource)
+        copy.spec.cpus = max(spec.cpus, desired.cpus)
+        copy.spec.maxCpus = max(spec.maxCpus, desired.maxCpus)
+        copy.spec.memoryBytes = max(spec.memoryBytes, desired.memoryBytes)
+        copy.spec.maxMemoryBytes = max(spec.maxMemoryBytes, desired.maxMemoryBytes)
         return copy
     }
 
@@ -364,22 +351,22 @@ public struct QuarantinedManifestEntry: Sendable {
             let legacyOrder: Int? =
                 if case .int(let value)? = legacy["bootOrder"] { value } else { nil }
 
-            let pathMatches = desired.volumes.filter {
-                guard case .file(let path, _) = $0.attachment else { return false }
-                return path == legacyPath && legacyPath != nil
+            let pathMatches = desired.volumes.values.filter {
+                guard $0.hasAttachment, case .file(let file) = $0.attachment.value else { return false }
+                return file.path == legacyPath && legacyPath != nil
             }
-            let identityMatches = desired.volumes.filter {
+            let identityMatches = desired.volumes.values.filter {
                 let sameOrder =
-                    $0.bootOrder == legacyOrder
-                    || (legacyOrder == nil && $0.bootOrder == 0)
-                return $0.deviceName.rawValue == legacyDevice && sameOrder
+                    ($0.optionalBootOrder.map(Int.init)) == legacyOrder
+                    || (legacyOrder == nil && $0.hasBootOrder && $0.bootOrder == 0)
+                return $0.deviceName == legacyDevice && sameOrder
             }
             let matches = pathMatches.isEmpty ? identityMatches : pathMatches
             guard matches.count == 1, let managed = matches.first else { return nil }
 
-            legacy["volumeId"] = .string(managed.volumeId.uuidString)
-            if let attachment = managed.attachment,
-                let data = try? JSONEncoder().encode(attachment),
+            legacy["volumeId"] = .string(managed.volumeID)
+            if managed.hasAttachment,
+                let data = try? JSONEncoder().encode(managed.attachment),
                 let value = try? JSONDecoder().decode(JSONValue.self, from: data)
             {
                 legacy["attachment"] = value
@@ -443,7 +430,7 @@ extension Sequence where Element == VMManifestEntry {
     /// placement. Sandbox entries carry no `diskBytes` and naturally add 0,
     /// mirroring the scheduler (sandboxes reserve no disk).
     public var totalReservedDiskBytes: Int64 {
-        reduce(0) { $0 + ($1.spec.diskBytes ?? 0) }
+        reduce(0) { $0 + $1.spec.diskBytes }
     }
 }
 
@@ -453,7 +440,7 @@ extension Sequence where Element == VMSpec {
     /// One definition shared by every driver's `reservedResources()` and the
     /// agent's manifest fallback, so the summation cannot drift between them.
     public var reservedResources: (vcpus: Int, memoryBytes: Int64) {
-        reduce((0, Int64(0))) { ($0.0 + $1.cpus, $0.1 + $1.memoryBytes) }
+        reduce((0, Int64(0))) { ($0.0 + Int($1.cpus), $0.1 + $1.memoryBytes) }
     }
 }
 

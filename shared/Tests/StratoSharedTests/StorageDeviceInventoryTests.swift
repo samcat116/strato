@@ -1,5 +1,5 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("Storage device inventory wire contract")
@@ -56,7 +56,7 @@ struct StorageDeviceInventoryTests {
 
         let decoded = try throughEnvelope(report)
 
-        #expect(decoded.storageDevices == [identified, anonymous])
+        #expect(decoded._jsonStorageDevices == [identified, anonymous])
     }
 
     @Test("an omitted storage inventory is no opinion")
@@ -73,6 +73,6 @@ struct StorageDeviceInventoryTests {
         #expect(object["storageDevices"] == nil)
         #expect(
             try WireProtocol.makeDecoder().decode(ObservedStateReport.self, from: encoded)
-                .storageDevices == nil)
+                .hasStorageDevices == false)
     }
 }

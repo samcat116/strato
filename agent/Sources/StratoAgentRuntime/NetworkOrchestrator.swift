@@ -85,7 +85,8 @@ struct NetworkOrchestrator: Sendable {
         metadataDenied: Bool = false,
         placement: NICPlacement = .hostNamespace
     ) async throws -> ResolvedNetworkAttachment {
-        guard let address = spec.macAddress, let macAddress = MACAddress(address) else {
+        try spec.validateProtocol()
+        guard spec.hasMacAddress, let macAddress = MACAddress(spec.macAddress) else {
             throw NetworkError.invalidConfiguration(
                 "Network realization requires a control-plane-assigned six-octet unicast MAC address")
         }
@@ -99,24 +100,28 @@ struct NetworkOrchestrator: Sendable {
         let slot = nicSlot(for: spec, fallbackIndex: fallbackIndex)
         let config = VMNetworkConfig(
             networkName: spec.network,
-            networkId: spec.networkId,
+            networkId: try UUID(protocolString: spec.networkID),
             macAddress: macAddress,
-            ipAddress: spec.ipAddress,
-            subnet: subnetCIDR(ipAddress: spec.ipAddress, netmask: spec.netmask),
-            gateway: spec.gateway,
-            ip6Address: spec.ipv6Address,
-            prefixLength6: spec.ipv6PrefixLength,
-            gateway6: spec.gateway6,
-            subnet6: subnet6CIDR(ip6Address: spec.ipv6Address, prefixLength: spec.ipv6PrefixLength),
+            ipAddress: spec.optionalIpAddress,
+            subnet: subnetCIDR(
+                ipAddress: spec.optionalIpAddress, netmask: spec.optionalNetmask),
+            gateway: spec.optionalGateway,
+            ip6Address: spec.optionalIpv6Address,
+            prefixLength6: (spec.optionalIpv6PrefixLength.map(Int.init)),
+            gateway6: spec.optionalGateway6,
+            subnet6: subnet6CIDR(
+                ip6Address: spec.optionalIpv6Address,
+                prefixLength: (spec.optionalIpv6PrefixLength.map(Int.init))),
             dhcpEnabled: spec.dhcpEnabled,
-            dnsServers: spec.dnsServers,
-            domainName: spec.domainName,
-            leaseTime: spec.leaseTime,
-            securityGroupIds: spec.securityGroupIds,
+            dnsServers: spec.dnsServers.values,
+            domainName: spec.optionalDomainName,
+            leaseTime: (spec.optionalLeaseTime.map(Int.init)),
+            securityGroupIds: spec.hasSecurityGroupIds
+                ? try spec.securityGroupIds.values.map { try UUID(protocolString: $0) } : nil,
             metadataDenied: metadataDenied,
-            mtu: spec.mtu,
+            mtu: (spec.optionalMtu.map(Int.init)),
             metadataEnabled: spec.metadataEnabled,
-            resolverAddresses: spec.resolverEnabled == true ? (spec.resolverAddresses ?? []) : []
+            resolverAddresses: spec.resolverEnabled == true ? spec.resolverAddresses.values : []
         )
         let info = try await networkService.createVMNetwork(
             vmId: vmId, nicIndex: slot, config: config, placement: placement)
@@ -131,7 +136,7 @@ struct NetworkOrchestrator: Sendable {
                     "network": .string(spec.network),
                 ])
         }
-        let wantsResolver = spec.resolverEnabled == true && !(spec.resolverAddresses ?? []).isEmpty
+        let wantsResolver = spec.resolverEnabled == true && !spec.resolverAddresses.values.isEmpty
         let resolverRealized = wantsResolver && info.attachment.isTap
         if wantsResolver && !resolverRealized {
             logger.debug(
@@ -146,18 +151,18 @@ struct NetworkOrchestrator: Sendable {
             network: info.networkName,
             attachment: info.attachment,
             macAddress: info.macAddress,
-            ipAddress: info.ipAddress ?? spec.ipAddress,
-            netmask: spec.netmask,
-            gateway: spec.gateway,
-            ip6Address: info.ip6Address ?? spec.ipv6Address,
-            prefixLength6: spec.ipv6PrefixLength,
-            gateway6: spec.gateway6,
-            mtu: spec.mtu,
+            ipAddress: info.ipAddress ?? spec.optionalIpAddress,
+            netmask: spec.optionalNetmask,
+            gateway: spec.optionalGateway,
+            ip6Address: info.ip6Address ?? spec.optionalIpv6Address,
+            prefixLength6: (spec.optionalIpv6PrefixLength.map(Int.init)),
+            gateway6: spec.optionalGateway6,
+            mtu: (spec.optionalMtu.map(Int.init)),
             dhcpEnabled: dhcpRealized,
-            dnsServers: spec.dnsServers,
-            domainName: spec.domainName,
+            dnsServers: spec.dnsServers.values,
+            domainName: spec.optionalDomainName,
             metadataEnabled: metadataRealized,
-            resolverAddresses: resolverRealized ? (spec.resolverAddresses ?? []) : []
+            resolverAddresses: resolverRealized ? spec.resolverAddresses.values : []
         )
     }
 
@@ -205,24 +210,24 @@ struct NetworkOrchestrator: Sendable {
     }
 
     private func nicSlot(for spec: NetworkSpec, fallbackIndex: Int) -> Int {
-        spec.orderIndex ?? fallbackIndex
+        spec.hasOrderIndex ? Int(spec.orderIndex) : fallbackIndex
     }
 
     private func userModeAttachment(for spec: NetworkSpec) -> ResolvedNetworkAttachment {
         ResolvedNetworkAttachment(
             network: spec.network,
             attachment: .userMode,
-            macAddress: spec.macAddress,
-            ipAddress: spec.ipAddress,
-            netmask: spec.netmask,
-            gateway: spec.gateway,
-            ip6Address: spec.ipv6Address,
-            prefixLength6: spec.ipv6PrefixLength,
-            gateway6: spec.gateway6,
-            mtu: spec.mtu,
+            macAddress: spec.optionalMacAddress,
+            ipAddress: spec.optionalIpAddress,
+            netmask: spec.optionalNetmask,
+            gateway: spec.optionalGateway,
+            ip6Address: spec.optionalIpv6Address,
+            prefixLength6: (spec.optionalIpv6PrefixLength.map(Int.init)),
+            gateway6: spec.optionalGateway6,
+            mtu: (spec.optionalMtu.map(Int.init)),
             dhcpEnabled: false,
-            dnsServers: spec.dnsServers,
-            domainName: spec.domainName,
+            dnsServers: spec.dnsServers.values,
+            domainName: spec.optionalDomainName,
             metadataEnabled: false,
             resolverAddresses: []
         )

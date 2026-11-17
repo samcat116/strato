@@ -444,7 +444,9 @@ struct DesiredStateAssembler {
                     restore: restore,
                     suspensionStorageBudgetBytes: sandbox.suspensionStorageBytes,
                     suspensionAfterSnapshotId: sandbox.suspensionAfterSnapshotId,
-                    suspensionCheckpointId: sandbox.suspensionEvidence?.checkpointId,
+                    suspensionCheckpointId: try sandbox.suspensionEvidence.map {
+                        try UUID(protocolString: $0.checkpointID)
+                    },
                     automaticSuspensionFence: idleFence,
                     idleControlPlaneRevision: idle?.activity_revision,
                     idlePendingCommandCount: idleBusy ? 1 : 0
@@ -724,9 +726,8 @@ actor RegistryCredentialCache {
 
     func credential(for key: Key) -> RegistryCredential? {
         guard let credential = credentials[key] else { return nil }
-        guard
-            let expiresAt = credential.expiresAt,
-            expiresAt.timeIntervalSinceNow > Self.expiryMargin
+        guard credential.hasExpiresAt,
+            credential.expiresAt.date.timeIntervalSinceNow > Self.expiryMargin
         else {
             credentials[key] = nil
             return nil

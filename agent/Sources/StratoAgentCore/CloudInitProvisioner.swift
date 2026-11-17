@@ -204,6 +204,8 @@ public struct CloudInitProvisioner: Sendable {
                 // though the real payload is fetched from `seedfrom`.
                 "user-data": "",
             ]
+        case .unspecified, .UNRECOGNIZED:
+            throw AgentProtocolDecodeError.invalidField
         }
 
         // In IMDS mode this document is applied during init-local solely to
@@ -247,7 +249,7 @@ public struct CloudInitProvisioner: Sendable {
     /// Renders the same NoCloud `meta-data` bytes from the mutable metadata
     /// snapshot served over HTTP.
     public static func metaDataDocument(for metadata: InstanceMetadata) -> String {
-        metaDataDocument(vmId: metadata.instanceId.uuidString, hostname: metadata.hostname)
+        metaDataDocument(vmId: metadata.instanceID, hostname: metadata.hostname)
     }
 
     /// The label the guest configures itself under: the desired `hostname` when
@@ -407,8 +409,9 @@ public struct CloudInitProvisioner: Sendable {
     /// snapshot served over HTTP.
     public static func userDataDocument(for metadata: InstanceMetadata) -> String {
         userDataDocument(
-            sshAuthorizedKeys: metadata.sshAuthorizedKeys,
-            userData: metadata.userData, guestAgentRelease: metadata.guestAgentRelease)
+            sshAuthorizedKeys: metadata.sshAuthorizedKeys.values,
+            userData: metadata.optionalUserData,
+            guestAgentRelease: metadata.optionalGuestAgentRelease)
     }
 
     /// A part of a multipart `user-data` document.
@@ -872,7 +875,7 @@ public struct CloudInitProvisioner: Sendable {
     /// today.
     public static func networkConfigYAML(for metadata: InstanceMetadata) -> String? {
         networkConfigYAML(
-            for: metadata.nics.map { nic in
+            for: metadata.nics.values.map { nic in
                 ResolvedNetworkAttachment(
                     network: nic.networkName,
                     // A caller can reach this listener only over a realized
@@ -880,18 +883,18 @@ public struct CloudInitProvisioner: Sendable {
                     // host TAP name, and the renderer needs only the case.
                     attachment: .tap(interface: nic.deviceName),
                     macAddress: nic.macAddress,
-                    ipAddress: nic.ipAddress,
-                    netmask: dottedIPv4Netmask(prefixLength: nic.prefixLength),
-                    gateway: nic.gateway,
-                    ip6Address: nic.ipv6Address,
-                    prefixLength6: nic.ipv6PrefixLength,
-                    gateway6: nic.gateway6,
-                    mtu: nic.mtu,
+                    ipAddress: nic.optionalIpAddress,
+                    netmask: dottedIPv4Netmask(prefixLength: nic.optionalPrefixLength.map(Int.init)),
+                    gateway: nic.optionalGateway,
+                    ip6Address: nic.optionalIpv6Address,
+                    prefixLength6: nic.optionalIpv6PrefixLength.map(Int.init),
+                    gateway6: nic.optionalGateway6,
+                    mtu: nic.optionalMtu.map(Int.init),
                     dhcpEnabled: nic.dhcpEnabled,
-                    dnsServers: nic.dnsServers,
-                    domainName: nic.domainName,
+                    dnsServers: nic.dnsServers.values,
+                    domainName: nic.optionalDomainName,
                     metadataEnabled: nic.metadataEnabled,
-                    resolverAddresses: nic.resolverAddresses)
+                    resolverAddresses: nic.resolverAddresses.values)
             },
             renameInterfaces: false)
     }

@@ -113,7 +113,7 @@ public actor ImageCacheService {
     /// {cachePath}/{projectId}/{imageId}, and its mtime is the image's
     /// last-use marker.
     private func imageDirectory(imageInfo: ImageInfo) -> String {
-        return "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)"
+        return "\(cachePath)/\(imageInfo.projectID)/\(imageInfo.imageID)"
     }
 
     /// All cached image directories (the second level of the
@@ -194,7 +194,7 @@ public actor ImageCacheService {
     /// Structure: {cachePath}/{projectId}/{imageId}/{kind}/{filename}
     public func buildArtifactCachePath(imageInfo: ImageInfo, artifact: ArtifactInfo) -> String {
         return
-            "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(artifact.kind.rawValue)/\(Self.safeComponent(artifact.filename))"
+            "\(cachePath)/\(imageInfo.projectID)/\(imageInfo.imageID)/\(artifact.kind.protocolValue)/\(Self.safeComponent(artifact.filename))"
     }
 
     // MARK: - Artifact Operations
@@ -203,7 +203,7 @@ public actor ImageCacheService {
     /// verifying it if it isn't cached.
     public func getArtifactPath(imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
         guard let artifact = imageInfo.artifact(ofKind: kind) else {
-            throw ImageCacheError.artifactNotFound(kind.rawValue)
+            throw ImageCacheError.artifactNotFound(kind.protocolValue)
         }
 
         let cachedPath = buildArtifactCachePath(imageInfo: imageInfo, artifact: artifact)
@@ -222,8 +222,8 @@ public actor ImageCacheService {
             logger.info(
                 "Artifact found in cache",
                 metadata: [
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                    "kind": .string(kind.rawValue),
+                    "imageId": .string(imageInfo.imageID),
+                    "kind": .string(kind.protocolValue),
                     "path": .string(cachedPath),
                 ])
             return cachedPath
@@ -232,8 +232,8 @@ public actor ImageCacheService {
         logger.info(
             "Artifact not in cache, downloading",
             metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "kind": .string(kind.rawValue),
+                "imageId": .string(imageInfo.imageID),
+                "kind": .string(kind.protocolValue),
                 "url": .string(artifact.downloadURL),
             ])
 
@@ -242,7 +242,7 @@ public actor ImageCacheService {
             from: artifact.downloadURL,
             checksum: artifact.checksum,
             sizeBytes: artifact.size,
-            imageId: imageInfo.imageId,
+            imageId: try UUID(protocolString: imageInfo.imageID),
             kind: kind,
             to: cachedPath
         )
@@ -279,7 +279,7 @@ public actor ImageCacheService {
             "Artifact downloaded and verified",
             metadata: [
                 "imageId": .string(imageId.uuidString),
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "path": .string(localPath),
             ])
     }

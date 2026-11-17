@@ -72,32 +72,30 @@ public enum LoadBalancerBackendHealthMapper {
         observedAt: Date
     ) -> [ObservedLoadBalancerBackend] {
         guard desired.healthCheck.enabled else {
-            return desired.backends.map {
-                ObservedLoadBalancerBackend(id: $0.id, healthStatus: .unknown)
+            return desired.backends.values.map {
+                ObservedLoadBalancerBackend(id: validatedProtocolUUID($0.id), healthStatus: .unknown)
             }
         }
-        let backendPorts = Set(desired.listeners.map(\.backendPort))
-        return desired.backends.map { backend in
-            let logicalPort = backend.vmId.flatMap { vmID in
-                backend.nicIndex.map {
-                    OVNNaming.vmPortName(vmId: vmID.uuidString, nicIndex: $0)
-                }
-            }
+        let backendPorts = Set(desired.listeners.values.map(\.backendPort))
+        return desired.backends.values.map { backend in
+            let logicalPort =
+                backend.hasVmID && backend.hasNicIndex
+                ? OVNNaming.vmPortName(vmId: backend.vmID, nicIndex: Int(backend.nicIndex)) : nil
             let matching = monitors.filter { monitor in
                 (monitor.monitorType == nil || monitor.monitorType == "load-balancer")
                     && monitor.ipAddress == backend.ipAddress
-                    && backendPorts.contains(monitor.port)
+                    && backendPorts.contains(Int64(monitor.port))
                     && (monitor.protocolName == nil
                         || monitor.protocolName == desired.protocolName)
                     && (logicalPort == nil || monitor.logicalPort == logicalPort)
-                    && (backend.healthCheckSourceIP == nil
-                        || monitor.sourceIP == backend.healthCheckSourceIP)
+                    && (!backend.hasHealthCheckSourceIp
+                        || monitor.sourceIP == backend.healthCheckSourceIp)
             }
             guard !matching.isEmpty else {
                 // ovn-northd has not materialized a monitor yet (or this is an
                 // off-platform endpoint with no logical-port mapping).
                 return ObservedLoadBalancerBackend(
-                    id: backend.id, healthStatus: .unknown)
+                    id: validatedProtocolUUID(backend.id), healthStatus: .unknown)
             }
             let statuses = matching.compactMap { $0.status?.lowercased() }
             let health: ObservedLoadBalancerBackendHealth
@@ -115,7 +113,7 @@ public enum LoadBalancerBackendHealthMapper {
                 health = .unknown
             }
             return ObservedLoadBalancerBackend(
-                id: backend.id, healthStatus: health, lastCheckedAt: observedAt)
+                id: validatedProtocolUUID(backend.id), healthStatus: health, lastCheckedAt: observedAt)
         }
     }
 }
@@ -185,19 +183,25 @@ public enum LoadBalancerReconciler {
         logger: Logger,
         protectedNetworkIDs: Set<UUID> = []
     ) async -> LoadBalancerReconcileOutcome {
+        do {
+            for network in networks { try network.validateProtocol() }
+        } catch {
+            return LoadBalancerReconcileOutcome(
+                observations: nil, networkFailures: [stepFailure("validate desired load balancers", error: error)])
+        }
         var placements: [UUID: Placement] = [:]
         for network in networks {
-            for desired in network.loadBalancers {
+            for desired in network.loadBalancers.values {
                 var switches = Set(
-                    desired.backends.compactMap(\.networkId).map {
+                    desired.backends.values.filter { $0.hasNetworkID }.map { validatedProtocolUUID($0.networkID) }.map {
                         OVNNaming.switchName(networkId: $0)
                     })
                 // Attach to the VIP switch even before the first backend is
                 // registered; clients on that switch must be able to reach it.
-                switches.insert(OVNNaming.switchName(networkId: network.networkId))
-                placements[desired.id] = Placement(
+                switches.insert(OVNNaming.switchName(networkId: validatedProtocolUUID(network.networkID)))
+                placements[validatedProtocolUUID(desired.id)] = Placement(
                     desired: desired,
-                    networkID: network.networkId,
+                    networkID: validatedProtocolUUID(network.networkID),
                     routerName: OVNNaming.routerName(routerKey: network.routerKey),
                     switchNames: switches)
             }
@@ -213,7 +217,7 @@ public enum LoadBalancerReconciler {
             return LoadBalancerReconcileOutcome(
                 observations: placements.values.map {
                     failure(for: $0.desired, error: error.localizedDescription)
-                }.sorted { $0.id.uuidString < $1.id.uuidString },
+                }.sorted { $0.id < $1.id },
                 networkFailures: [stepFailure("observe managed load balancers", error: error)])
         }
 
@@ -245,8 +249,8 @@ public enum LoadBalancerReconciler {
                         for: placement.desired)
                 } catch {
                     healthError = "Backend health observation failed: \(error.localizedDescription)"
-                    backendHealth = placement.desired.backends.map {
-                        ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
+                    backendHealth = placement.desired.backends.values.map {
+                        ObservedLoadBalancerBackend(id: validatedProtocolUUID($0.id), healthStatus: .error)
                     }
                 }
                 results.append(
@@ -295,8 +299,8 @@ public enum LoadBalancerReconciler {
                 let inferredNetworkIDs = Set(
                     networks.compactMap { network in
                         stale.switchNames.contains(
-                            OVNNaming.switchName(networkId: network.networkId))
-                            ? network.networkId : nil
+                            OVNNaming.switchName(networkId: validatedProtocolUUID(network.networkID)))
+                            ? validatedProtocolUUID(network.networkID) : nil
                     })
                 networkFailures.append(
                     stepFailure(
@@ -315,12 +319,12 @@ public enum LoadBalancerReconciler {
         -> ObservedLoadBalancerState
     {
         ObservedLoadBalancerState(
-            id: desired.id,
+            id: validatedProtocolUUID(desired.id),
             observedGeneration: desired.generation,
             status: .error,
             lastError: error,
-            backends: desired.backends.map {
-                ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
+            backends: desired.backends.values.map {
+                ObservedLoadBalancerBackend(id: validatedProtocolUUID($0.id), healthStatus: .error)
             })
     }
 

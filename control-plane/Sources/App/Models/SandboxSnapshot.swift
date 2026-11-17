@@ -119,7 +119,7 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     var errorMessage: String?
 
     // Desired/observed state split (ADR 0001 stage 8, STR-150).
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredSnapshotStatus
 
     @Field(key: "generation")
@@ -163,7 +163,7 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     /// it safe for a replayed sync to carry: it can never re-pause a guest whose
     /// checkpoint already exists. The sandbox's own `desiredStatus` carries the
     /// lasting half of "and stop", written in the same transaction.
-    @Enum(key: "capture_mode")
+    @ProtocolEnum(key: "capture_mode")
     var captureMode: SandboxSnapshotMode
 
     /// When the retention sweep marks this snapshot `.absent`, or nil to keep
@@ -241,7 +241,7 @@ extension SandboxSnapshot {
     var isExported: Bool {
         guard exportedAt != nil, let exportedArtifacts else { return false }
         let kinds = Set(exportedArtifacts.map(\.kind))
-        return SandboxSnapshotArtifactKind.allCases.allSatisfy { kinds.contains($0) }
+        return SandboxSnapshotArtifactKind.knownCases.allSatisfy { kinds.contains($0) }
     }
 
     func exportedArtifact(for kind: SandboxSnapshotArtifactKind) -> SandboxSnapshotExportedArtifact? {
@@ -324,34 +324,34 @@ extension SandboxSnapshot: SnapshotArtifactResource {
     @discardableResult
     func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool {
         var changed = false
-        if let sizeBytes = facts.sizeBytes, size != sizeBytes {
-            size = sizeBytes
+        if facts.hasSizeBytes, size != facts.sizeBytes {
+            size = facts.sizeBytes
             changed = true
         }
-        if let path = facts.storagePath, storagePath != path {
-            storagePath = path
+        if facts.hasStoragePath, storagePath != facts.storagePath {
+            storagePath = facts.storagePath
             changed = true
         }
-        if let version = facts.firecrackerVersion, firecrackerVersion != version {
-            firecrackerVersion = version
+        if facts.hasFirecrackerVersion, firecrackerVersion != facts.firecrackerVersion {
+            firecrackerVersion = facts.firecrackerVersion
             changed = true
         }
-        if let architecture = facts.architecture?.rawValue, self.architecture != architecture {
-            self.architecture = architecture
+        if facts.hasArchitecture, self.architecture != facts.architecture.protocolValue {
+            self.architecture = facts.architecture.protocolValue
             changed = true
         }
-        if let guestVersion = facts.guestControlProtocolVersion,
-            guestControlProtocolVersion != guestVersion
+        if facts.hasGuestControlProtocolVersion,
+            guestControlProtocolVersion != Int(facts.guestControlProtocolVersion)
         {
-            guestControlProtocolVersion = guestVersion
+            guestControlProtocolVersion = Int(facts.guestControlProtocolVersion)
             changed = true
         }
-        if let layout = facts.forkLayoutVersion, forkLayoutVersion != layout {
-            forkLayoutVersion = layout
+        if facts.hasForkLayoutVersion, forkLayoutVersion != Int(facts.forkLayoutVersion) {
+            forkLayoutVersion = Int(facts.forkLayoutVersion)
             changed = true
         }
-        if let template = facts.cpuTemplate, cpuTemplate != template {
-            cpuTemplate = template
+        if facts.hasCpuTemplate, cpuTemplate != facts.cpuTemplate {
+            cpuTemplate = facts.cpuTemplate
             changed = true
         }
         return changed

@@ -312,7 +312,7 @@ struct SandboxController: RouteCollection {
 
         guard sandbox.canStart else {
             throw Abort(
-                .badRequest, reason: "Sandbox cannot be started in current state: \(sandbox.status.rawValue)")
+                .badRequest, reason: "Sandbox cannot be started in current state: \(sandbox.status.protocolValue)")
         }
 
         let userID = try user.requireID()
@@ -333,7 +333,7 @@ struct SandboxController: RouteCollection {
 
         guard sandbox.canStop else {
             throw Abort(
-                .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.rawValue)")
+                .badRequest, reason: "Sandbox cannot be stopped in current state: \(sandbox.status.protocolValue)")
         }
 
         struct StopRequest: Content { let suspend: Bool? }
@@ -363,7 +363,7 @@ struct SandboxController: RouteCollection {
         guard sandbox.isRunning else {
             throw Abort(
                 .badRequest,
-                reason: "Sandbox must be running to restart. Current state: \(sandbox.status.rawValue)")
+                reason: "Sandbox must be running to restart. Current state: \(sandbox.status.protocolValue)")
         }
 
         // Restart is expressed as a fresh desired-running generation: the
@@ -421,7 +421,7 @@ struct SandboxController: RouteCollection {
         guard sandbox.isRunning else {
             throw Abort(
                 .badRequest,
-                reason: "Sandbox must be running to exec. Current state: \(sandbox.status.rawValue)")
+                reason: "Sandbox must be running to exec. Current state: \(sandbox.status.protocolValue)")
         }
 
         guard let agentIdString = sandbox.hypervisorId,

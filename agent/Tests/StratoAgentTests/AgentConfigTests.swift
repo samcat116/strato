@@ -103,7 +103,7 @@ struct AgentConfigTests {
             #expect(policy.idleSeconds == 42)
             #expect(policy.minimumResidencySeconds == 15)
             #expect(policy.restoreTimeoutSeconds == 90)
-            #expect(policy.excludedSandboxIDs == [id])
+            #expect(policy.excludedSandboxIDs.values == [id.uuidString])
         }
     }
 

@@ -19,10 +19,10 @@ struct SandboxIdlePolicyIntegrationTests {
             spec: SandboxSpec(image: "test", cpus: 1, memoryBytes: 128 * 1024 * 1024),
             desiredStatus: .running, generation: 1)
         let item = ReconcileWorkItem(
-            kind: .sandbox, id: desired.sandboxId.uuidString, generation: 1,
+            kind: .sandbox, id: desired.sandboxID, generation: 1,
             steps: [], target: .sandbox(desired))
         #expect(try await agent.sandboxReconcileIdleSuspend(item) == .disabled)
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         #expect(try await agent.sandboxReconcileIdleSuspend(item, policy: policy) == .disabled)
         // A nil runtime would throw if either disabled path attempted host
@@ -41,9 +41,9 @@ struct SandboxIdlePolicyIntegrationTests {
             spec: SandboxSpec(image: "test", cpus: 1, memoryBytes: 128 * 1024 * 1024),
             desiredStatus: status, generation: 1)
         let item = ReconcileWorkItem(
-            kind: .sandbox, id: desired.sandboxId.uuidString, generation: 1,
+            kind: .sandbox, id: desired.sandboxID, generation: 1,
             steps: [], target: .sandbox(desired))
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         #expect(
             try await agent.sandboxReconcileIdleSuspend(item, policy: policy, dependenciesReady: true)
@@ -64,9 +64,9 @@ struct SandboxIdlePolicyIntegrationTests {
                 operationId: UUID(), generation: 1,
                 activityRevision: 0, admissionToken: UUID(), guestProtocolVersion: 5))
         let item = ReconcileWorkItem(
-            kind: .sandbox, id: desired.sandboxId.uuidString, generation: 1,
+            kind: .sandbox, id: desired.sandboxID, generation: 1,
             steps: [.shutdown], target: .sandbox(desired))
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         #expect(
             try await agent.sandboxReconcileIdleSuspend(item, policy: policy, dependenciesReady: true)

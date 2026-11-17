@@ -34,7 +34,9 @@ struct SandboxIdleWireTests {
                         id: context.sandboxId.uuidString, nonce: nonce,
                         probe: request.probeId!, monitor: monitor))
             }
-            #expect(request.operationId == fence.operationId && request.admissionToken == fence.admissionToken)
+            #expect(
+                request.operationId?.uuidString == fence.operationID
+                    && request.admissionToken?.uuidString == fence.admissionToken)
             if request.type == .prepare {
                 #expect(request.expectedActivityEpoch == 1 && request.minimumQuietMilliseconds == 300_000)
                 prepares += 1; state = .prepared
@@ -43,7 +45,8 @@ struct SandboxIdleWireTests {
             if request.type == .release { state = .released }
             return SandboxIdleGuestResponse(
                 type: .fence, sandboxId: context.sandboxId.uuidString, nonce: nonce,
-                operationId: fence.operationId, admissionToken: fence.admissionToken, state: state)
+                operationId: try UUID(protocolString: fence.operationID),
+                admissionToken: try UUID(protocolString: fence.admissionToken), state: state)
         }
         func counts() -> (Int, Int, Int) { (probes, prepares, guestCalls) }
     }

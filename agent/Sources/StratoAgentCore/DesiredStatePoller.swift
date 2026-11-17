@@ -84,6 +84,7 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
     private let fetch: Fetcher
     private let deliver: Deliver
     private let logger: Logger
+    private let protocolAgreement: Strato_Agent_V1_ProtocolAgreement?
     private let fullRefetchInterval: Duration
     private let clock: PollClock
     private let randomUnit: @Sendable () -> Double
@@ -122,12 +123,14 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
         deliver: @escaping Deliver,
         logger: Logger,
         fullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
+        protocolAgreement: Strato_Agent_V1_ProtocolAgreement? = nil,
         clock: PollClock = ContinuousClock(),
         randomUnit: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }
     ) {
         self.fetch = fetch
         self.deliver = deliver
         self.logger = logger
+        self.protocolAgreement = protocolAgreement
         let interval = min(max(.seconds(1), fullRefetchInterval), Self.defaultFullRefetchInterval)
         self.fullRefetchInterval = interval
         self.currentFullRefetchInterval = interval
@@ -236,9 +239,17 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
     /// description of why the response was unusable, for `backOff`'s log line.
     private func handlePayload(_ body: Data) async -> String? {
         do {
-            let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: body)
+            let envelope = try WireProtocol.decodeEnvelope(body)
             guard envelope.type == .desiredState else {
                 return "unexpected message type '\(envelope.type.rawValue)'"
+            }
+            if let protocolAgreement {
+                try AgentProtocolCompatibility.require(
+                    envelope.requirements, agreement: protocolAgreement,
+                    offered: AgentProtocolCompatibility.localOffer)
+            } else if !envelope.requiredCapabilities.isEmpty {
+                // Standalone pollers have no negotiated optional capabilities.
+                throw AgentProtocolCompatibility.Failure.unsupportedCapability
             }
             deliveredSyncs += 1
             await deliver(envelope)
@@ -249,7 +260,7 @@ public actor DesiredStatePoller<PollClock: Clock> where PollClock.Duration == Du
             // because the dropped ETag makes it unconditional. What actually
             // breaks the loop is a control-plane fix or the next change to
             // desired state, so the backoff's job is to make the wait cheap.
-            return "undecodable payload: \(error)"
+            return "invalid Protobuf desired-state payload"
         }
     }
 

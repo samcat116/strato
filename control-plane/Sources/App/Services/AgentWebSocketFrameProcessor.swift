@@ -7,7 +7,7 @@ import NIOCore
 /// `AgentWebSocketFrameProcessor` has exactly one consumer task.
 struct BoundedAgentFrameBuffer {
     private struct Frame {
-        let text: String
+        let data: Data
         let byteCount: Int
     }
 
@@ -22,18 +22,18 @@ struct BoundedAgentFrameBuffer {
         self.byteLimit = byteLimit
     }
 
-    mutating func append(_ text: String) -> Bool {
-        let byteCount = text.utf8.count
+    mutating func append(_ data: Data) -> Bool {
+        let byteCount = data.count
         guard byteCount <= byteLimit - bufferedBytes else { return false }
-        frames.append(Frame(text: text, byteCount: byteCount))
+        frames.append(Frame(data: data, byteCount: byteCount))
         bufferedBytes += byteCount
         return true
     }
 
-    mutating func popFirst() -> String? {
+    mutating func popFirst() -> Data? {
         guard let frame = frames.popFirst() else { return nil }
         bufferedBytes -= frame.byteCount
-        return frame.text
+        return frame.data
     }
 }
 
@@ -50,23 +50,23 @@ final class AgentWebSocketFrameProcessor: @unchecked Sendable {
     static let defaultBufferLimitBytes = 1 << 25
 
     private let lock = NIOLock()
-    private let handler: @Sendable (String) async -> Void
+    private let handler: @Sendable (Data) async -> Void
     private var buffer: BoundedAgentFrameBuffer
     private var drainTask: Task<Void, Never>?
     private var acceptingFrames = true
 
     init(
         bufferLimitBytes: Int = AgentWebSocketFrameProcessor.defaultBufferLimitBytes,
-        handler: @escaping @Sendable (String) async -> Void
+        handler: @escaping @Sendable (Data) async -> Void
     ) {
         self.buffer = BoundedAgentFrameBuffer(byteLimit: bufferLimitBytes)
         self.handler = handler
     }
 
-    func enqueue(_ text: String) -> EnqueueResult {
+    func enqueue(_ data: Data) -> EnqueueResult {
         lock.withLock {
             guard acceptingFrames else { return .closed }
-            guard buffer.append(text) else {
+            guard buffer.append(data) else {
                 acceptingFrames = false
                 return .overflow
             }
@@ -100,18 +100,18 @@ final class AgentWebSocketFrameProcessor: @unchecked Sendable {
     }
 
     private func run() async {
-        while let text = nextFrame() {
-            await handler(text)
+        while let data = nextFrame() {
+            await handler(data)
         }
     }
 
-    private func nextFrame() -> String? {
+    private func nextFrame() -> Data? {
         lock.withLock {
-            guard let text = buffer.popFirst() else {
+            guard let data = buffer.popFirst() else {
                 drainTask = nil
                 return nil
             }
-            return text
+            return data
         }
     }
 }

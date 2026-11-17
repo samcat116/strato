@@ -127,8 +127,8 @@ struct VMManifestStoreTests {
         let adopted = entry.recordingAdoption(of: desired)
 
         #expect(adopted.spec.cpus == 8)
-        #expect(adopted.spec.networks.count == 1)
-        #expect(adopted.spec.networks[0].metadataEnabled == true)
+        #expect(adopted.spec.networks.values.count == 1)
+        #expect(adopted.spec.networks.values[0].metadataEnabled == true)
         #expect(adopted.firecrackerMMDSPolicyApplied == true)
         #expect(adopted.firecrackerMMDSInterfaces == ["eth0"])
     }
@@ -156,7 +156,7 @@ struct VMManifestStoreTests {
         let adopted = entry.recordingAdoption(of: desired)
 
         #expect(adopted.spec.cpus == 4)
-        #expect(try #require(adopted.spec.volumes.first).appliedBlockPolicy == policy)
+        #expect(try #require(adopted.spec.volumes.values.first).appliedBlockPolicy == policy)
     }
 
     @Test("QEMU adoption leaves missing policy unknown, including interrupted hot attach")
@@ -181,12 +181,12 @@ struct VMManifestStoreTests {
         let adopted = VMManifestEntry(hypervisorType: .qemu, spec: realized)
             .recordingAdoption(of: desired)
 
-        let legacy = try #require(adopted.spec.volumes.first { $0.volumeId == legacyVolumeId })
-        #expect(legacy.appliedBlockPolicy == nil)
+        let legacy = try #require(adopted.spec.volumes.values.first { $0.volumeID == legacyVolumeId.uuidString })
+        #expect(!legacy.hasAppliedBlockPolicy)
 
         let notYetAttached = try #require(
-            adopted.spec.volumes.first { $0.volumeId == newVolumeId })
-        #expect(notYetAttached.appliedBlockPolicy == nil)
+            adopted.spec.volumes.values.first { $0.volumeID == newVolumeId.uuidString })
+        #expect(!notYetAttached.hasAppliedBlockPolicy)
     }
 
     @Test("Disk reservations survive the manifest round-trip")
@@ -220,8 +220,8 @@ struct VMManifestStoreTests {
 
         store.save(["vm-a": VMManifestEntry(hypervisorType: .qemu, spec: spec)])
 
-        let restored = try #require(store.load().loadedEntries["vm-a"]?.spec.volumes.first)
-        #expect(restored.volumeId == volumeID)
+        let restored = try #require(store.load().loadedEntries["vm-a"]?.spec.volumes.values.first)
+        #expect(restored.volumeID == volumeID.uuidString)
         #expect(restored.ioLimits == VolumeIOLimits(iopsTotal: 750, bpsTotal: 32 << 20))
     }
 
@@ -564,9 +564,9 @@ struct VMManifestStoreTests {
         let recovered = try #require(
             quarantined.recoveringManagedVolumeIdentities(from: desired))
         #expect(recovered.vsockCID == 19)
-        #expect(recovered.spec.volumes.count == 1)
-        #expect(recovered.spec.volumes[0].volumeId == volumeId)
-        #expect(recovered.spec.volumes[0].attachment == .file(path: managedPath, format: .raw))
+        #expect(recovered.spec.volumes.values.count == 1)
+        #expect(recovered.spec.volumes.values[0].volumeID == volumeId.uuidString)
+        #expect(recovered.spec.volumes.values[0].attachment == .file(path: managedPath, format: .raw))
     }
 
     @Test("Reserved-disk total treats missing diskBytes and sandbox entries as zero")
@@ -862,7 +862,7 @@ struct VMManifestStoreTests {
         #expect(load.loadedEntries.isEmpty)
         let quarantined = try #require(load.loadedQuarantined["vm-old"])
         #expect(quarantined.kind == nil)
-        #expect(quarantined.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue)
+        #expect(quarantined.hypervisorTypeRawValue == HypervisorType.firecracker.protocolValue)
         #expect(quarantined.cpus == 5)
         #expect(quarantined.effectiveKind == .vm)
     }

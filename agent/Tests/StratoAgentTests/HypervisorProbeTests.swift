@@ -28,12 +28,12 @@ struct HypervisorProbeTests {
         #if os(Linux)
         #expect(report.available)
         #expect(report.accelerated)
-        #expect(report.unavailabilityReason == nil)
+        #expect(!report.hasUnavailabilityReason)
         #else
         // Off Linux QEMU is unavailable. The native Apple backend has an
         // independent runtime probe and must never be advertised as QEMU.
         #expect(!report.available)
-        #expect(report.unavailabilityReason?.contains("Linux") == true)
+        #expect(report.unavailabilityReason.contains("Linux") == true)
         #endif
     }
 
@@ -49,7 +49,7 @@ struct HypervisorProbeTests {
         let report = HypervisorProbe.qemuReport(libvirt: status, acceleration: accelerationOn)
         #expect(!report.available)
         #expect(!report.accelerated)
-        #expect(report.unavailabilityReason != nil)
+        #expect(report.hasUnavailabilityReason)
     }
 
     /// The version floor lives in `HostPreflight`, which owns the remediation;
@@ -82,7 +82,7 @@ struct HypervisorProbeTests {
         #expect(report.type == .firecracker)
         #expect(report.available)
         #expect(report.accelerated)
-        #expect(report.unavailabilityReason == nil)
+        #expect(!report.hasUnavailabilityReason)
     }
 
     @Test("Firecracker is unavailable without acceleration even if the binary exists")
@@ -99,7 +99,7 @@ struct HypervisorProbeTests {
         let report = HypervisorProbe.firecrackerReport(binaryPath: missingBinary, acceleration: accelerationOn)
 
         #expect(!report.available)
-        #expect(report.unavailabilityReason?.contains(missingBinary) == true)
+        #expect(report.unavailabilityReason.contains(missingBinary) == true)
     }
 
     // MARK: - probeAll
@@ -108,8 +108,8 @@ struct HypervisorProbeTests {
     func probeAllCoversAllTypes() {
         let reports = HypervisorProbe.probeAll(libvirt: libvirtOK, firecrackerBinaryPath: missingBinary)
 
-        #expect(reports.count == HypervisorType.allCases.count)
-        for type in HypervisorType.allCases {
+        #expect(reports.count == HypervisorType.knownCases.count)
+        for type in HypervisorType.knownCases {
             #expect(reports.filter { $0.type == type }.count == 1)
         }
     }
@@ -120,7 +120,7 @@ struct HypervisorProbeTests {
         let reports = HypervisorProbe.probeAll(libvirt: libvirtOK, firecrackerBinaryPath: executableBinary)
         let firecracker = try #require(reports.first { $0.type == .firecracker })
         #expect(!firecracker.available)
-        #expect(firecracker.unavailabilityReason != nil)
+        #expect(firecracker.hasUnavailabilityReason)
         #endif
     }
 
@@ -153,7 +153,7 @@ struct HypervisorProbeTests {
         let firecracker = try #require(stamped.first { $0.type == .firecracker })
         let qemu = try #require(stamped.first { $0.type == .qemu })
         #expect(firecracker.version == "1.7.0")
-        #expect(qemu.version == nil)
+        #expect(!qemu.hasVersion)
         // Nil leaves the reports untouched.
         #expect(HypervisorProbe.stampingFirecrackerVersion(reports, version: nil) == reports)
     }

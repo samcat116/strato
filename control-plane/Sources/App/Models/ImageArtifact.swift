@@ -31,14 +31,14 @@ final class ImageArtifact: Model, @unchecked Sendable {
     @Parent(key: "image_id")
     var image: Image
 
-    @Enum(key: "kind")
+    @ProtocolEnum(key: "kind")
     var kind: ArtifactKind
 
     /// Disk format for `diskImage`/`rootfs`; nil for opaque blobs (`kernel`/`initramfs`).
     @OptionalEnum(key: "format")
     var format: ImageFormat?
 
-    @Enum(key: "architecture")
+    @ProtocolEnum(key: "architecture")
     var architecture: CPUArchitecture
 
     @Field(key: "filename")
@@ -136,6 +136,8 @@ extension ImageArtifact {
             return format != nil
         case .kernel, .initramfs:
             return true
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
     }
 

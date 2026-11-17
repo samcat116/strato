@@ -45,7 +45,9 @@ public actor MetadataResponder {
     ) {
         self.snapshot = snapshot
         self.index = MetadataCallerIndex(networkId: snapshot.networkId, instances: snapshot.instances)
-        self.byVM = Dictionary(snapshot.instances.map { ($0.instanceId, $0) }, uniquingKeysWith: { first, _ in first })
+        self.byVM = Dictionary(
+            snapshot.instances.compactMap { value in UUID(uuidString: value.instanceID).map { ($0, value) } },
+            uniquingKeysWith: { first, _ in first })
         self.tokens = tokens
         self.identityTokens = identityTokens
         self.identityMinter = identityMinter
@@ -67,15 +69,17 @@ public actor MetadataResponder {
     public func update(_ snapshot: MetadataSnapshot) async {
         self.snapshot = snapshot
         self.index = MetadataCallerIndex(networkId: snapshot.networkId, instances: snapshot.instances)
-        self.byVM = Dictionary(snapshot.instances.map { ($0.instanceId, $0) }, uniquingKeysWith: { first, _ in first })
+        self.byVM = Dictionary(
+            snapshot.instances.compactMap { value in UUID(uuidString: value.instanceID).map { ($0, value) } },
+            uniquingKeysWith: { first, _ in first })
         await tokens.retain(servable: Set(byVM.filter { $0.value.isServiceEnabled }.keys))
         await identityTokens.retain(
             policies: Dictionary(
                 uniqueKeysWithValues: byVM.compactMap { vmId, metadata in
-                    guard metadata.isServiceEnabled, let identity = metadata.identity,
-                        !identity.audiences.isEmpty
+                    guard metadata.isServiceEnabled, metadata.hasIdentity,
+                        !metadata.identity.audiences.values.isEmpty
                     else { return nil }
-                    return (vmId, identity)
+                    return (vmId, metadata.identity)
                 }))
     }
 
@@ -172,7 +176,9 @@ public actor MetadataResponder {
         //    and remains subject to the kill switch in step 4.
         if case .noCloudSeed(let presented, let path) = route {
             guard let metadata = byVM[vmId],
-                Self.seedTokenMatches(presented, expected: metadata.noCloudSeedToken),
+                Self.seedTokenMatches(
+                    presented,
+                    expected: metadata.hasNoCloudSeedToken ? UUID(uuidString: metadata.noCloudSeedToken) : nil),
                 let path,
                 let body = MetadataDocument.render(path, for: metadata)
             else {
@@ -220,12 +226,13 @@ public actor MetadataResponder {
             // A missing or empty policy is the VM-level opt-in boundary. Use
             // the same 404 as an unknown caller so this endpoint never confirms
             // that a disabled VM has an instance identity registration.
-            guard let metadata = byVM[vmId], let policy = metadata.identity,
-                !policy.audiences.isEmpty
+            guard let metadata = byVM[vmId], metadata.hasIdentity,
+                !metadata.identity.audiences.values.isEmpty
             else {
                 return .rejected(404, "not found")
             }
-            guard policy.audiences.contains(audience) else {
+            let policy = metadata.identity
+            guard policy.audiences.values.contains(audience) else {
                 return .rejected(403, "audience is not allowed")
             }
             guard let identityMinter else {
@@ -237,20 +244,20 @@ public actor MetadataResponder {
                     vmId: vmId, audience: audience, policy: policy, now: wallTime,
                     minter: identityMinter)
                 guard byVM[vmId]?.isServiceEnabled == true,
-                    byVM[vmId]?.identity == policy,
-                    policy.audiences.contains(audience)
+                    byVM[vmId]?.hasIdentity == true, byVM[vmId]?.identity == policy,
+                    policy.audiences.values.contains(audience)
                 else {
                     return .rejected(404, "not found")
                 }
                 return MetadataResponse(status: 200, body: svid.token)
             } catch {
                 guard byVM[vmId]?.isServiceEnabled == true,
-                    let currentPolicy = byVM[vmId]?.identity,
-                    !currentPolicy.audiences.isEmpty
+                    byVM[vmId]?.hasIdentity == true, let currentPolicy = byVM[vmId]?.identity,
+                    !currentPolicy.audiences.values.isEmpty
                 else {
                     return .rejected(404, "not found")
                 }
-                guard currentPolicy.audiences.contains(audience) else {
+                guard currentPolicy.audiences.values.contains(audience) else {
                     return .rejected(403, "audience is not allowed")
                 }
                 logger.warning(

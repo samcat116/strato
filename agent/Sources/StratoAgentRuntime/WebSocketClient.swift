@@ -198,21 +198,16 @@ actor WebSocketClient {
                 // Store WebSocket in thread-safe box (still on EventLoop)
                 wsHolderRef.set(ws, generation: generation)
 
-                // Text and binary frames carry the same JSON envelope, so both
-                // decode through here. Only the outer envelope is decoded on
-                // the event loop; typed handling and debug metadata happen on
-                // the agent actor so logging never adds payload parsing here.
-                let decodeAndYield: @Sendable (String) -> Void = { text in
-                    guard let data = text.data(using: .utf8) else {
-                        loggerRef.error("Failed to convert message to UTF-8 data")
-                        return
-                    }
-
+                // Decode bytes directly; binary Protobuf is the sole workload format.
+                // Yield on the event loop to preserve arrival order across actor hops.
+                ws.onText { ws, _ in
+                    loggerRef.warning("Rejecting text frame on Protobuf agent connection")
+                    _ = ws.close(code: .unacceptableData)
+                }
+                ws.onBinary { ws, buffer in
+                    let data = Data(buffer.readableBytesView)
                     do {
-                        let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: data)
-
-                        // Preserve arrival order: hand off to the agent's ordered inbound
-                        // pipeline rather than spawning an unordered per-frame Task.
+                        let envelope = try WireProtocol.decodeEnvelope(data)
                         inboundRef.yield(
                             ControlPlaneInboundFrame(
                                 envelope: envelope,
@@ -223,20 +218,8 @@ actor WebSocketClient {
                             direction: .inbound,
                             byteCount: data.count,
                             logger: loggerRef)
+                        _ = ws.close(code: .unacceptableData)
                     }
-                }
-
-                // Set up handlers directly on the EventLoop (no Task hop)
-                ws.onText { _, text in
-                    decodeAndYield(text)
-                }
-
-                ws.onBinary { _, buffer in
-                    guard let text = buffer.getString(at: 0, length: buffer.readableBytes) else {
-                        loggerRef.error("Failed to convert binary buffer to string")
-                        return
-                    }
-                    decodeAndYield(text)
                 }
 
                 ws.onClose.whenComplete { _ in
@@ -368,31 +351,31 @@ actor WebSocketClient {
         }
     }
 
+    /// Registration opens workload delivery only for the connection that negotiated it.
+    /// Keeping this gate in the transport closes actor-reentrancy races during reconnect.
+    func acceptRegistration(for generation: ControlPlaneWebSocketState.Generation) -> Bool {
+        guard connectionState.connectedGeneration == generation,
+            wsHolder.get(generation: generation) != nil
+        else { return false }
+        return connectionState.markRegistered(generation)
+    }
+
     func sendMessage<T: WebSocketMessage>(_ message: T) async throws {
         guard let generation = connectionState.connectedGeneration,
-            let ws = wsHolder.get(generation: generation)
+            let ws = wsHolder.get(generation: generation),
+            message.type == .agentRegister || connectionState.canSendWorkload
         else {
             throw WebSocketClientError.notConnected
         }
 
-        // Encode message to JSON. Do not propagate an encoder description: a
-        // custom encoder can quote the value it rejected, including wire body
-        // content, and callers log this error.
-        let envelope: MessageEnvelope
+        // Never expose an encoder error description: payloads may contain secrets.
         let data: Data
         do {
-            envelope = try MessageEnvelope(message: message)
-            data = try WireProtocol.makeEncoder().encode(envelope)
+            data = try WireProtocol.encodeEnvelope(message)
         } catch {
             throw WebSocketClientError.encodingError("message type \(message.type.rawValue)")
         }
-
-        guard let jsonString = String(data: data, encoding: .utf8) else {
-            throw WebSocketClientError.encodingError("Failed to convert message to UTF-8")
-        }
-
-        // Send as text frame
-        try await ws.send(jsonString)
+        try await ws.send(data)
         WireMessageLogger.log(
             message: message,
             direction: .outbound,

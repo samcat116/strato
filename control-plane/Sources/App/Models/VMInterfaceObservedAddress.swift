@@ -23,7 +23,7 @@ final class VMInterfaceObservedAddress: Model, @unchecked Sendable {
     @Parent(key: "interface_id")
     var interface: VMNetworkInterface
 
-    /// Address family, stored as `IPFamily.rawValue`.
+    /// Address family, stored as `IPFamily.protocolValue`.
     @Field(key: "family")
     var family: String
 
@@ -52,7 +52,7 @@ final class VMInterfaceObservedAddress: Model, @unchecked Sendable {
     ) {
         self.id = id
         self.$interface.id = interfaceID
-        self.family = family.rawValue
+        self.family = family.protocolValue
         self.address = address
         self.prefixLength = prefixLength
     }

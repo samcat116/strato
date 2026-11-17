@@ -43,10 +43,10 @@ final class VMMetadataOptOutTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int
+        app: Application, named name: String, protocolMajor: Int
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, protocolVersion: protocolVersion)
+            on: app, named: name, protocolMajor: protocolMajor)
     }
 
     private func placeVM(
@@ -122,7 +122,7 @@ final class VMMetadataOptOutTests {
     func togglesWithoutBumpingGeneration() async throws {
         try await withVMTestApp { app, project, token in
             let agentId = try await self.registerAgent(
-                app: app, named: "current-agent", protocolVersion: WireProtocol.currentVersion)
+                app: app, named: "current-agent", protocolMajor: Int(AgentProtocolCompatibility.major))
             let vm = try await self.placeVM(
                 app: app, project: project, named: "vm-toggle", onAgent: agentId)
             let vmID = try vm.requireID()

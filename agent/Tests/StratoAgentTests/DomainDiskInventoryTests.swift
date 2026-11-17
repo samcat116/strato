@@ -190,8 +190,8 @@ struct DomainDiskInventoryTests {
     // MARK: - Fragments
 
     @Test("a hot-plugged disk is described exactly as a create-time one")
-    func hotplugFragment() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func hotplugFragment() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .file(
                 path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2), target: "vdc",
             readonly: false, volumeId: Self.dataVolumeId)
@@ -216,8 +216,8 @@ struct DomainDiskInventoryTests {
     }
 
     @Test("a hot-plugged disk carries both requested I/O ceilings")
-    func hotplugIOTuneFragment() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func hotplugIOTuneFragment() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .file(path: "/volumes/data.qcow2", format: .qcow2),
             target: "vdc", readonly: false, volumeId: Self.dataVolumeId,
             ioLimits: VolumeIOLimits(iopsTotal: 750, bpsTotal: 16_000_000))
@@ -228,8 +228,8 @@ struct DomainDiskInventoryTests {
     }
 
     @Test("a read-only volume stays read-only when hot-plugged")
-    func readonlyHotplugFragment() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func readonlyHotplugFragment() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .file(path: "/volumes/reference.raw", format: .raw), target: "vdz", readonly: true,
             volumeId: Self.dataVolumeId)
         #expect(xml.contains("<driver name='qemu' type='raw'/>"))
@@ -237,8 +237,8 @@ struct DomainDiskInventoryTests {
     }
 
     @Test("a block-device attachment uses libvirt's block source shape")
-    func blockDeviceHotplugFragment() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func blockDeviceHotplugFragment() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .blockDevice(path: "/dev/rbd0"), target: "vdc", readonly: false,
             volumeId: Self.dataVolumeId)
 
@@ -249,8 +249,8 @@ struct DomainDiskInventoryTests {
     }
 
     @Test("an RBD attachment preserves its native network coordinates")
-    func rbdHotplugFragment() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func rbdHotplugFragment() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .rbd(
                 pool: "volumes", image: "volume-1", namespace: "project-1",
                 user: "project-1",
@@ -338,8 +338,8 @@ struct DomainDiskInventoryTests {
     /// Paths reach here from the control plane, and this is the first place one
     /// lands somewhere `&` is structural.
     @Test("a hostile path still produces a parseable fragment")
-    func fragmentEscaping() {
-        let xml = DomainDeviceXML.hotplugDisk(
+    func fragmentEscaping() throws {
+        let xml = try DomainDeviceXML.hotplugDisk(
             attachment: .file(path: "/volumes/a & b/<disk>.qcow2", format: .qcow2), target: "vdc",
             readonly: false,
             volumeId: Self.dataVolumeId)

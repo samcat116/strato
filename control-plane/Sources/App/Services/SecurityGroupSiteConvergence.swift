@@ -107,13 +107,13 @@ enum SecurityGroupSiteConvergence {
                 throw ConvergenceWriteError.unsupportedDatabase
             }
             let locked = try await txSQL.raw(
-                "SELECT id FROM security_groups WHERE id = \(bind: observed.id) FOR UPDATE"
+                "SELECT id FROM security_groups WHERE id = \(bind: (try UUID(protocolString: observed.id))) FOR UPDATE"
             ).all(decoding: GroupIDRow.self)
             guard !locked.isEmpty,
-                let group = try await SecurityGroup.find(observed.id, on: tx),
+                let group = try await SecurityGroup.find((try UUID(protocolString: observed.id)), on: tx),
                 observed.observedGeneration <= group.generation,
                 let siteObservation = try await SecurityGroupSiteObservation.query(on: tx)
-                    .filter(\.$securityGroup.$id == observed.id)
+                    .filter(\.$securityGroup.$id == (try UUID(protocolString: observed.id)))
                     .filter(\.$site.$id == siteID)
                     .first()
             else { return }
@@ -158,7 +158,7 @@ enum SecurityGroupSiteConvergence {
                 siteObservation.lastErrorAt = instant.date
             }
             try await siteObservation.save(on: tx)
-            try await refreshAggregate(groupID: observed.id, at: instant, on: tx)
+            try await refreshAggregate(groupID: (try UUID(protocolString: observed.id)), at: instant, on: tx)
         }
     }
 

@@ -96,6 +96,7 @@ let package = Package(
                 .target(name: "StratoAPITypes"),
                 .target(name: "SPIREServerAPI"),
                 .product(name: "StratoShared", package: "shared"),
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "SPIFFEKit", package: "shared"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),

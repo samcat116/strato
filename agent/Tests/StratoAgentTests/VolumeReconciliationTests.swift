@@ -128,13 +128,13 @@ struct VolumeReconciliationTests {
                         ioLimits: current.ioLimits, ioObservedRate: current.ioObservedRate))
             case .attach:
                 guard case .managed(let current)? = volumes[item.id],
-                    let attachment = desired.attachment
+                    desired.hasAttachment
                 else { return }
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
                         attachment: current.attachment, sizeBytes: current.sizeBytes,
-                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName.rawValue,
-                        ioLimits: desired.ioLimits ?? VolumeIOLimits()))
+                        attachedVMId: desired.attachment.vmID, deviceName: desired.attachment.deviceName,
+                        ioLimits: desired.hasIoLimits ? desired.ioLimits : VolumeIOLimits()))
             case .detach:
                 guard case .managed(let current)? = volumes[item.id] else { return }
                 volumes[item.id] = .managed(
@@ -147,7 +147,7 @@ struct VolumeReconciliationTests {
                     ObservedVolumeFacts(
                         attachment: current.attachment, sizeBytes: current.sizeBytes,
                         attachedVMId: current.attachedVMId, deviceName: current.deviceName,
-                        ioLimits: desired.ioLimits ?? VolumeIOLimits()))
+                        ioLimits: desired.hasIoLimits ? desired.ioLimits : VolumeIOLimits()))
             case .delete:
                 volumes.removeValue(forKey: item.id)
             case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
@@ -427,7 +427,7 @@ struct VolumeReconciliationTests {
         #expect(plan.items.isEmpty)
         #expect(plan.unrecognized.count == 1)
         #expect(plan.unrecognized[0].kind == .volume)
-        #expect(plan.unrecognized[0].workloadId == id)
+        #expect(plan.unrecognized[0].workloadID == id.uuidString)
     }
 
     @Test("A tombstoned volume is torn down")

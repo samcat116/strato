@@ -131,7 +131,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
             "Guest exec session created",
             metadata: [
                 "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(session.sessionId),
-                "resourceKind": .string(resourceKind.rawValue),
+                "resourceKind": .string(resourceKind.protocolValue),
                 LogMetadata.guestResourceIDKey(for: resourceKind): .string(resourceId),
                 "strato.agent.identity": .string(agentKey),
             ])
@@ -224,7 +224,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
             "Guest exec session attached",
             metadata: [
                 "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
-                "resourceKind": .string(session.resourceKind.rawValue),
+                "resourceKind": .string(session.resourceKind.protocolValue),
                 LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
                     session.resourceId),
                 "strato.agent.identity": .string(session.agentKey),
@@ -710,7 +710,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
             metadata: [
                 "strato.session.kind": .string("guest_exec"),
                 "strato.session.id": .string(sessionId),
-                "resourceKind": .string(session.resourceKind.rawValue),
+                "resourceKind": .string(session.resourceKind.protocolValue),
                 LogMetadata.guestResourceIDKey(for: session.resourceKind): .string(
                     session.resourceId),
             ])
@@ -855,7 +855,7 @@ final class GuestExecSessionManager: @unchecked Sendable {
                 "Expired unattached guest exec session",
                 metadata: [
                     "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
-                    "resourceKind": .string(pending.resourceKind.rawValue),
+                    "resourceKind": .string(pending.resourceKind.protocolValue),
                     LogMetadata.guestResourceIDKey(for: pending.resourceKind): .string(
                         pending.resourceId),
                 ])

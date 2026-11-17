@@ -111,9 +111,10 @@ extension Agent {
                         kind: .vm,
                         pidFilePath: "/run/libvirt/qemu/\(id).pid",
                         resourceLimits: try? BurstableResourceLimits.plan(
-                            resourceClass: entry.spec.resourceClass, guestGrantBytes: entry.spec.memoryBytes,
+                            resourceClass: entry.spec.optionalResourceClass,
+                            guestGrantBytes: entry.spec.memoryBytes,
                             backendOverheadBytes: configuration.qemuMemoryOverheadBytes)))
-            case .firecracker, .appleVirtualization:
+            case .firecracker, .appleVirtualization, .unspecified, .UNRECOGNIZED:
                 // Ordinary Firecracker VMs are unjailed and share the agent's
                 // cgroup. Reporting that host cgroup as per-VM contention
                 // would falsely attribute every sibling process, so absence is
@@ -135,7 +136,8 @@ extension Agent {
                     workloadID: id, kind: .sandbox,
                     directCgroupPath: cgroupPath,
                     resourceLimits: try? BurstableResourceLimits.plan(
-                        resourceClass: entry.sandboxSpec?.resourceClass, guestGrantBytes: entry.spec.memoryBytes,
+                        resourceClass: entry.sandboxSpec.flatMap { $0.optionalResourceClass },
+                        guestGrantBytes: entry.spec.memoryBytes,
                         backendOverheadBytes: WorkloadMemoryReservation.firecrackerOverheadBytes)))
         }
         for (id, entry) in managedSandboxes { appendSandbox(id, entry: entry) }

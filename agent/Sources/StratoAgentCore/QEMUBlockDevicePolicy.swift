@@ -31,6 +31,8 @@ public enum QEMUBlockDevicePolicy {
         let cacheMode: BlockDeviceCacheMode?
         let ioMode: BlockDeviceIOMode?
         switch requestedMode {
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Block policy selection requires a validated mode")
         case .conservative:
             cacheMode = nil
             ioMode = nil

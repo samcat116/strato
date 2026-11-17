@@ -21,8 +21,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // Both NIO packages serve SPIFFEVerification only — StratoShared
-        // itself stays Foundation-only. swift-nio-ssl 2.37.1+ leads its
+        // Both NIO packages serve SPIFFEVerification only. swift-nio-ssl 2.37.1+ leads its
         // default TLS group list with X25519MLKEM768, giving hybrid
         // post-quantum key exchange; do not lower that floor.
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
@@ -31,11 +30,14 @@ let package = Package(
         // SPIFFE SVID chains through this package.
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
-        .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.28.0"),
+        .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.38.1"),
     ],
     targets: [
         .target(
             name: "StratoShared",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf")
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("InferIsolatedConformances"),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
@@ -60,8 +62,8 @@ let package = Package(
         ),
         // Protobuf messages shared by the agent's SPIRE clients and the
         // control plane's SPIRE server client. Keeping these in one target
-        // removes two generated copies while StratoShared remains
-        // Foundation-only.
+        // removes two generated copies without exposing SPIFFE API messages
+        // through StratoShared.
         .target(
             name: "SPIFFEKit",
             dependencies: [

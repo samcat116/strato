@@ -443,11 +443,11 @@ struct VMCommandExecutionTests {
 
             #expect(await service.handleRecordedState(state, fromAgentKey: execution.agentKey))
             var frames = await sent.all()
-            #expect(frames.count == 1)
+            try #require(frames.count == 1)
             #expect(frames[0].1 == execution.agentKey)
             #expect(frames[0].0.type == .guestExecRecordedAck)
             let firstAck = try frames[0].0.decode(as: GuestExecRecordedAckMessage.self)
-            #expect(firstAck.sessionId == id.uuidString)
+            #expect(firstAck.sessionID == id.uuidString)
 
             let stored = try #require(try await VMCommandExecution.find(id, on: app.db))
             let payload = try #require(try await VMCommandPayload.find(id, on: app.db))
@@ -634,7 +634,7 @@ struct VMCommandExecutionTests {
             #expect(stored.status == .pending)
             #expect(payload.stdout == nil)
             let frames = await sent.all()
-            #expect(frames.count == 1)
+            try #require(frames.count == 1)
             #expect(frames[0].1 == wrongAgent)
             #expect(frames[0].0.type == .guestExecRecordedAck)
         }
@@ -659,9 +659,8 @@ struct VMCommandExecutionTests {
                 sessionId: id.uuidString,
                 revision: 1,
                 status: .exited,
-                stdout: "not-base64!",
-                stderr: "",
-                exitCode: 0,
+                rawStdout: Data(),
+                rawStderr: Data(),
                 truncated: false)
 
             #expect(
@@ -686,10 +685,10 @@ struct VMCommandExecutionTests {
             #expect(payload.exitCode == nil)
             #expect(payload.truncated == true)
             let frames = await sent.all()
-            #expect(frames.count == 1)
+            try #require(frames.count == 1)
             #expect(frames[0].0.type == .guestExecRecordedAck)
             let ack = try frames[0].0.decode(as: GuestExecRecordedAckMessage.self)
-            #expect(ack.sessionId == id.uuidString)
+            #expect(ack.sessionID == id.uuidString)
         }
     }
 
@@ -709,17 +708,18 @@ struct VMCommandExecutionTests {
                 sessionId: id.uuidString,
                 revision: 1,
                 status: .running,
-                stdout: "not-base64!",
-                stderr: "",
+                rawStdout: Data(),
+                rawStderr: Data(),
+                exitCode: 0,
                 truncated: false)
 
             #expect(await service.handleRecordedState(malformed, fromAgentKey: agentKey))
 
             let frames = await sent.all()
-            #expect(frames.count == 1)
+            try #require(frames.count == 1)
             #expect(frames[0].0.type == .guestExecClose)
             let close = try frames[0].0.decode(as: GuestExecCloseMessage.self)
-            #expect(close.sessionId == id.uuidString)
+            #expect(close.sessionID == id.uuidString)
             #expect(close.reason == "recorded command reported malformed running state")
         }
     }
@@ -747,10 +747,10 @@ struct VMCommandExecutionTests {
             #expect(await service.handleRecordedState(state, fromAgentKey: agentKey))
 
             let frames = await sent.all()
-            #expect(frames.count == 1)
+            try #require(frames.count == 1)
             #expect(frames[0].0.type == .guestExecClose)
             let close = try frames[0].0.decode(as: GuestExecCloseMessage.self)
-            #expect(close.sessionId == id.uuidString)
+            #expect(close.sessionID == id.uuidString)
         }
     }
 

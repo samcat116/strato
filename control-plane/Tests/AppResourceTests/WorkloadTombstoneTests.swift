@@ -116,10 +116,10 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == 7)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones.count == 1)
-            #expect(sync.tombstones[0].workloadId == strayId)
-            #expect(sync.tombstones[0].kind == .vm)
-            #expect(sync.tombstones[0].generation == 7)
+            #expect(sync.tombstones.values.count == 1)
+            #expect(sync.tombstones.values[0].workloadID == strayId.uuidString)
+            #expect(sync.tombstones.values[0].kind == .vm)
+            #expect(sync.tombstones.values[0].generation == 7)
         }
     }
 
@@ -151,7 +151,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == nil)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones.isEmpty)
+            #expect(sync.tombstones.values.isEmpty)
             // And the VM itself is untouched — no teardown, no error status.
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status != .error)
@@ -203,7 +203,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == nil)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones.isEmpty)
+            #expect(sync.tombstones.values.isEmpty)
 
             // The row itself survives with attribution nulled, replica intact.
             let survivor = try #require(await Volume.find(volumeID, on: app.db))
@@ -242,7 +242,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].placedOnAgentId == oldId)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: newId)
-            #expect(sync.tombstones.isEmpty)
+            #expect(sync.tombstones.values.isEmpty)
         }
     }
 
@@ -269,7 +269,7 @@ final class WorkloadTombstoneTests {
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones.isEmpty)
+            #expect(sync.tombstones.values.isEmpty)
         }
     }
 
@@ -318,8 +318,8 @@ final class WorkloadTombstoneTests {
 
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones.isEmpty)
-            #expect(sync.vms.map(\.vmId) == [vmID])
+            #expect(sync.tombstones.values.isEmpty)
+            #expect(sync.vms.values.map(\.vmID) == [vmID.uuidString])
         }
     }
 
@@ -521,7 +521,7 @@ final class WorkloadTombstoneTests {
             // sync rather than as something it holds unaccounted for.
             #expect(try await self.claims(for: newId, on: app).isEmpty)
             let sync = try await app.desiredStateAssembler.assemble(agentId: newId)
-            #expect(sync.vms.map(\.vmId) == [try held.requireID()])
+            #expect(sync.vms.values.map(\.vmID) == [try held.requireID().uuidString])
         }
     }
 

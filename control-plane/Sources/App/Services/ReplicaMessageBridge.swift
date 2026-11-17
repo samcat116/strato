@@ -8,7 +8,7 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
     /// Queue one already-encoded agent message on a socket held by this
     /// process. Recorded VM commands use delivery acknowledgement only; their
     /// eventual result arrives as the ordinary guest-exec stream.
-    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws
+    func deliverAgentFrame(_ frame: Data, agentKey: String) async throws
 
     /// Act on a broadcast doorbell for `agentKey` by waking a poll parked here.
     /// A replica that holds no such poll does nothing, which is the common case
@@ -119,7 +119,7 @@ actor ReplicaMessageBridge {
         let rpcId: String
         let replyChannel: String
         let agentKey: String
-        let envelope: MessageEnvelope?
+        let frame: Data?
         var disconnect: Bool? = nil
     }
 
@@ -165,7 +165,7 @@ actor ReplicaMessageBridge {
 
     func deliver(_ envelope: MessageEnvelope, agentKey: String) async throws {
         if app.websocketManager.getConnection(agentKey: agentKey) != nil, let delegate {
-            try await delegate.deliverAgentEnvelope(envelope, agentKey: agentKey)
+            try await delegate.deliverAgentFrame(WireProtocol.encodeEnvelope(envelope), agentKey: agentKey)
             return
         }
 
@@ -175,26 +175,26 @@ actor ReplicaMessageBridge {
             throw DeliveryError.agentNotConnected(agentKey)
         }
 
-        try await sendRequest(agentKey: agentKey, replicaId: replicaId, envelope: envelope)
+        try await sendRequest(agentKey: agentKey, replicaId: replicaId, frame: WireProtocol.encodeEnvelope(envelope))
     }
 
     func disconnectAgent(agentKey: String, owner: String?) async throws {
         if let owner, owner != app.replicaID {
-            try await sendRequest(agentKey: agentKey, replicaId: owner, envelope: nil, disconnect: true)
+            try await sendRequest(agentKey: agentKey, replicaId: owner, frame: nil, disconnect: true)
         } else {
             await delegate?.disconnectLocalAgent(agentKey: agentKey)
         }
     }
 
     private func sendRequest(
-        agentKey: String, replicaId: String, envelope: MessageEnvelope?, disconnect: Bool = false
+        agentKey: String, replicaId: String, frame: Data?, disconnect: Bool = false
     ) async throws {
         let rpcId = UUID().uuidString
         let request = AgentDeliveryRequest(
             rpcId: rpcId,
             replyChannel: CoordinationService.rpcReplyChannel(replicaId: app.replicaID),
             agentKey: agentKey,
-            envelope: envelope, disconnect: disconnect)
+            frame: frame, disconnect: disconnect)
         let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
 
         try await withCheckedThrowingContinuation { continuation in
@@ -233,8 +233,8 @@ actor ReplicaMessageBridge {
             guard let delegate else { throw DeliveryError.agentNotConnected(request.agentKey) }
             if request.disconnect == true {
                 await delegate.disconnectLocalAgent(agentKey: request.agentKey)
-            } else if let envelope = request.envelope {
-                try await delegate.deliverAgentEnvelope(envelope, agentKey: request.agentKey)
+            } else if let frame = request.frame {
+                try await delegate.deliverAgentFrame(frame, agentKey: request.agentKey)
             } else {
                 throw DeliveryError.remote("Missing agent delivery envelope")
             }

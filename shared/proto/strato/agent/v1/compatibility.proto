@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package strato.agent.v1;
+
+// Protocol understanding only. Host hardware and runtime availability are
+// advertised separately and never inferred from this offer.
+message ProtocolOffer {
+  optional uint32 major = 1;
+  repeated string capabilities = 2;
+}
+
+// Bound to one accepted registration; reconnecting creates a new agreement.
+message ProtocolAgreement {
+  optional uint32 major = 1;
+  repeated string capabilities = 2;
+  optional string inventory_session_id = 3;
+}
+
+// Required behavior must be checked before applying any part of a message.
+// Capabilities are immutable identifiers, not an ordered version range.
+message ProtocolRequirements {
+  repeated string capabilities = 1;
+}

@@ -9,6 +9,28 @@ import VaporTesting
 
 @Suite("VM guest configuration", .serialized, .postgresFixture)
 struct VMGuestConfigurationTests {
+    @Test("Absent service enablement remains unknown while explicit false is a fact")
+    func generatedServicePresenceRemainsVisible() throws {
+        let vm = VM()
+        vm.generation = 3
+        vm.hypervisorId = "config-node"
+        vm.setFixtureDesiredStatus(.running)
+        vm.setStatus(.running)
+        vm.guestConfig = GuestConfig(services: [.init(name: "sshd", enabled: false)])
+        func present(_ enabled: Bool?) -> [VMGuestConfigurationItem] {
+            let report = GuestConfigObservation(
+                generation: vm.generation, status: .failed, error: "failure", packages: [], files: [],
+                services: [.init(name: "sshd", enabled: enabled, activeState: nil)], sysctls: [])
+            vm.guestConfigEvidence = .init(
+                observation: report, agentID: "config-node", receivedAt: Date(), available: true)
+            return VMGuestConfigPresentation.items(vm, agentOnline: true)
+        }
+        let unknown = try #require(present(nil).first)
+        #expect(unknown.state == .unknown && unknown.observed == nil)
+        let disabled = try #require(present(false).first)
+        #expect(disabled.state == .matched && disabled.observed?.contains("disabled at boot") == true)
+    }
+
     private func withFixture(_ test: (Application, User, VM, String) async throws -> Void) async throws {
         let app = try await Application.makeForTesting()
         do {
@@ -51,7 +73,7 @@ struct VMGuestConfigurationTests {
                 try await mutation.replace(
                     config, on: vm, actor: .user(try user.requireID()), context: nil, db: app.db, app: app))
             #expect(accepted.targetGeneration == generation + 1)
-            let reordered = GuestConfig(packages: Array(config.packages.reversed()), files: config.files)
+            let reordered = GuestConfig(packages: Array(config.packages.values.reversed()), files: config.files.values)
             #expect(
                 try await mutation.replace(
                     reordered, on: vm, actor: .user(try user.requireID()), context: nil, db: app.db, app: app) == nil)
@@ -64,7 +86,7 @@ struct VMGuestConfigurationTests {
             #expect(vm.guestConfig == nil)
             #expect(
                 try await mutation.replace(
-                    GuestConfig(), on: vm, actor: .user(try user.requireID()), context: nil, db: app.db, app: app)
+                    GuestConfig.empty, on: vm, actor: .user(try user.requireID()), context: nil, db: app.db, app: app)
                     == nil)
             #expect(vm.generation == generation + 2)
             await app.backgroundTasks.drain(timeout: .seconds(10))
@@ -92,8 +114,8 @@ struct VMGuestConfigurationTests {
                     actor: .user(try user.requireID()), context: nil, db: app.db, app: app))
             #expect(second.targetGeneration == first.targetGeneration + 1)
             #expect(stale.observedGeneration == first.targetGeneration)
-            #expect(stale.guestConfig?.packages.isEmpty == true)
-            #expect(stale.guestConfig?.services.count == 1)
+            #expect(stale.guestConfig?.packages.values.isEmpty == true)
+            #expect(stale.guestConfig?.services.values.count == 1)
         }
     }
 
@@ -277,7 +299,8 @@ struct VMGuestConfigurationTests {
     {
         let observed = ObservedVMState(
             vmId: try vm.requireID(), status: status, observedGeneration: vm.generation,
-            lastError: report?.error, failedGeneration: report?.status == .failed ? report?.generation : nil,
+            lastError: report.flatMap { $0.hasError ? $0.error : nil },
+            failedGeneration: report?.status == .failed ? report?.generation : nil,
             guestConfigObservation: report)
         let instant = try await ClusterClock.read(on: app.db)
         let applier = ObservedStateApplier(app: app)
@@ -832,7 +855,7 @@ struct VMGuestConfigurationTests {
             let b = try #require(
                 try await mutation.replace(second, on: vm, actor: .user(user.id!), context: nil, db: app.db, app: app))
             #expect(b.targetGeneration == a.targetGeneration + 1)
-            #expect(Array(vm.guestConfig!.files[0].content.utf8) == Array(decomposed.utf8))
+            #expect(Array(vm.guestConfig!.files.values[0].content.utf8) == Array(decomposed.utf8))
             let pathConfig = GuestConfig(files: [.init(path: "/etc/\(composed)", content: "same", mode: "0600")])
             let aliased = try observation([
                 "files": [

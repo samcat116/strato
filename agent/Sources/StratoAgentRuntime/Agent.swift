@@ -390,6 +390,7 @@ actor Agent {
     var svidManager: SVIDManager?
 
     var desiredStatePoller: DesiredStatePoller<ContinuousClock>?
+    var protocolAgreement: Strato_Agent_V1_ProtocolAgreement?
 
     // Set when a failure is unrecoverable (e.g. the agent's identity was
     // rejected); start() rethrows it so the process exits non-zero instead

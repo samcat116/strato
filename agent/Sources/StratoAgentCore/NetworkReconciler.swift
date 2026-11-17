@@ -513,16 +513,16 @@ public enum NetworkReconciler {
         // Sorted by (name, id): names are unique only within a project (issue
         // #765), so name alone is not a total order and Swift's sort is not
         // stable — two same-named networks would order arbitrarily.
-        let sorted = networks.sorted { ($0.name, $0.networkId.uuidString) < ($1.name, $1.networkId.uuidString) }
+        let sorted = networks.sorted { ($0.name, $0.networkID) < ($1.name, $1.networkID) }
 
         let switches = sorted.map { network -> DesiredSwitch in
-            let switchName = OVNNaming.switchName(networkId: network.networkId)
+            let switchName = OVNNaming.switchName(networkId: validatedProtocolUUID(network.networkID))
             let serviceLocalPort =
                 network.metadataEnabled
                 ? DesiredServiceLocalPort(
-                    name: OVNNaming.serviceLocalPortName(networkId: network.networkId),
+                    name: OVNNaming.serviceLocalPortName(networkId: validatedProtocolUUID(network.networkID)),
                     switchName: switchName,
-                    mac: OVNNaming.serviceLocalPortMAC(networkId: network.networkId),
+                    mac: OVNNaming.serviceLocalPortMAC(networkId: validatedProtocolUUID(network.networkID)),
                     ips: InstanceMetadataEndpoint.addresses)
                 : nil
             // The resolver's own localport, carrying this network's distinct
@@ -531,14 +531,14 @@ public enum NetworkReconciler {
             // when the control plane has actually allocated the pair — an
             // address it has not committed to is one no agent should publish.
             var resolverPort: DesiredServiceLocalPort?
-            if network.resolverEnabled == true, let addresses = network.resolverAddresses,
-                !addresses.isEmpty
+            if network.resolverEnabled, network.hasResolverAddresses,
+                !network.resolverAddresses.values.isEmpty
             {
                 resolverPort = DesiredServiceLocalPort(
-                    name: OVNNaming.resolverPortName(networkId: network.networkId),
+                    name: OVNNaming.resolverPortName(networkId: validatedProtocolUUID(network.networkID)),
                     switchName: switchName,
-                    mac: OVNNaming.resolverPortMAC(networkId: network.networkId),
-                    ips: addresses)
+                    mac: OVNNaming.resolverPortMAC(networkId: validatedProtocolUUID(network.networkID)),
+                    ips: network.resolverAddresses.values)
             }
             return DesiredSwitch(
                 name: switchName, subnet: network.subnet,
@@ -563,19 +563,19 @@ public enum NetworkReconciler {
                 // stays derived from the v4 gateway (v4 remains mandatory) —
                 // rederiving it would rewrite every existing port's MAC on
                 // upgrade and invalidate guest neighbor caches.
-                guard let gateway = network.gateway,
+                guard network.hasGateway,
                     let prefix = prefixLength(ofCIDR: network.subnet),
-                    let mac = OVNNaming.routerPortMAC(gateway: gateway)
+                    let mac = OVNNaming.routerPortMAC(gateway: network.gateway)
                 else { continue }
 
                 // Dual-stack: the same port carries the v6 gateway and sends
                 // RAs. Unparsable v6 config degrades the port to v4-only —
                 // never drops it (v4 service must survive a bad v6 edit).
-                var cidrs = ["\(gateway)/\(prefix)"]
+                var cidrs = ["\(network.gateway)/\(prefix)"]
                 var raConfigs: [String: String]?
                 var snatSubnet6: String?
-                if let subnet6 = network.subnet6, let gateway6 = network.gateway6,
-                    let cidr6 = IPv6CIDR(subnet6), let gw6 = IPv6Address(gateway6),
+                if network.hasSubnet6, network.hasGateway6,
+                    let cidr6 = IPv6CIDR(network.subnet6), let gw6 = IPv6Address(network.gateway6),
                     cidr6.contains(gw6)
                 {
                     cidrs.append("\(gw6)/\(cidr6.prefix)")
@@ -585,9 +585,10 @@ public enum NetworkReconciler {
 
                 ports.append(
                     DesiredRouterPort(
-                        name: OVNNaming.routerPortName(networkId: network.networkId),
-                        switchName: OVNNaming.switchName(networkId: network.networkId),
-                        switchPortName: OVNNaming.switchRouterPortName(networkId: network.networkId),
+                        name: OVNNaming.routerPortName(networkId: validatedProtocolUUID(network.networkID)),
+                        switchName: OVNNaming.switchName(networkId: validatedProtocolUUID(network.networkID)),
+                        switchPortName: OVNNaming.switchRouterPortName(
+                            networkId: validatedProtocolUUID(network.networkID)),
                         mac: mac,
                         cidrs: cidrs,
                         ipv6RAConfigs: raConfigs))
@@ -609,11 +610,11 @@ public enum NetworkReconciler {
                     // VM's chassis. Gated on `externalAccess` — an isolated
                     // (`-internal`) router must never grow an uplink, and the
                     // control plane rejects attaching to no-egress networks.
-                    for fip in network.floatingIPs {
+                    for fip in network.floatingIPs.values {
                         let logicalPort: String?
-                        if let vmID = fip.vmId, let nicIndex = fip.nicIndex {
+                        if fip.hasVmID, fip.hasNicIndex {
                             logicalPort = OVNNaming.vmPortName(
-                                vmId: vmID.uuidString, nicIndex: nicIndex)
+                                vmId: fip.vmID, nicIndex: Int(fip.nicIndex))
                         } else {
                             // A floating IP targeting an LB VIP is centralized
                             // router NAT; there is no single backend LSP or MAC
@@ -622,11 +623,11 @@ public enum NetworkReconciler {
                         }
                         dnatRules.append(
                             DesiredDNATRule(
-                                externalIP: fip.externalIP,
-                                logicalIP: fip.logicalIP,
+                                externalIP: fip.externalIp,
+                                logicalIP: fip.logicalIp,
                                 logicalPort: logicalPort,
                                 externalMAC: logicalPort == nil
-                                    ? nil : OVNNaming.floatingIPMAC(externalIP: fip.externalIP)))
+                                    ? nil : OVNNaming.floatingIPMAC(externalIP: fip.externalIp)))
                     }
                 }
             }
@@ -656,9 +657,10 @@ public enum NetworkReconciler {
         var protected = ProtectedTopology()
         for network in stale {
             let routerName = OVNNaming.routerName(routerKey: network.routerKey)
-            protected.routerPortNames.insert(OVNNaming.routerPortName(networkId: network.networkId))
+            protected.routerPortNames.insert(
+                OVNNaming.routerPortName(networkId: validatedProtocolUUID(network.networkID)))
             protected.switchRouterPortNames.insert(
-                OVNNaming.switchRouterPortName(networkId: network.networkId))
+                OVNNaming.switchRouterPortName(networkId: validatedProtocolUUID(network.networkID)))
             protected.routerNames.insert(routerName)
             protected.externalSwitchNames.insert(OVNNaming.externalSwitchName(routerKey: network.routerKey))
             protected.routerPortNames.insert(OVNNaming.externalRouterPortName(routerKey: network.routerKey))
@@ -669,13 +671,13 @@ public enum NetworkReconciler {
             // parsing alone — a superset of the condition that plans the rule —
             // because over-protecting only defers a teardown, while
             // under-protecting drops a stale network's live egress.
-            if let subnet6 = network.subnet6, let cidr6 = IPv6CIDR(subnet6) {
+            if network.hasSubnet6, let cidr6 = IPv6CIDR(network.subnet6) {
                 protected.snatRules.insert(SNATRuleKey(router: routerName, logicalIP: cidr6.description))
             }
             // A stale network's floating IPs keep their live NAT rules, on the
             // same over-protection-is-safe terms as SNAT.
-            for fip in network.floatingIPs {
-                protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIP))
+            for fip in network.floatingIPs.values {
+                protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIp))
             }
             // A stale network keeps *both* its localports, unconditionally
             // rather than only when the matching flag is set: over-protection
@@ -684,8 +686,10 @@ public enum NetworkReconciler {
             // separate rows since ADR 0008 — and the resolver is the costlier
             // of the two to drop, since a guest whose resolver address stops
             // answering ARP loses external name resolution as well as internal.
-            protected.serviceLocalPortNames.insert(OVNNaming.serviceLocalPortName(networkId: network.networkId))
-            protected.serviceLocalPortNames.insert(OVNNaming.resolverPortName(networkId: network.networkId))
+            protected.serviceLocalPortNames.insert(
+                OVNNaming.serviceLocalPortName(networkId: validatedProtocolUUID(network.networkID)))
+            protected.serviceLocalPortNames.insert(
+                OVNNaming.resolverPortName(networkId: validatedProtocolUUID(network.networkID)))
         }
         return protected
     }
@@ -705,9 +709,9 @@ public enum NetworkReconciler {
     /// Pass the networks the sync applied (the same list handed to `plan`).
     public static func serviceLocalPortProtection(for networks: [DesiredNetworkState]) -> ProtectedTopology {
         var protected = ProtectedTopology()
-        for network in networks where network.resolverEnabled == nil {
+        for network in networks where !network.hasResolverEnabled {
             protected.serviceLocalPortNames.insert(
-                OVNNaming.resolverPortName(networkId: network.networkId))
+                OVNNaming.resolverPortName(networkId: validatedProtocolUUID(network.networkID)))
         }
         return protected
     }
@@ -788,7 +792,10 @@ public enum NetworkReconciler {
     private static func switchOwners(
         _ switchName: String, in networks: [DesiredNetworkState]
     ) -> Set<UUID> {
-        Set(networks.filter { OVNNaming.switchName(networkId: $0.networkId) == switchName }.map(\.networkId))
+        Set(
+            networks.filter { OVNNaming.switchName(networkId: validatedProtocolUUID($0.networkID)) == switchName }.map {
+                validatedProtocolUUID($0.networkID)
+            })
     }
 
     private static func routerOwners(
@@ -798,11 +805,11 @@ public enum NetworkReconciler {
             networks.filter { network in
                 guard
                     OVNNaming.routerName(routerKey: network.routerKey) == routerName,
-                    let gateway = network.gateway
+                    network.hasGateway
                 else { return false }
-                return OVNNaming.routerPortMAC(gateway: gateway) != nil
+                return OVNNaming.routerPortMAC(gateway: network.gateway) != nil
                     && prefixLength(ofCIDR: network.subnet) != nil
-            }.map(\.networkId))
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     /// Retired router-scoped rows have already disappeared from the desired
@@ -814,7 +821,7 @@ public enum NetworkReconciler {
         Set(
             networks.filter {
                 OVNNaming.routerName(routerKey: $0.routerKey) == routerName
-            }.map(\.networkId))
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     private static func routerPortOwners(
@@ -822,15 +829,15 @@ public enum NetworkReconciler {
     ) -> Set<UUID> {
         let direct = Set(
             networks.filter {
-                OVNNaming.routerPortName(networkId: $0.networkId) == portName
-                    || OVNNaming.switchRouterPortName(networkId: $0.networkId) == portName
-            }.map(\.networkId))
+                OVNNaming.routerPortName(networkId: validatedProtocolUUID($0.networkID)) == portName
+                    || OVNNaming.switchRouterPortName(networkId: validatedProtocolUUID($0.networkID)) == portName
+            }.map { validatedProtocolUUID($0.networkID) })
         if !direct.isEmpty { return direct }
         return Set(
             networks.filter {
                 OVNNaming.externalRouterPortName(routerKey: $0.routerKey) == portName
                     || OVNNaming.externalSwitchRouterPortName(routerKey: $0.routerKey) == portName
-            }.map(\.networkId))
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     private static func servicePortOwners(
@@ -838,9 +845,9 @@ public enum NetworkReconciler {
     ) -> Set<UUID> {
         Set(
             networks.filter {
-                OVNNaming.serviceLocalPortName(networkId: $0.networkId) == portName
-                    || OVNNaming.resolverPortName(networkId: $0.networkId) == portName
-            }.map(\.networkId))
+                OVNNaming.serviceLocalPortName(networkId: validatedProtocolUUID($0.networkID)) == portName
+                    || OVNNaming.resolverPortName(networkId: validatedProtocolUUID($0.networkID)) == portName
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     private static func snatOwners(
@@ -850,8 +857,8 @@ public enum NetworkReconciler {
             networks.filter { network in
                 guard OVNNaming.routerName(routerKey: network.routerKey) == router else { return false }
                 if network.subnet == logicalIP { return true }
-                return network.subnet6.flatMap(IPv6CIDR.init)?.description == logicalIP
-            }.map(\.networkId))
+                return network.hasSubnet6 && IPv6CIDR(network.subnet6)?.description == logicalIP
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     private static func dnatOwners(
@@ -860,8 +867,8 @@ public enum NetworkReconciler {
         Set(
             networks.filter { network in
                 OVNNaming.routerName(routerKey: network.routerKey) == router
-                    && network.floatingIPs.contains { $0.externalIP == externalIP }
-            }.map(\.networkId))
+                    && network.floatingIPs.values.contains { $0.externalIp == externalIP }
+            }.map { validatedProtocolUUID($0.networkID) })
     }
 
     /// An uplink exists only for the networks that contributed NAT to this
@@ -894,7 +901,7 @@ public enum NetworkReconciler {
             return Set(
                 networks.filter {
                     OVNNaming.externalSwitchName(routerKey: $0.routerKey) == name
-                }.map(\.networkId))
+                }.map { validatedProtocolUUID($0.networkID) })
         case .router(let name):
             return routerIdentityOwners(name, in: networks)
         }
@@ -969,6 +976,7 @@ extension NetworkReconciler {
         logger: Logger,
         protected: ProtectedTopology = ProtectedTopology()
     ) async throws -> [ReconcileStepFailure] {
+        for network in networks { try network.validateProtocol() }
         let topology = plan(networks: networks)
         var failures: [ReconcileStepFailure] = []
 

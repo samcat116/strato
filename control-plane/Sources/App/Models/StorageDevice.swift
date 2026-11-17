@@ -53,7 +53,7 @@ final class StorageDevice: Model, @unchecked Sendable {
     @Enum(key: "role")
     var role: StorageDeviceRole
 
-    @Enum(key: "state")
+    @ProtocolEnum(key: "state")
     var state: StorageDeviceState
 
     @OptionalField(key: "osd_id")
@@ -93,7 +93,7 @@ final class StorageDevice: Model, @unchecked Sendable {
     ) {
         self.id = id
         self.$agent.id = agentID
-        self.identityKind = identityKind?.rawValue
+        self.identityKind = identityKind?.protocolValue
         self.identityValue = identityValue
         self.devicePath = devicePath
         self.sizeBytes = sizeBytes

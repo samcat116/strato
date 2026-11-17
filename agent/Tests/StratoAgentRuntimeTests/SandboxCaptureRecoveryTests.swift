@@ -34,7 +34,7 @@ struct SandboxCaptureRecoveryTests {
         if legacyDebris {
             #expect(!raw.inventoryKnown)
             #expect(!raw.diskInventoryKnown)
-            #expect(resources.availableCPU == 0)
+            #expect(resources.availableCpu == 0)
             #expect(resources.availableMemory == 0)
             #expect(resources.availableDisk == 0)
         } else {
@@ -68,7 +68,7 @@ struct SandboxCaptureRecoveryTests {
         if unknown {
             #expect(!raw.inventoryKnown)
             #expect(!raw.diskInventoryKnown)
-            #expect(resources.availableCPU == 0)
+            #expect(resources.availableCpu == 0)
             #expect(resources.availableMemory == 0)
             #expect(resources.availableDisk == 0)
         } else {
@@ -128,8 +128,8 @@ struct SandboxCaptureRecoveryTests {
         if phase == .resumed {
             let archive = root.appendingPathComponent("archives/checkpoint")
             try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-            for kind in SandboxSnapshotArtifactKind.allCases {
-                try Data("fixture-\(kind.rawValue)".utf8).write(to: archive.appendingPathComponent(kind.filename))
+            for kind in SandboxSnapshotArtifactKind.knownCases {
+                try Data("fixture-\(kind.protocolValue)".utf8).write(to: archive.appendingPathComponent(kind.filename))
             }
             record.checkpoint = try SandboxCheckpointManifest.publish(
                 directory: archive.path, sandboxId: id.uuidString, snapshotId: record.snapshotId.uuidString,

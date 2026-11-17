@@ -32,8 +32,8 @@ extension Agent {
         }
 
         if manifestAbsent {
-            guard desired.vms.isEmpty, desired.sandboxes.isEmpty, desired.volumes.isEmpty,
-                desired.snapshots.isEmpty, desired.tombstones.isEmpty
+            guard desired.vms.values.isEmpty, desired.sandboxes.values.isEmpty, desired.volumes.values.isEmpty,
+                desired.snapshots.values.isEmpty, desired.tombstones.values.isEmpty
             else {
                 quarantineMissingManifest(
                     "is missing but the control plane still has workloads, volumes, snapshots or tombstones for this host"
@@ -71,7 +71,7 @@ extension Agent {
         // from a missing file: a full desired sync must first confirm there
         // are no snapshot rows (including pending deletions) to preserve.
         // With an unknown workload inventory we cannot safely capture either.
-        if snapshotInventoryAbsent, manifestReadFailure == nil, desired.snapshots.isEmpty {
+        if snapshotInventoryAbsent, manifestReadFailure == nil, desired.snapshots.values.isEmpty {
             let latest = snapshotRecordStore.load()
             if case .absent = latest {
                 guard snapshotRecordStore.save([:]) else { return }
@@ -94,7 +94,7 @@ extension Agent {
         // check below instead. Simulation has no surviving host processes.
         let types: [HypervisorType]
         if isSimulationMode {
-            types = HypervisorType.allCases
+            types = HypervisorType.knownCases
         } else {
             #if os(macOS)
             types = [.appleVirtualization]
@@ -112,10 +112,11 @@ extension Agent {
                     needsLibvirtFilesystemProof = true
                     continue
                 }
-                throw MissingInventoryEvidence("\(type.rawValue) inventory is unavailable")
+                throw MissingInventoryEvidence("\(type.protocolValue) inventory is unavailable")
             }
             guard ids.isEmpty else {
-                throw MissingInventoryEvidence("\(type.rawValue) still holds \(ids.sorted().joined(separator: ", "))")
+                throw MissingInventoryEvidence(
+                    "\(type.protocolValue) still holds \(ids.sorted().joined(separator: ", "))")
             }
         }
         guard let storageBackends else { throw MissingInventoryEvidence("storage inventory is unavailable") }

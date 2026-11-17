@@ -553,17 +553,18 @@ actor VMCommandExecutionService {
     func handleRecordedState(
         _ message: GuestExecRecordedStateMessage, fromAgentKey agentKey: String
     ) async -> Bool {
-        guard let id = UUID(uuidString: message.sessionId) else { return false }
-        guard app.guestExecSessionManager.getSession(sessionId: message.sessionId) == nil else {
+        do { try message.validateProtocol() } catch { return false }
+        guard let id = UUID(uuidString: message.sessionID) else { return false }
+        guard app.guestExecSessionManager.getSession(sessionId: message.sessionID) == nil else {
             return false
         }
         guard var capture = capture(from: message, agentKey: agentKey) else {
             app.logger.warning(
                 "Received malformed recorded VM command state",
                 metadata: [
-                    "executionId": .string(message.sessionId),
+                    "executionId": .string(message.sessionID),
                     "agentKey": .string(agentKey),
-                    "status": .string(message.status.rawValue),
+                    "status": .string(message.status.protocolValue),
                 ])
             // The agent cannot repair an invariant violation in an immutable
             // terminal snapshot. Convert it into an explicit, truncated
@@ -664,7 +665,8 @@ actor VMCommandExecutionService {
             return true
 
         case .exited:
-            guard let exitCode = message.exitCode else { return true }
+            guard message.hasExitCode else { return true }
+            let exitCode = Int(message.exitCode)
             do {
                 let outcome = try await complete(
                     id: id, capture: capture, exitCode: exitCode)
@@ -695,7 +697,7 @@ actor VMCommandExecutionService {
             do {
                 let outcome = try await persistClosed(
                     id: id, capture: capture,
-                    reason: message.reason ?? "Guest command session closed without an exit code")
+                    reason: message.hasReason ? message.reason : "Guest command session closed without an exit code")
                 if outcome == .discarded {
                     app.logger.warning(
                         "Discarded recorded VM command close for an unknown or differently owned execution",
@@ -717,6 +719,8 @@ actor VMCommandExecutionService {
                     ])
             }
             return true
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
     }
 
@@ -1051,11 +1055,13 @@ actor VMCommandExecutionService {
         let fieldsAreValid: Bool
         switch message.status {
         case .running:
-            fieldsAreValid = message.exitCode == nil && message.reason == nil
+            fieldsAreValid = !message.hasExitCode && !message.hasReason
         case .exited:
-            fieldsAreValid = message.exitCode != nil && message.reason == nil
+            fieldsAreValid = message.hasExitCode && !message.hasReason
         case .closed:
-            fieldsAreValid = message.exitCode == nil && message.reason != nil
+            fieldsAreValid = !message.hasExitCode && message.hasReason
+        case .unspecified, .UNRECOGNIZED:
+            return nil
         }
         guard fieldsAreValid, message.revision >= 0, let stdout = message.rawStdout,
             let stderr = message.rawStderr

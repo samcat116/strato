@@ -209,7 +209,7 @@ extension Agent {
             // a macOS dev box can scale-test Firecracker placement too.
             // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
-            for type in HypervisorType.allCases {
+            for type in HypervisorType.knownCases {
                 hypervisorServices[type] = MockHypervisorService(
                     logger: logger, hypervisorType: type, qemuOverheadBytes: configuration.qemuMemoryOverheadBytes)
             }
@@ -703,7 +703,7 @@ extension Agent {
             } catch {
                 logger.warning(
                     "Hypervisor shutdown exceeded its budget",
-                    metadata: ["hypervisor": .string(type.rawValue)])
+                    metadata: ["hypervisor": .string(type.protocolValue)])
             }
         }
 

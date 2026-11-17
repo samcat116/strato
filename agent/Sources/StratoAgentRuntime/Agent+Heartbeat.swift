@@ -22,6 +22,10 @@ extension Agent {
     func handleConnectionLost() async {
         guard !shutdownRequested else { return }
 
+        protocolAgreement = nil
+        let stoppedPoller = desiredStatePoller
+        desiredStatePoller = nil
+
         interactiveSessionFence.quiesce()
         if let continuation = takeRegistrationContinuation() {
             continuation.resume(
@@ -31,6 +35,7 @@ extension Agent {
 
         guard isRunning else {
             reconnectState.recordStartupConnectionLoss()
+            await stoppedPoller?.stop()
             return
         }
 
@@ -43,6 +48,7 @@ extension Agent {
                 "Control-plane connection dropped during reconnect recovery; the active loop will retry")
         }
 
+        await stoppedPoller?.stop()
         await quiesceConnectionScopedState()
         guard disposition == .startLoop else { return }
         guard isRunning else {
@@ -158,8 +164,9 @@ extension Agent {
     }
 
     func _sendHeartbeat() async throws {
-        // Only send heartbeat if we have an assigned ID from registration
-        guard assignedAgentID != nil else {
+        // Reconnect retains the assigned ID, but the new socket must finish
+        // protocol negotiation before any workload messages can be sent.
+        guard assignedAgentID != nil, let agreement = protocolAgreement else {
             logger.debug("Skipping heartbeat - not yet registered")
             return
         }
@@ -187,6 +194,7 @@ extension Agent {
             hostResourceTelemetry: hostResourceTelemetry
         )
 
+        guard protocolAgreement?.inventorySessionID == agreement.inventorySessionID else { return }
         if let client = websocketClient {
             try await client.sendMessage(message)
         }
@@ -385,10 +393,10 @@ extension Agent {
                 let admitted = managedVMs.merging(orphanedVMs) { managed, _ in managed }
                     .reduce(into: [String: WorkloadAdmittedReservation]()) { result, pair in
                         guard pair.value.hypervisorType == type,
-                            pair.value.spec.resourceClass?.policy.kind == .burstable,
-                            let commitment = pair.value.spec.admittedReservation
+                            pair.value.spec.hasResourceClass, pair.value.spec.resourceClass.policy.kind == .burstable,
+                            pair.value.spec.hasAdmittedReservation
                         else { return }
-                        result[pair.key] = commitment
+                        result[pair.key] = pair.value.spec.admittedReservation
                     }
                 let observed = rawObserved.accountingForAdmittedWorkloads(admitted)
                 // A daemon inventory with membership can also prove that a
@@ -482,7 +490,7 @@ extension Agent {
                     memoryBytes: WorkloadMemoryReservation(
                         guestBytes: entry.memoryBytes,
                         backendOverheadBytes: entry.effectiveKind == .sandbox
-                            || entry.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue
+                            || entry.hypervisorTypeRawValue == HypervisorType.firecracker.protocolValue
                             ? WorkloadMemoryReservation.firecrackerOverheadBytes : configuration.qemuMemoryOverheadBytes
                     ).effectiveBytes,
                     diskBytes: entry.diskBytes))
@@ -499,8 +507,8 @@ extension Agent {
                 let inventory = try await storageBackends.localInventory()
                 for (volumeId, attachment) in inventory {
                     if configuration.simulation?.enabled != true {
-                        if case .file(let path, _) = attachment {
-                            managedDiskPaths.insert(path)
+                        if case .file(let file) = attachment.value {
+                            managedDiskPaths.insert(file.path)
                         } else {
                             diskInventoryKnown = false
                             logger.warning(
@@ -528,13 +536,13 @@ extension Agent {
             diskInventoryKnown = false
         }
 
-        for entry in managedVMs.values where entry.spec.volumes.isEmpty {
+        for entry in managedVMs.values where entry.spec.volumes.values.isEmpty {
             reserved = reserved.addingSaturating(
-                HostReservation(diskBytes: entry.spec.diskBytes ?? 0))
+                HostReservation(diskBytes: entry.spec.hasDiskBytes ? entry.spec.diskBytes : 0))
         }
-        for entry in orphanedVMs.values where entry.spec.volumes.isEmpty {
+        for entry in orphanedVMs.values where entry.spec.volumes.values.isEmpty {
             reserved = reserved.addingSaturating(
-                HostReservation(diskBytes: entry.spec.diskBytes ?? 0))
+                HostReservation(diskBytes: entry.spec.hasDiskBytes ? entry.spec.diskBytes : 0))
         }
 
         // An external local qcow2 overlay can eventually consume its parent's
@@ -554,8 +562,8 @@ extension Agent {
                     ?? 0
                 reserved = reserved.addingSaturating(HostReservation(diskBytes: bytes))
                 if configuration.simulation?.enabled != true {
-                    if let path = record.facts.storagePath {
-                        managedDiskPaths.insert(path)
+                    if record.facts.hasStoragePath {
+                        managedDiskPaths.insert(record.facts.storagePath)
                     } else {
                         diskInventoryKnown = false
                         logger.warning(
@@ -762,7 +770,7 @@ extension Agent {
             logger.warning(
                 "Hypervisor did not answer an observation query in time; reporting last known state",
                 metadata: [
-                    "hypervisor": .string(type.rawValue),
+                    "hypervisor": .string(type.protocolValue),
                     "stage": .string(stage),
                 ])
             return nil

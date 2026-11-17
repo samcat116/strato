@@ -127,7 +127,7 @@ private final class BridgeResponseHandler: ChannelInboundHandler {
         headers.add(name: "Host", value: url.host! + (url.port.map { ":\($0)" } ?? ""))
         headers.add(name: "Connection", value: "close")
         headers.add(name: "Accept", value: "application/json")
-        headers.add(name: "Strato-Workload-Wire-Version", value: String(WireProtocol.currentVersion))
+        headers.add(name: "Strato-Workload-Wire-Version", value: String(Int(AgentProtocolCompatibility.major)))
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         let path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
         let uri = path + (components.percentEncodedQuery.map { "?" + $0 } ?? "")

@@ -633,8 +633,8 @@ edge rather than a state, so it became one by being counted:
 `DesiredSandboxState.restore` carries a monotonic generation and the snapshot to
 load, and the agent applies it once against the record it keeps in its own
 durable manifest — a dropped or replayed sync converges rather than rewinding
-the guest twice. The exact-version registration handshake guarantees the owning
-agent understands the edge-nonce field. Restore pins to the snapshot's agent —
+the guest twice. The edge-nonce field is part of the protocol major 1 baseline,
+so every agent that can register understands it. Restore pins to the snapshot's agent —
 until the snapshot is exported (see
 [Snapshot mobility](#snapshot-mobility)) — and flips desired state to
 `running` in the same transaction (IPAM allocations stay held while

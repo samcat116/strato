@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  - local: protoc-gen-swift
+    out: shared/Sources/StratoShared/Generated
+    opt:
+      - Visibility=Public
+      - FileNaming=PathToUnderscores

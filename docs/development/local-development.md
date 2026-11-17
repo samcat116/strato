@@ -12,6 +12,8 @@ operators use.
 - **Swift 6.4 or later** — all six Swift packages declare tools version 6.4.
   CI, remote setup, and Dockerfiles pin Swift 6.4.0. Linux release compilers
   must match the Swift runtime copied from the Docker build image.
+- **Python 3** — for the guest-agent bootstrap fixtures in the shared and agent tests,
+  and protocol validation generation
 - **Bun** — for the frontend in `control-plane/web/` (not npm)
 - **Docker** — only needed to run the full stack
 - **cvc5** — optional locally, needed to run the IAM symbolic-analysis suites
@@ -86,8 +88,8 @@ After checks pass, repeat or broaden them only for new changes, failures, or
 unresolved risks. An explicit request for full validation still means full
 validation.
 
-Swift PR CI compiles production targets; it does not compile or run Swift
-tests. The manual `.github/workflows/main-tests.yaml` runs the full Swift
+Swift PR CI compiles production targets and runs the focused Agent Protocol
+Contract compatibility checks. Broad Swift package suites remain opt-in. The manual `.github/workflows/main-tests.yaml` runs the full Swift
 suite. Frontend and other checks have their own workflow coverage; see
 `.github/workflows/README.md`. Report the actual package,
 platform, and test scope; a build or a macOS run cannot prove Linux VM behavior.

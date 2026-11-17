@@ -108,12 +108,12 @@ enum IPAMService {
         try await lockNetworkAllocation(networkID, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv4.rawValue)
+            .filter(\.$family == IPFamily.ipv4.protocolValue)
             .all()
             .compactMap { parseIPv4($0.address) }
         let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv4.rawValue)
+            .filter(\.$family == IPFamily.ipv4.protocolValue)
             .all()
             .compactMap { parseIPv4($0.address) }
         // Load-balancer VIPs are first-class allocations from this same
@@ -183,12 +183,12 @@ enum IPAMService {
         try await lockNetworkAllocation(networkID, on: db)
         let usedVM = try await VMInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .filter(\.$family == IPFamily.ipv6.protocolValue)
             .all()
             .compactMap { IPv6Address($0.address)?.lo }
         let usedSandbox = try await SandboxInterfaceAddress.query(on: db)
             .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv6.rawValue)
+            .filter(\.$family == IPFamily.ipv6.protocolValue)
             .all()
             .compactMap { IPv6Address($0.address)?.lo }
 

@@ -74,7 +74,7 @@ actor ConsoleSocketManager {
             metadata: [
                 "strato.vm.id": .string(vmId),
                 "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
-                "stream": .string(stream.rawValue),
+                "stream": .string(stream.protocolValue),
                 "socketPath": .string(socketPath),
             ])
 
@@ -143,7 +143,7 @@ actor ConsoleSocketManager {
                 metadata: [
                     "strato.vm.id": .string(vmId),
                     "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
-                    "stream": .string(stream.rawValue),
+                    "stream": .string(stream.protocolValue),
                 ])
         } catch {
             relay.cancel()

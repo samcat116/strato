@@ -148,7 +148,7 @@ struct ImageFetchRedirectTests {
             checksum: "",
             storagePath: ImageObjectKey.artifact(
                 projectId: try project.requireID(), imageId: imageID,
-                kind: ArtifactKind.diskImage.rawValue, filename: "image.qcow2"),
+                kind: ArtifactKind.diskImage.protocolValue, filename: "image.qcow2"),
             status: .pending,
             sourceURL: sourceURL,
             expectedChecksum: expectedChecksum

@@ -7,7 +7,8 @@ public enum QEMUMemoryReservation {
     public static func blockBytes(architecture: CPUArchitecture) -> Int64 {
         switch architecture {
         case .arm64: return 512 * 1024 * 1024
-        case .x86_64: return 2 * 1024 * 1024
+        case .x8664: return 2 * 1024 * 1024
+        case .unspecified, .UNRECOGNIZED: return .max
         }
     }
 
@@ -34,6 +35,7 @@ public enum QEMUMemoryReservation {
     public static func reservedBytes(
         memoryBytes: Int64, maxMemoryBytes: Int64, architecture: CPUArchitecture
     ) -> Int64 {
+        guard CPUArchitecture.knownCases.contains(architecture) else { return .max }
         let hotplug = alignedHotplugBytes(
             memoryBytes: memoryBytes, maxMemoryBytes: maxMemoryBytes, architecture: architecture)
         let (reserved, overflow) = memoryBytes.addingReportingOverflow(hotplug)

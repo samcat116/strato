@@ -1,5 +1,5 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("Cloud-init user-data format detection")

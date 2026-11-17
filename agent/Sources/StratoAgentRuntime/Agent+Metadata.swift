@@ -27,7 +27,7 @@ extension Agent {
     func refreshFirecrackerMetadata(for desired: [DesiredVMState]) async {
         guard let service = hypervisorServices[.firecracker] else { return }
         for vm in desired where vm.hypervisorType == .firecracker {
-            let vmId = vm.vmId.uuidString
+            let vmId = vm.vmID
             guard managedVMs[vmId]?.hypervisorType == .firecracker else { continue }
             await refreshFirecrackerMetadata(vmId: vmId, using: service)
         }
@@ -156,8 +156,8 @@ extension Agent {
             MetadataSnapshot(
                 networkId: networkId, origin: origin,
                 instances: servable.values.filter { instance in
-                    instance.nics.contains { $0.networkId == networkId }
-                }.sorted { $0.instanceId.uuidString < $1.instanceId.uuidString })
+                    instance.nics.values.contains { UUID(uuidString: $0.networkID) == networkId }
+                }.sorted { $0.instanceID < $1.instanceID })
         }
     }
 
@@ -184,11 +184,11 @@ extension Agent {
     ) async throws -> GuestJWTSVIDResponse {
         guard let metadata = await metadataStore.metadata(for: vmId),
             metadata.isServiceEnabled,
-            let policy = metadata.identity,
-            !policy.audiences.isEmpty,
-            policy.audiences.contains(audience),
+            metadata.hasIdentity,
+            !metadata.identity.audiences.values.isEmpty,
+            metadata.identity.audiences.values.contains(audience),
             ttlSeconds > 0,
-            ttlSeconds <= min(900, policy.ttlSeconds ?? 300)
+            ttlSeconds <= min(900, metadata.identity.hasTtlSeconds ? Int(metadata.identity.ttlSeconds) : 300)
         else {
             throw GuestIdentityMintingError.unavailable
         }

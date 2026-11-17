@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("JSONValue dynamic payloads")
 struct JSONValueDynamicPayloadTests {

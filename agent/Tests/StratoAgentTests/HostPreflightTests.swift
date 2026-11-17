@@ -559,8 +559,8 @@ struct HostPreflightTests {
         let gated = report.gate(probes)
 
         #expect(gated[0].available == false)
-        #expect(gated[0].unavailabilityReason?.contains("host storage not ready") == true)
-        #expect(gated[0].unavailabilityReason?.contains("qemu-img") == true)
+        #expect(gated[0].unavailabilityReason.contains("host storage not ready") == true)
+        #expect(gated[0].unavailabilityReason.contains("qemu-img") == true)
         // Already-unavailable probes keep their own (more specific) reason.
         #expect(gated[1].unavailabilityReason == "KVM unavailable")
     }
@@ -584,7 +584,7 @@ struct HostPreflightTests {
 
         #expect(gated[0].available)
         #expect(gated[1].available == false)
-        #expect(gated[1].unavailabilityReason?.contains("cannot create") == true)
+        #expect(gated[1].unavailabilityReason.contains("cannot create") == true)
     }
 
     @Test("Unavailable pidfds gate Firecracker with a host remediation")
@@ -752,8 +752,8 @@ struct HostPreflightTests {
         let gated = HostPreflight.run(inputs).gate([qemu, firecracker])
 
         #expect(gated[0].available == false)
-        #expect(gated[0].unavailabilityReason?.contains("libvirt not usable") == true)
-        #expect(gated[0].supportsVolumeIOLimits == true)
+        #expect(gated[0].unavailabilityReason.contains("libvirt not usable") == true)
+        #expect(gated[0].supportsVolumeIoLimits == true)
         // Only the QEMU driver goes through libvirtd; Firecracker is untouched.
         #expect(gated[1] == firecracker)
 

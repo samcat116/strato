@@ -21,19 +21,19 @@ struct AgentUpdateBridgeController: RouteCollection {
             .first()
         let update = await req.application.desiredStateAssembler.desiredAgentUpdateForSync(agent: agent)
         if let advertised = req.headers.first(name: AgentUpdateBridgeResponse.wireVersionHeader),
-            advertised != String(WireProtocol.currentVersion)
+            advertised != String(Int(AgentProtocolCompatibility.major))
         {
             req.logger.notice(
                 "Agent wire skew: serving update-only exchange; stage an assignment before cutover",
                 metadata: [
                     "strato.agent.identity": .string(authenticated.identity.key),
                     "agentWireVersion": .string(advertised),
-                    "controlPlaneWireVersion": .stringConvertible(WireProtocol.currentVersion),
+                    "controlPlaneWireVersion": .stringConvertible(Int(AgentProtocolCompatibility.major)),
                     "assignedUpdate": .stringConvertible(update != nil),
                 ])
         }
         let data = try JSONEncoder().encode(
-            AgentUpdateBridgeResponse(workloadWireVersion: WireProtocol.currentVersion, update: update))
+            AgentUpdateBridgeResponse(workloadWireVersion: Int(AgentProtocolCompatibility.major), update: update))
         let response = Response(status: .ok, body: .init(data: data))
         response.headers.contentType = .json
         response.headers.cacheControl = HTTPHeaders.CacheControl(noStore: true)

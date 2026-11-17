@@ -51,16 +51,12 @@ public enum SnapshotFootprint {
         _ facts: ObservedSnapshotFacts?, kind: SnapshotArtifactKind,
         measure: (String) -> Int64? = allocatedBytes(at:)
     ) -> ObservedSnapshotFacts? {
-        guard kind == .volumeSnapshot, let facts, let path = facts.storagePath else { return facts }
-        return ObservedSnapshotFacts(
-            sizeBytes: facts.sizeBytes,
-            currentSizeBytes: measure(path),
-            storagePath: facts.storagePath,
-            architecture: facts.architecture,
-            qemuVersion: facts.qemuVersion,
-            firecrackerVersion: facts.firecrackerVersion,
-            guestControlProtocolVersion: facts.guestControlProtocolVersion,
-            forkLayoutVersion: facts.forkLayoutVersion,
-            cpuTemplate: facts.cpuTemplate)
+        guard kind == .volumeSnapshot, var facts, facts.hasStoragePath else { return facts }
+        if let size = measure(facts.storagePath) {
+            facts.currentSizeBytes = size
+        } else {
+            facts.clearCurrentSizeBytes()
+        }
+        return facts
     }
 }

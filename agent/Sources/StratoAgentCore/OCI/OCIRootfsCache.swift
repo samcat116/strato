@@ -338,7 +338,7 @@ public actor OCIRootfsCache {
     private func aliasPath(indexDigest: String, architecture: CPUArchitecture) -> String? {
         guard OCIImageReference.isValidDigest(indexDigest) else { return nil }
         let hex = String(indexDigest.dropFirst("sha256:".count))
-        return aliasesPath + "/" + hex + "." + architecture.rawValue
+        return aliasesPath + "/" + hex + "." + architecture.protocolValue
     }
 
     private func isOlder(path: String, than cutoff: Date) -> Bool {

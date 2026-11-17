@@ -85,19 +85,26 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             lastObservedLoadBalancers = nil
             return .noOpinion
         }
+        do {
+            for network in networks { try network.validateProtocol() }
+        } catch {
+            logger.error("Invalid network desired state; skipping reconciliation")
+            lastObservedLoadBalancers = nil
+            return .noOpinion
+        }
         let reason = "Native OVN load balancers are not supported with user-mode networking"
-        let desired = networks.flatMap(\.loadBalancers)
+        let desired = networks.flatMap { $0.loadBalancers.values }
         if !desired.isEmpty {
             logger.error("\(reason)")
         }
         lastObservedLoadBalancers = desired.map {
             ObservedLoadBalancerState(
-                id: $0.id,
+                id: validatedProtocolUUID($0.id),
                 observedGeneration: $0.generation,
                 status: .error,
                 lastError: reason,
-                backends: $0.backends.map {
-                    ObservedLoadBalancerBackend(id: $0.id, healthStatus: .error)
+                backends: $0.backends.values.map {
+                    ObservedLoadBalancerBackend(id: validatedProtocolUUID($0.id), healthStatus: .error)
                 })
         }
         return .noOpinion

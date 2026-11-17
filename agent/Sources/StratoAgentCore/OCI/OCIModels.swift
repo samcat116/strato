@@ -103,11 +103,13 @@ public struct OCIPlatform: Codable, Sendable, Equatable {
     public func matches(_ architecture: CPUArchitecture) -> Bool {
         guard os == "linux" else { return false }
         switch architecture {
-        case .x86_64:
+        case .x8664:
             return self.architecture == "amd64"
         case .arm64:
             guard self.architecture == "arm64" else { return false }
             return variant == nil || variant == "v8" || variant == "8"
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
     }
 }

@@ -334,7 +334,7 @@ public struct OVNOVSNodeDependencyModule: NodeDependencyModule {
                     code: aggregate == .missing
                         ? .missingUnit
                         : aggregate == .failed ? .failedUnit : .inactiveUnit,
-                    message: "OVS/OVN supervisor is \(aggregate.rawValue)"))
+                    message: "OVS/OVN supervisor is \(aggregate.protocolValue)"))
         }
         return NodeDependencyInspection(
             supervisorState: .active, installedVersion: combinedVersion,

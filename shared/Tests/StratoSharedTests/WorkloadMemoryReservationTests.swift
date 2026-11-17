@@ -28,19 +28,19 @@ struct WorkloadMemoryReservationTests {
         #expect(WorkloadMemoryReservation(guestBytes: .max, backendOverheadBytes: 1).effectiveBytes == .max)
         #expect(WorkloadMemoryReservation(guestBytes: -1, backendOverheadBytes: -1).effectiveBytes == 0)
         let full = HostMemoryAccounting(physicalBytes: 1024, hostReservedBytes: .max, workloadEffectiveBytes: .max)
-        #expect(full.remainingAllocatableBytes == 0)
+        #expect(full._jsonRemainingAllocatableBytes == 0)
         let exact = HostMemoryAccounting(physicalBytes: 1024, hostReservedBytes: 256, workloadEffectiveBytes: 768)
-        #expect(exact.remainingAllocatableBytes == 0)
+        #expect(exact._jsonRemainingAllocatableBytes == 0)
         #expect(
             HostMemoryAccounting(
                 physicalBytes: 1024, hostReservedBytes: 256,
                 workloadEffectiveBytes: 767
-            ).remainingAllocatableBytes == 1)
+            )._jsonRemainingAllocatableBytes == 1)
         #expect(
             HostMemoryAccounting(
                 physicalBytes: 1024, hostReservedBytes: 0,
                 workloadEffectiveBytes: 0, inventoryKnown: false
-            ).remainingAllocatableBytes == 0)
+            )._jsonRemainingAllocatableBytes == 0)
     }
 
     @Test func wireRoundTrip() throws {
@@ -48,14 +48,14 @@ struct WorkloadMemoryReservationTests {
             physicalBytes: 8192, hostReservedBytes: 1024,
             workloadEffectiveBytes: 2048, qemuOverheadBytes: 768)
         let resources = AgentResources(
-            totalCPU: 4, availableCPU: 2, totalMemory: accounting.physicalBytes,
-            availableMemory: accounting.remainingAllocatableBytes, totalDisk: 1, availableDisk: 1,
+            totalCPU: 4, availableCPU: 2, totalMemory: accounting._jsonPhysicalBytes,
+            availableMemory: accounting._jsonRemainingAllocatableBytes, totalDisk: 1, availableDisk: 1,
             memoryAccounting: accounting)
         let restored = try WireProtocol.makeDecoder().decode(
             AgentResources.self,
             from: WireProtocol.makeEncoder().encode(resources))
-        #expect(restored.memoryAccounting == accounting)
-        #expect(restored.availableMemory == 5120)
-        #expect(restored.totalMemory == 8192)
+        #expect(restored._jsonMemoryAccounting == accounting)
+        #expect(restored._jsonAvailableMemory == 5120)
+        #expect(restored._jsonTotalMemory == 8192)
     }
 }

@@ -1,16 +1,46 @@
 import Foundation
+import SwiftProtobuf
 
 // MARK: - Sandbox snapshot vocabulary
 
 /// How the sandbox proceeds once its checkpoint is captured.
-public enum SandboxSnapshotMode: String, Codable, CaseIterable, Sendable {
-    /// Resume the guest after the snapshot: the sandbox keeps running and
-    /// the snapshot is a point-in-time checkpoint it can later be restored to.
-    case resume
-    /// Leave the guest stopped after the snapshot (checkpoint-and-stop): the
-    /// sandbox converges to `stopped` and can later resume from the
-    /// checkpoint via restore.
-    case stop
+public typealias SandboxSnapshotMode = Strato_Agent_V1_SandboxSnapshotMode
+extension Strato_Agent_V1_SandboxSnapshotMode: Codable {
+
+    public var protocolValue: String {
+        switch self {
+        case .resume: return "resume"
+        case .stop: return "stop"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "resume": self = .resume
+        case "stop": self = .stop
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.resume, .stop] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
+    }
 }
 
 /// Artifact-layout capability recorded with a checkpoint. Fork restore
@@ -31,11 +61,8 @@ public enum SandboxSnapshotForkLayout {
 /// The artifacts that make up one checkpoint archive. Raw values are stable
 /// wire/object-key identifiers; `filename` is the canonical name inside a
 /// snapshot directory and under an exported object prefix.
-public enum SandboxSnapshotArtifactKind: String, Codable, CaseIterable, Sendable {
-    case memory
-    case vmstate
-    case rootfs
-    case config
+public typealias SandboxSnapshotArtifactKind = Strato_Agent_V1_SandboxSnapshotArtifactKind
+extension Strato_Agent_V1_SandboxSnapshotArtifactKind: Codable {
 
     public var filename: String {
         switch self {
@@ -43,21 +70,55 @@ public enum SandboxSnapshotArtifactKind: String, Codable, CaseIterable, Sendable
         case .vmstate: return "vmstate.snap"
         case .rootfs: return "rootfs.ext4"
         case .config: return "config.img"
+        case .unspecified, .UNRECOGNIZED: return ""
         }
+    }
+
+    public var protocolValue: String {
+        switch self {
+        case .memory: return "memory"
+        case .vmstate: return "vmstate"
+        case .rootfs: return "rootfs"
+        case .config: return "config"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "memory": self = .memory
+        case "vmstate": self = .vmstate
+        case "rootfs": self = .rootfs
+        case "config": self = .config
+        default: return nil
+        }
+    }
+
+    public static var knownCases: [Self] { [.memory, .vmstate, .rootfs, .config] }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
     }
 }
 
 /// Where an agent fetches an exported artifact and how it verifies the bytes.
 /// The control plane records size and SHA-256 while streaming the export, so
 /// integrity metadata is not agent-supplied.
-public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
-    public let kind: SandboxSnapshotArtifactKind
-    /// Control-plane-relative download path
-    /// (`/api/sandboxes/.../snapshots/.../artifacts/<kind>`).
-    public let downloadURL: String
-    public let sizeBytes: Int64
-    /// Lowercase hex SHA-256 of the artifact bytes.
-    public let sha256: String
+public typealias SandboxSnapshotArtifactDescriptor = Strato_Agent_V1_SandboxSnapshotArtifactDescriptor
+extension Strato_Agent_V1_SandboxSnapshotArtifactDescriptor: Codable {
 
     public init(
         kind: SandboxSnapshotArtifactKind,
@@ -65,23 +126,60 @@ public struct SandboxSnapshotArtifactDescriptor: Codable, Equatable, Sendable {
         sizeBytes: Int64,
         sha256: String
     ) {
-        self.kind = kind
-        self.downloadURL = downloadURL
-        self.sizeBytes = sizeBytes
-        self.sha256 = sha256
+        self.init()
+        self._jsonKind = kind
+        self._jsonDownloadURL = downloadURL
+        self._jsonSizeBytes = sizeBytes
+        self._jsonSha256 = sha256
     }
+
+    private enum CodingKeys: String, CodingKey { case kind; case downloadURL; case sizeBytes; case sha256 }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(SandboxSnapshotArtifactKind.self, forKey: .kind)
+        self._jsonDownloadURL = try container.decode(String.self, forKey: .downloadURL)
+        self._jsonSizeBytes = try container.decode(Int64.self, forKey: .sizeBytes)
+        self._jsonSha256 = try container.decode(String.self, forKey: .sha256)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encode(_jsonDownloadURL, forKey: .downloadURL)
+        try container.encode(_jsonSizeBytes, forKey: .sizeBytes)
+        try container.encode(_jsonSha256, forKey: .sha256)
+    }
+
 }
 
 /// An mTLS upload slot for one snapshot artifact. The control plane hashes and
 /// sizes the stream as it lands in object storage.
-public struct SandboxSnapshotArtifactUploadTarget: Codable, Equatable, Sendable {
-    public let kind: SandboxSnapshotArtifactKind
-    /// Control-plane-relative upload path (same route as the download,
-    /// method PUT).
-    public let uploadURL: String
+public typealias SandboxSnapshotArtifactUploadTarget = Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget
+extension Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget: Codable {
 
     public init(kind: SandboxSnapshotArtifactKind, uploadURL: String) {
-        self.kind = kind
-        self.uploadURL = uploadURL
+        self.init()
+        self._jsonKind = kind
+        self._jsonUploadURL = uploadURL
     }
+
+    private enum CodingKeys: String, CodingKey { case kind; case uploadURL }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        self.init()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self._jsonKind = try container.decode(SandboxSnapshotArtifactKind.self, forKey: .kind)
+        self._jsonUploadURL = try container.decode(String.self, forKey: .uploadURL)
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        try validateProtocol()
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(_jsonKind, forKey: .kind)
+        try container.encode(_jsonUploadURL, forKey: .uploadURL)
+    }
+
 }

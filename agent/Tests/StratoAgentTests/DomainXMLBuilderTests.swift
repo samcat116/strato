@@ -457,7 +457,7 @@ struct DomainXMLBuilderTests {
                         blockPolicy: policy)
                 ],
                 cloudInitISOPath: nil))
-        let hot = DomainDeviceXML.hotplugDisk(
+        let hot = try DomainDeviceXML.hotplugDisk(
             attachment: attachment, target: "vdb", readonly: false,
             volumeId: Self.dataVolumeId, blockPolicy: policy)
 
@@ -474,7 +474,7 @@ struct DomainXMLBuilderTests {
     /// deleted (STR-136). The goldens record the whole document; these are the
     /// four choices that are wrong-looking-but-deliberate, so a future edit has
     /// to argue with them rather than just re-record a golden.
-    @Test("the graphics console's device choices", arguments: CPUArchitecture.allCases)
+    @Test("the graphics console's device choices", arguments: CPUArchitecture.knownCases)
     func graphicsDevices(_ architecture: CPUArchitecture) throws {
         let xml = try DomainXMLBuilder.build(
             Self.input(spec: Self.spec(graphics: .vnc), architecture: architecture))

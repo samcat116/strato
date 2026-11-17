@@ -14,7 +14,7 @@ struct GuestConfigObservationRuntimeTests {
             GuestConfigObservation.self,
             from: Data(
                 """
-                {"generation":\(generation),"status":"\(status.rawValue)","error":\(status == .failed ? "\"observation failed\"" : "null"),"packages":[],"files":[],"services":[],"sysctls":[]}
+                {"generation":\(generation),"status":"\(status.protocolValue)","error":\(status == .failed ? "\"observation failed\"" : "null"),"packages":[],"files":[],"services":[],"sysctls":[]}
                 """.utf8))
     }
 
@@ -32,6 +32,27 @@ struct GuestConfigObservationRuntimeTests {
         } catch {
             try? await agent.eventLoopGroup.shutdownGracefully()
             throw error
+        }
+    }
+
+    @Test(
+        "Hypervisor creation preserves absent metadata and hostname",
+        arguments: [HypervisorType.qemu, .appleVirtualization])
+    func creationMetadataPresence(hypervisor: HypervisorType) async throws {
+        try await withAgent { agent in
+            let id = UUID()
+            var desired = DesiredVMState(
+                vmId: id, hypervisorType: hypervisor,
+                spec: VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil)),
+                desiredStatus: .shutdown, generation: 1)
+            #expect(await agent.metadataForHypervisorCreate(desired) == nil)
+            desired.metadata = InstanceMetadata(instanceId: id, projectId: UUID(), serviceEnabled: true)
+            let unnamed = try #require(await agent.metadataForHypervisorCreate(desired))
+            #expect(!unnamed.hasHostname)
+            #expect(CloudInitProvisioner.metaDataDocument(for: unnamed).contains("local-hostname: vm-"))
+            desired.metadata.hostname = "bootstrap-host"
+            let named = try #require(await agent.metadataForHypervisorCreate(desired))
+            #expect(CloudInitProvisioner.metaDataDocument(for: named).contains("local-hostname: bootstrap-host"))
         }
     }
 
@@ -75,7 +96,7 @@ struct GuestConfigObservationRuntimeTests {
         try await withAgent { agent in
             let id = UUID()
             let cached = try observation(.converged)
-            for config: GuestConfig? in [nil, GuestConfig()] {
+            for config: GuestConfig? in [nil, GuestConfig.empty] {
                 await agent.cacheGuestObservation(cached, for: id.uuidString)
                 let desired = DesiredVMState(
                     vmId: id, hypervisorType: .qemu,

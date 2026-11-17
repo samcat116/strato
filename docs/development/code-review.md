@@ -236,11 +236,12 @@ review as a security review. `/security-review` covers this in depth.
 - **Blast radius.** Who else calls this? A changed function signature, a
   changed default, or a changed error type is only safe once every call site
   is checked — including `agent/`, `cli/`, `clients/swift/`, and the frontend.
-- **Wire-protocol contract.** Registration requires an exact match with
-  `WireProtocol.currentVersion`; control plane and agent changes ship together.
-  Any schema change must update both consumers and increment the version.
-  Optional fields represent real optionality or allow registration to decode
-  far enough to return a useful version rejection, not a compatibility window.
+- **Wire-protocol contract.** Update the Protobuf schema and regenerate Swift
+  together. Additive changes retain the protocol major. Reserve removed names and
+  field numbers, and run the Agent Protocol Contract checks against the target
+  branch and frozen baseline. Required new behavior needs a capability gate and
+  behavioral tests; being decodable does not mean being safely executable.
+  Preserve collection presence and existing storage/public/guest JSON codecs.
 - **API compatibility.** Removing a field, tightening validation, or changing
   a status code breaks existing clients and the frontend.
 - **Migration safety.** Migrations run against live data. Adding a non-null

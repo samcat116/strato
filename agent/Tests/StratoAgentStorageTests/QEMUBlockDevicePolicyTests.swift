@@ -17,7 +17,7 @@ struct QEMUBlockDevicePolicyTests {
         #expect(policy.discard)
         #expect(!policy.nonRotational)
         #expect(policy.queueCount == 8)
-        #expect(policy.fallbackReason?.contains("libvirt cannot express rotation_rate") == true)
+        #expect(policy.fallbackReason.contains("libvirt cannot express rotation_rate") == true)
     }
 
     @Test("a failed direct probe falls back without claiming support")
@@ -30,13 +30,13 @@ struct QEMUBlockDevicePolicyTests {
                 discardUnavailableReason: "hole punching is unavailable",
                 directIOSupported: false,
                 directIOUnavailableReason: "io_uring is disabled by the kernel"))
-        #expect(policy.cacheMode == nil)
-        #expect(policy.ioMode == nil)
+        #expect(!policy.hasCacheMode)
+        #expect(!policy.hasIoMode)
         #expect(!policy.discard)
         #expect(!policy.nonRotational)
         #expect(policy.queueCount == 4)
-        #expect(policy.fallbackReason?.contains("hole punching") == true)
-        #expect(policy.fallbackReason?.contains("io_uring is disabled") == true)
+        #expect(policy.fallbackReason.contains("hole punching") == true)
+        #expect(policy.fallbackReason.contains("io_uring is disabled") == true)
     }
 
     @Test("cached shared mode is explicit and keeps discard independent")
@@ -44,10 +44,10 @@ struct QEMUBlockDevicePolicyTests {
         let policy = QEMUBlockDevicePolicy.select(
             requestedMode: .cachedShared, vCPUCount: 2, capabilities: capable)
         #expect(policy.cacheMode == .writeback)
-        #expect(policy.ioMode == nil)
+        #expect(!policy.hasIoMode)
         #expect(policy.discard)
         #expect(!policy.nonRotational)
-        #expect(policy.fallbackReason?.contains("libvirt cannot express rotation_rate") == true)
+        #expect(policy.fallbackReason.contains("libvirt cannot express rotation_rate") == true)
     }
 
     @Test("queue count follows vCPUs within validated limits")

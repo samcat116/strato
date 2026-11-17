@@ -29,7 +29,7 @@ extension FirecrackerSandboxRuntime {
         // asks the agent that took the snapshot. The files are immutable
         // after capture, so a running guest needs no pause here.
         let archiveDir = snapshotDirectory(sandboxId, snapshotId: snapshotId)
-        for kind in SandboxSnapshotArtifactKind.allCases {
+        for kind in SandboxSnapshotArtifactKind.knownCases {
             guard FileManager.default.fileExists(atPath: archiveDir + "/" + kind.filename) else {
                 throw SandboxRuntimeError.snapshotNotFound(sandboxId: sandboxId, snapshotId: snapshotId)
             }
@@ -42,10 +42,10 @@ extension FirecrackerSandboxRuntime {
         // Sequential by contract: the control plane records each artifact's
         // integrity entry with a read-modify-write on the snapshot row, so
         // concurrent PUTs could drop entries and fail the export closed.
-        for kind in SandboxSnapshotArtifactKind.allCases {
+        for kind in SandboxSnapshotArtifactKind.knownCases {
             guard let target = uploads.first(where: { $0.kind == kind }) else {
                 throw SandboxRuntimeError.snapshotIOFailed(
-                    "export request is missing an upload target for artifact '\(kind.rawValue)'")
+                    "export request is missing an upload target for artifact '\(kind.protocolValue)'")
             }
             do {
                 try await transfer.upload(
@@ -69,7 +69,7 @@ extension FirecrackerSandboxRuntime {
         artifacts: [SandboxSnapshotArtifactDescriptor]?
     ) async throws -> String {
         func holdsCompleteArchive(_ directory: String) -> Bool {
-            SandboxSnapshotArtifactKind.allCases.allSatisfy {
+            SandboxSnapshotArtifactKind.knownCases.allSatisfy {
                 FileManager.default.fileExists(atPath: directory + "/" + $0.filename)
             }
         }
@@ -118,16 +118,16 @@ extension FirecrackerSandboxRuntime {
 
         let downloadLogger = logger
         let task = Task {
-            for kind in SandboxSnapshotArtifactKind.allCases {
+            for kind in SandboxSnapshotArtifactKind.knownCases {
                 guard let descriptor = artifacts.first(where: { $0.kind == kind }) else {
                     throw SandboxRuntimeError.snapshotIOFailed(
-                        "restore descriptors are missing artifact '\(kind.rawValue)'")
+                        "restore descriptors are missing artifact '\(kind.protocolValue)'")
                 }
                 downloadLogger.info(
                     "Downloading exported snapshot artifact",
                     metadata: [
                         "snapshotId": .string(snapshotId),
-                        "kind": .string(kind.rawValue),
+                        "kind": .string(kind.protocolValue),
                         "sizeBytes": .stringConvertible(descriptor.sizeBytes),
                     ])
                 try await transfer.download(descriptor, to: importDir + "/" + kind.filename)

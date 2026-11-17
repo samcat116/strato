@@ -631,7 +631,7 @@ struct VMController: RouteCollection {
                     throw Abort(
                         .conflict,
                         reason: "A VM can only be resized while it is running or stopped (this one is "
-                            + "\(existingVM.status.rawValue))")
+                            + "\(existingVM.status.protocolValue))")
                 }
                 try await Self.requirePlacedResizeCapacity(
                     vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
@@ -1192,7 +1192,7 @@ struct VMController: RouteCollection {
         guard vm.isRunning else {
             throw Abort(
                 .badRequest,
-                reason: "VM must be running to run a command. Current state: \(vm.status.rawValue)")
+                reason: "VM must be running to run a command. Current state: \(vm.status.protocolValue)")
         }
         guard vm.guestAgentEnabled else {
             throw Abort(
@@ -1208,7 +1208,7 @@ struct VMController: RouteCollection {
         guard agent.supportsGuestExec(for: vm.hypervisorType) else {
             throw Abort(
                 .serviceUnavailable,
-                reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)")
+                reason: "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.protocolValue)")
         }
 
         let auditContext = VMGuestExecutionAudit.makeContext(
@@ -1258,7 +1258,7 @@ struct VMController: RouteCollection {
         guard vm.isRunning else {
             throw Abort(
                 .badRequest,
-                reason: "VM must be running to exec. Current state: \(vm.status.rawValue)")
+                reason: "VM must be running to exec. Current state: \(vm.status.protocolValue)")
         }
 
         guard vm.guestAgentEnabled else {
@@ -1286,7 +1286,7 @@ struct VMController: RouteCollection {
             throw Abort(
                 .serviceUnavailable,
                 reason:
-                    "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.rawValue)"
+                    "Agent '\(agent.name)' does not support VM guest exec for \(vm.hypervisorType.protocolValue)"
             )
         }
 
@@ -1472,7 +1472,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithAction(req: req, action: "vm:pause")
 
         guard vm.canPause else {
-            throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
+            throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.protocolValue)")
         }
 
         // No transitional status exists for pause; the VM stays `.running`
@@ -1494,7 +1494,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithAction(req: req, action: "vm:resume")
 
         guard vm.canResume else {
-            throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
+            throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.protocolValue)")
         }
 
         // Counterpart of pause: the VM stays `.paused` until the agent confirms.
@@ -1526,7 +1526,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithAction(req: req, action: "vm:start")
 
         guard vm.canStart else {
-            throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
+            throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.protocolValue)")
         }
 
         // A boot the network path can't complete is refused up front rather
@@ -1577,7 +1577,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithAction(req: req, action: "vm:stop")
 
         guard vm.canStop else {
-            throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
+            throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.protocolValue)")
         }
 
         let userID = try user.requireID()
@@ -1596,7 +1596,7 @@ struct VMController: RouteCollection {
         let vm = try await fetchVMWithAction(req: req, action: "vm:restart")
 
         guard vm.isRunning else {
-            throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
+            throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.protocolValue)")
         }
 
         // A reboot starts and ends `.running`, so `desiredStatus` cannot carry

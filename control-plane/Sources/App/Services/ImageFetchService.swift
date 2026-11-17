@@ -64,7 +64,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             "Starting artifact fetch",
             metadata: [
                 "artifact_id": .string(artifactId.uuidString),
-                "kind": .string(artifact.kind.rawValue),
+                "kind": .string(artifact.kind.protocolValue),
                 "source_url": .string(sourceURL),
             ])
 

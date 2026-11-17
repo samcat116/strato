@@ -276,7 +276,8 @@ struct SiteController: RouteCollection {
                         throw Abort(.conflict, reason: "Resource class revision exhausted")
                     }
                     site.burstableResourceClass = try WorkloadResourceClassSnapshot(
-                        classID: old.classID, siteID: siteID, revision: old.revision + 1, policy: policy)
+                        classID: UUID(protocolString: old.classID), siteID: siteID, revision: old.revision + 1,
+                        policy: policy)
                 }
             }
             try await site.save(on: db)

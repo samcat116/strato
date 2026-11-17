@@ -428,15 +428,16 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let entry = try #require(message.sandboxes.first)
+            let entry = try #require(message.sandboxes.values.first)
             #expect(entry.spec.imageDigest == sampleDigest)
 
-            let credential = try #require(entry.registryCredential)
+            try #require(entry.hasRegistryCredential)
+            let credential = entry.registryCredential
             #expect(credential.registry == "ghcr.io")
             #expect(credential.username == "acme-bot")
             #expect(credential.password == "short-lived-jwt")
             #expect(credential.bearer == true)
-            #expect(credential.expiresAt != nil)
+            #expect(credential.hasExpiresAt)
 
             // The resolver saw the decrypted credential material.
             #expect(scripted.resolveCredentials == ["ghp_supersecret"])
@@ -464,10 +465,12 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let credential = try #require(message.sandboxes.first?.registryCredential)
+            let entry = try #require(message.sandboxes.values.first)
+            try #require(entry.hasRegistryCredential)
+            let credential = entry.registryCredential
             #expect(credential.password == "ghp_supersecret")
             #expect(credential.bearer == false)
-            #expect(credential.expiresAt == nil)
+            #expect(!credential.hasExpiresAt)
         }
     }
 
@@ -481,9 +484,9 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.registryCredential == nil)
-            #expect(entry.spec.imageDigest == nil)
+            let entry = try #require(message.sandboxes.values.first)
+            #expect(!entry.hasRegistryCredential)
+            #expect(!entry.spec.hasImageDigest)
         }
     }
 
@@ -508,9 +511,9 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.spec.imageDigest == nil)
-            #expect(entry.registryCredential == nil)
+            let entry = try #require(message.sandboxes.values.first)
+            #expect(!entry.spec.hasImageDigest)
+            #expect(!entry.hasRegistryCredential)
             #expect(scripted.resolveCallCount == 0)
             #expect(scripted.mintCallCount == 0)
         }
@@ -535,8 +538,8 @@ final class RegistryPullSecretTests {
             let agentId = try await registerAgent(app: app, sandbox: sandbox)
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.registryCredential == nil)
+            let entry = try #require(message.sandboxes.values.first)
+            #expect(!entry.hasRegistryCredential)
             // The digest pin itself is unaffected.
             #expect(entry.spec.imageDigest == sampleDigest)
         }

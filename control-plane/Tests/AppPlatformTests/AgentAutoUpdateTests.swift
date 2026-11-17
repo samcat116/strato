@@ -667,7 +667,8 @@ final class AgentAutoUpdateTests {
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
 
-            let update = try #require(sync.desiredAgentUpdate)
+            try #require(sync.hasDesiredAgentUpdate)
+            let update = sync.desiredAgentUpdate
             #expect(update.targetVersion == Self.target)
             #expect(update.artifactURL == Self.stubArtifact.url)
             #expect(update.sha256 == Self.validDigest)
@@ -688,7 +689,7 @@ final class AgentAutoUpdateTests {
             for agent in [unassigned, converged] {
                 let sync = try await app.desiredStateAssembler.assemble(
                     agentId: agent.requireID().uuidString)
-                #expect(sync.desiredAgentUpdate == nil, "\(agent.name) must not be sent an update")
+                #expect(!sync.hasDesiredAgentUpdate, "\(agent.name) must not be sent an update")
             }
         }
     }
@@ -705,7 +706,7 @@ final class AgentAutoUpdateTests {
 
             let sync = try await app.desiredStateAssembler.assemble(
                 agentId: agent.requireID().uuidString)
-            #expect(sync.desiredAgentUpdate == nil)
+            #expect(!sync.hasDesiredAgentUpdate)
         }
     }
 

@@ -18,7 +18,7 @@ public struct SandboxSuspensionGuestFence: Codable, Sendable, Equatable {
 
     public func hasValidShape(for record: SandboxSuspensionRecord) -> Bool {
         request.generation == record.generation && request.generation >= 0 && request.activityRevision >= 0
-            && request.guestProtocolVersion == 5 && !identityNonce.isEmpty && record.spec.network == nil
+            && request.guestProtocolVersion == 5 && !identityNonce.isEmpty && !record.spec.hasNetwork
             && (state != .prepared || guestToken != nil)
     }
     public var blocksWorkloadAdmission: Bool { state != .released }

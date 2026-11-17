@@ -14,7 +14,7 @@ private struct StaticFirecrackerImageSource: ImageSource {
             return kernelPath
         case .initramfs:
             return initramfsPath
-        case .diskImage, .rootfs:
+        case .diskImage, .rootfs, .unspecified, .UNRECOGNIZED:
             Issue.record("Unexpected Firecracker boot artifact request: \(kind)")
             return ""
         }

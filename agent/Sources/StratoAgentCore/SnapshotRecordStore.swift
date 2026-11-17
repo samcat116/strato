@@ -86,9 +86,10 @@ public enum SnapshotRecordCredentialScrubber {
         from records: [UUID: SnapshotRecord]
     ) -> [UUID: SnapshotRecord] {
         records.filter { _, record in
-            guard case .ceph(let configuration) = record.volumeStorage else { return true }
-            return configuration.clusterId != clusterId
-                || configuration.credentialId != credentialId
+            guard case .ceph(let ceph) = record.volumeStorage?.value else { return true }
+            let configuration = ceph.configuration
+            return UUID(uuidString: configuration.clusterID) != clusterId
+                || UUID(uuidString: configuration.credentialID) != credentialId
         }
     }
 }

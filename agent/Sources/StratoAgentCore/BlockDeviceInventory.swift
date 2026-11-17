@@ -133,7 +133,7 @@ public struct BlockDeviceInventoryProbe: Sendable {
         let model = normalized(node.model)
         let serial = normalized(node.serial)
         let wwn = normalized(node.wwn)
-        let uses = Array(collectUses(from: node)).sorted { $0.rawValue < $1.rawValue }
+        let uses = Array(collectUses(from: node)).sorted { $0.protocolValue < $1.protocolValue }
         let state: StorageDeviceState
         if size == 0 || isFaultedKernelState(node.state) {
             state = .faulted

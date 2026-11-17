@@ -38,12 +38,12 @@ struct ReconciliationProtocolTests {
         #expect(envelope.type == .desiredState)
 
         let decoded = try envelope.decode(as: DesiredStateMessage.self)
-        #expect(decoded.syncId == message.syncId)
-        #expect(decoded.vms.count == 1)
-        #expect(decoded.vms[0].vmId == message.vms[0].vmId)
-        #expect(decoded.vms[0].desiredStatus == .running)
-        #expect(decoded.vms[0].generation == 7)
-        #expect(decoded.vms[0].imageInfo?.artifact(ofKind: .diskImage)?.filename == "debian.qcow2")
+        #expect(decoded._jsonSyncId == message._jsonSyncId)
+        #expect(decoded._jsonVms.count == 1)
+        #expect(decoded._jsonVms[0]._jsonVmId == message._jsonVms[0]._jsonVmId)
+        #expect(decoded._jsonVms[0]._jsonDesiredStatus == .running)
+        #expect(decoded._jsonVms[0]._jsonGeneration == 7)
+        #expect(decoded._jsonVms[0]._jsonImageInfo?.artifact(ofKind: .diskImage)?._jsonFilename == "debian.qcow2")
     }
 
     @Test("A clone source carries the source VM serialization lane")
@@ -54,10 +54,10 @@ struct ReconciliationProtocolTests {
             from: sourceVolumeId, sourceVMId: sourceVMId, format: "qcow2")
         let decoded = try roundTrip(source)
 
-        #expect(decoded.kind == DesiredVolumeSource.clone)
-        #expect(decoded.sourceVolumeId == sourceVolumeId)
-        #expect(decoded.sourceVMId == sourceVMId)
-        #expect(decoded.sourceFormat == "qcow2")
+        #expect(decoded._jsonKind == DesiredVolumeSource.clone)
+        #expect(decoded._jsonSourceVolumeId == sourceVolumeId)
+        #expect(decoded._jsonSourceVMId == sourceVMId)
+        #expect(decoded._jsonSourceFormat == "qcow2")
     }
 
     @Test("DesiredStateMessage carries networks through the envelope")
@@ -98,28 +98,28 @@ struct ReconciliationProtocolTests {
         let envelope = try MessageEnvelope(message: message)
         let decoded = try envelope.decode(as: DesiredStateMessage.self)
 
-        #expect(decoded.networks.count == 2)
-        #expect(decoded.networks[0].networkId == networkId)
-        #expect(decoded.networks[0].subnet == "192.168.1.0/24")
-        #expect(decoded.networks[0].gateway == "192.168.1.1")
-        #expect(decoded.networks[0].routerKey == projectKey)
-        #expect(decoded.networks[0].externalAccess)
-        #expect(decoded.networks[0].generation == 4)
-        #expect(decoded.networks[0].subnet6 == "fd12:3456:789a::/64")
-        #expect(decoded.networks[0].gateway6 == "fd12:3456:789a::1")
-        #expect(decoded.networks[0].dhcpEnabled == true)
-        #expect(decoded.networks[0].dnsServers == ["1.1.1.1", "fd00::53"])
-        #expect(decoded.networks[0].domainName == "corp.example.com")
-        #expect(decoded.networks[0].leaseTime == 7200)
-        #expect(decoded.networks[0].metadataEnabled == true)
+        #expect(decoded._jsonNetworks.count == 2)
+        #expect(decoded._jsonNetworks[0]._jsonNetworkId == networkId)
+        #expect(decoded._jsonNetworks[0]._jsonSubnet == "192.168.1.0/24")
+        #expect(decoded._jsonNetworks[0]._jsonGateway == "192.168.1.1")
+        #expect(decoded._jsonNetworks[0]._jsonRouterKey == projectKey)
+        #expect(decoded._jsonNetworks[0]._jsonExternalAccess)
+        #expect(decoded._jsonNetworks[0]._jsonGeneration == 4)
+        #expect(decoded._jsonNetworks[0]._jsonSubnet6 == "fd12:3456:789a::/64")
+        #expect(decoded._jsonNetworks[0]._jsonGateway6 == "fd12:3456:789a::1")
+        #expect(decoded._jsonNetworks[0]._jsonDhcpEnabled == true)
+        #expect(decoded._jsonNetworks[0]._jsonDnsServers == ["1.1.1.1", "fd00::53"])
+        #expect(decoded._jsonNetworks[0]._jsonDomainName == "corp.example.com")
+        #expect(decoded._jsonNetworks[0]._jsonLeaseTime == 7200)
+        #expect(decoded._jsonNetworks[0]._jsonMetadataEnabled == true)
         // Same router key: both networks share one per-project logical router.
-        #expect(decoded.networks[1].routerKey == projectKey)
-        #expect(decoded.networks[1].gateway == nil)
-        #expect(decoded.networks[1].subnet6 == nil)
-        #expect(decoded.networks[1].gateway6 == nil)
-        #expect(decoded.networks[1].dhcpEnabled == false)
-        #expect(decoded.networks[1].metadataEnabled == false)
-        #expect(!decoded.networks[1].externalAccess)
+        #expect(decoded._jsonNetworks[1]._jsonRouterKey == projectKey)
+        #expect(decoded._jsonNetworks[1]._jsonGateway == nil)
+        #expect(decoded._jsonNetworks[1]._jsonSubnet6 == nil)
+        #expect(decoded._jsonNetworks[1]._jsonGateway6 == nil)
+        #expect(decoded._jsonNetworks[1]._jsonDhcpEnabled == false)
+        #expect(decoded._jsonNetworks[1]._jsonMetadataEnabled == false)
+        #expect(!decoded._jsonNetworks[1]._jsonExternalAccess)
     }
 
     @Test("DesiredNetworkState requires authoritative service fields")
@@ -137,12 +137,12 @@ struct ReconciliationProtocolTests {
     func desiredStateAuthorityRoundTrip() throws {
         let peer = DesiredStateMessage(syncId: "sync-peer", vms: [], networksAuthoritative: false)
         let decodedPeer = try MessageEnvelope(message: peer).decode(as: DesiredStateMessage.self)
-        #expect(!decodedPeer.networksAuthoritative)
+        #expect(!decodedPeer._jsonNetworksAuthoritative)
 
         // Default: an agent that owns its NB (site-less) is authoritative.
         let solo = DesiredStateMessage(syncId: "sync-solo", vms: [])
         let decodedSolo = try MessageEnvelope(message: solo).decode(as: DesiredStateMessage.self)
-        #expect(decodedSolo.networksAuthoritative)
+        #expect(decodedSolo._jsonNetworksAuthoritative)
     }
 
     @Test("The current desired schema requires every authoritative collection")
@@ -195,16 +195,16 @@ struct ReconciliationProtocolTests {
         #expect(envelope.type == .observedState)
 
         let decoded = try envelope.decode(as: ObservedStateReport.self)
-        #expect(decoded.agentId == "agent-1")
-        #expect(decoded.vms.count == 2)
-        #expect(decoded.vms[0].observedGeneration == 7)
-        #expect(decoded.vms[1].convergencePhase == "downloading image")
-        #expect(decoded.vms[1].lastError == "previous attempt: disk full")
-        #expect(decoded.vms[1].failedGeneration == 3)
-        #expect(decoded.vms[1].failureClassification == .blocked)
-        #expect(decoded.vms[0].failureClassification == nil)
+        #expect(decoded._jsonAgentId == "agent-1")
+        #expect(decoded._jsonVms.count == 2)
+        #expect(decoded._jsonVms[0]._jsonObservedGeneration == 7)
+        #expect(decoded._jsonVms[1]._jsonConvergencePhase == "downloading image")
+        #expect(decoded._jsonVms[1]._jsonLastError == "previous attempt: disk full")
+        #expect(decoded._jsonVms[1]._jsonFailedGeneration == 3)
+        #expect(decoded._jsonVms[1]._jsonFailureClassification == .blocked)
+        #expect(decoded._jsonVms[0]._jsonFailureClassification == nil)
         // No qga probe: guestInfo stays nil rather than a fabricated empty.
-        #expect(decoded.vms[0].guestInfo == nil)
+        #expect(decoded._jsonVms[0]._jsonGuestInfo == nil)
     }
 
     @Test("Network fabric observations round-trip and preserve nil as no opinion")
@@ -234,20 +234,20 @@ struct ReconciliationProtocolTests {
             ])
 
         let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
-        #expect(decoded.networks?.first?.id == networkID)
-        #expect(decoded.networks?.first?.failedGeneration == 7)
-        #expect(decoded.networks?.first?.failureClassification == .transient)
-        #expect(decoded.securityGroups?.first?.status == .active)
-        #expect(decoded.portMemberships?.first?.interfaceId == interfaceID)
-        #expect(decoded.portMemberships?.first?.failureClassification == .blocked)
+        #expect(decoded._jsonNetworks?.first?._jsonId == networkID)
+        #expect(decoded._jsonNetworks?.first?._jsonFailedGeneration == 7)
+        #expect(decoded._jsonNetworks?.first?._jsonFailureClassification == .transient)
+        #expect(decoded._jsonSecurityGroups?.first?._jsonStatus == .active)
+        #expect(decoded._jsonPortMemberships?.first?._jsonInterfaceId == interfaceID)
+        #expect(decoded._jsonPortMemberships?.first?._jsonFailureClassification == .blocked)
 
         let noOpinion = ObservedStateReport(
             agentId: "agent-2", vms: [], resources: Fixtures.resources)
         let decodedNoOpinion = try MessageEnvelope(message: noOpinion)
             .decode(as: ObservedStateReport.self)
-        #expect(decodedNoOpinion.networks == nil)
-        #expect(decodedNoOpinion.securityGroups == nil)
-        #expect(decodedNoOpinion.portMemberships == nil)
+        #expect(decodedNoOpinion._jsonNetworks == nil)
+        #expect(decodedNoOpinion._jsonSecurityGroups == nil)
+        #expect(decodedNoOpinion._jsonPortMemberships == nil)
     }
 
     @Test("The current observed schema requires sandbox and unrecognized inventories")
@@ -303,21 +303,21 @@ struct ReconciliationProtocolTests {
             )
         )
         let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
-        let guest = try #require(decoded.vms.first?.guestInfo)
-        #expect(guest.qgaAvailable)
-        #expect(guest.hostname == "web-01")
-        #expect(guest.interfaces.count == 2)
-        let eth = try #require(guest.interfaces.first { $0.name == "enp0s3" })
-        #expect(eth.hardwareAddress == "52:54:00:12:34:56")
-        #expect(eth.addresses.count == 2)
-        #expect(eth.addresses[0].family == .ipv4)
-        #expect(eth.addresses[0].address == "10.0.0.5")
-        #expect(eth.addresses[0].prefixLength == 24)
-        #expect(eth.addresses[1].family == .ipv6)
+        let guest = try #require(decoded._jsonVms.first?._jsonGuestInfo)
+        #expect(guest._jsonQgaAvailable)
+        #expect(guest._jsonHostname == "web-01")
+        #expect(guest._jsonInterfaces.count == 2)
+        let eth = try #require(guest._jsonInterfaces.first { $0._jsonName == "enp0s3" })
+        #expect(eth._jsonHardwareAddress == "52:54:00:12:34:56")
+        #expect(eth._jsonAddresses.count == 2)
+        #expect(eth._jsonAddresses[0]._jsonFamily == .ipv4)
+        #expect(eth._jsonAddresses[0]._jsonAddress == "10.0.0.5")
+        #expect(eth._jsonAddresses[0]._jsonPrefixLength == 24)
+        #expect(eth._jsonAddresses[1]._jsonFamily == .ipv6)
         // The MAC-less loopback interface survives the round trip.
-        let lo = try #require(guest.interfaces.first { $0.name == "lo" })
-        #expect(lo.hardwareAddress == nil)
-        #expect(lo.addresses.isEmpty)
+        let lo = try #require(guest._jsonInterfaces.first { $0._jsonName == "lo" })
+        #expect(lo._jsonHardwareAddress == nil)
+        #expect(lo._jsonAddresses.isEmpty)
     }
 
     @Test("ObservedVMState carries balloon memoryStats through the envelope (issue #567)")
@@ -345,10 +345,10 @@ struct ReconciliationProtocolTests {
             )
         )
         let decoded = try MessageEnvelope(message: message).decode(as: ObservedStateReport.self)
-        let stats = try #require(decoded.vms.first?.memoryStats)
-        #expect(stats.totalBytes == 8_254_390_272)
-        #expect(stats.availableBytes == 6_442_450_944)
-        #expect(decoded.vms[1].memoryStats == nil)
+        let stats = try #require(decoded._jsonVms.first?._jsonMemoryStats)
+        #expect(stats._jsonTotalBytes == 8_254_390_272)
+        #expect(stats._jsonAvailableBytes == 6_442_450_944)
+        #expect(decoded._jsonVms[1]._jsonMemoryStats == nil)
     }
 
     @Test("Observed workload resource telemetry preserves zero and unavailable signals")
@@ -373,19 +373,19 @@ struct ReconciliationProtocolTests {
             resourceTelemetry: resourceTelemetry)
         let decoded = try roundTrip(original)
 
-        #expect(decoded.resourceTelemetry == resourceTelemetry)
-        #expect(decoded.resourceTelemetry?.memoryCurrentBytes.value == 0)
-        #expect(decoded.resourceTelemetry?.guestStealMicroseconds.availability == .unavailable)
+        #expect(decoded._jsonResourceTelemetry == resourceTelemetry)
+        #expect(decoded._jsonResourceTelemetry?._jsonMemoryCurrentBytes._jsonValue == 0)
+        #expect(decoded._jsonResourceTelemetry?._jsonGuestStealMicroseconds._jsonAvailability == .unavailable)
 
         let legacy = """
             {"vmId":"\(UUID().uuidString)","status":"Running","observedGeneration":2,
              "appliedNetworkInterfaceIds":[]}
             """
         let absent = try decodeJSON(ObservedVMState.self, from: legacy)
-        #expect(absent.resourceTelemetry == nil)
-        #expect(absent.guestInfo == nil)
-        #expect(absent.memoryStats == nil)
-        #expect(absent.appliedNetworkInterfaceIds == [])
+        #expect(absent._jsonResourceTelemetry == nil)
+        #expect(absent._jsonGuestInfo == nil)
+        #expect(absent._jsonMemoryStats == nil)
+        #expect(absent._jsonAppliedNetworkInterfaceIds == [])
     }
 
     @Test("ObservedVMState carries applied interface ids and preserves an authoritative empty list")
@@ -395,17 +395,17 @@ struct ReconciliationProtocolTests {
             ObservedVMState(
                 vmId: UUID(), status: .running, observedGeneration: 8,
                 appliedNetworkInterfaceIds: [first]))
-        #expect(withNIC.appliedNetworkInterfaceIds == [first])
+        #expect(withNIC._jsonAppliedNetworkInterfaceIds == [first])
 
         let networkless = try roundTrip(
             ObservedVMState(
                 vmId: UUID(), status: .shutdown, observedGeneration: 9,
                 appliedNetworkInterfaceIds: []))
-        #expect(networkless.appliedNetworkInterfaceIds == [])
+        #expect(networkless._jsonAppliedNetworkInterfaceIds == [])
 
         let unknown = try roundTrip(
             ObservedVMState(vmId: UUID(), status: .unknown, observedGeneration: 0))
-        #expect(unknown.appliedNetworkInterfaceIds == nil)
+        #expect(unknown._jsonAppliedNetworkInterfaceIds == nil)
     }
 
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")
@@ -428,7 +428,7 @@ struct ReconciliationProtocolTests {
         #expect(DesiredVMStatus.shutdown.isSatisfied(by: .shutdown))
         #expect(!DesiredVMStatus.shutdown.isSatisfied(by: .running))
         // Absence is confirmed by omission from the observed set, never by a status.
-        for status in VMStatus.allCases {
+        for status in VMStatus.knownCases {
             #expect(!DesiredVMStatus.absent.isSatisfied(by: status))
         }
     }
@@ -453,13 +453,13 @@ struct ReconciliationProtocolTests {
                     recordsHash: "abc123")
             ])
         let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
-        let zone = try #require(decoded.dnsZones?.first)
-        #expect(zone.zoneId == zoneID)
-        #expect(zone.zoneName == "acme.internal")
-        #expect(zone.networkIds == [networkID])
-        #expect(zone.recordsHash == "abc123")
-        #expect(zone.records.count == 2)
-        #expect(zone.records[0].values == ["10.0.0.5", "10.0.0.6"])
+        let zone = try #require(decoded._jsonDnsZones?.first)
+        #expect(zone._jsonZoneId == zoneID)
+        #expect(zone._jsonZoneName == "acme.internal")
+        #expect(zone._jsonNetworkIds == [networkID])
+        #expect(zone._jsonRecordsHash == "abc123")
+        #expect(zone._jsonRecords.count == 2)
+        #expect(zone._jsonRecords[0]._jsonValues == ["10.0.0.5", "10.0.0.6"])
     }
 
     @Test("A non-authoritative sync without DNS zones decodes to nil")
@@ -473,11 +473,11 @@ struct ReconciliationProtocolTests {
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
-        #expect(decoded.dnsZones == nil)
+        #expect(decoded._jsonDnsZones == nil)
 
         let empty = DesiredStateMessage(vms: [], dnsZones: [])
         let decodedEmpty = try MessageEnvelope(message: empty).decode(as: DesiredStateMessage.self)
-        #expect(decodedEmpty.dnsZones?.isEmpty == true)
+        #expect(decodedEmpty._jsonDnsZones?.isEmpty == true)
     }
 
     @Test("An unknown record type decodes rather than failing the whole sync")
@@ -489,7 +489,7 @@ struct ReconciliationProtocolTests {
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredDNSRecord.self, from: Data(payload.utf8))
-        #expect(decoded.type == "CAA")
+        #expect(decoded._jsonType == "CAA")
     }
 
     // MARK: - Per-network resolver (wire v37, STR-40)
@@ -502,7 +502,7 @@ struct ReconciliationProtocolTests {
             resolverEnabled: true, generation: 3)
         let message = DesiredStateMessage(vms: [], networks: [network])
         let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
-        #expect(decoded.networks.first?.resolverEnabled == true)
+        #expect(decoded._jsonNetworks.first?._jsonResolverEnabled == true)
     }
 
     @Test("A sync without resolverEnabled decodes to nil, never to off")
@@ -518,8 +518,8 @@ struct ReconciliationProtocolTests {
             """
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredNetworkState.self, from: Data(legacy.utf8))
-        #expect(decoded.resolverEnabled == nil)
-        #expect(decoded.metadataEnabled == false)
+        #expect(decoded._jsonResolverEnabled == nil)
+        #expect(decoded._jsonMetadataEnabled == false)
     }
 
     @Test("NetworkSpec carries the per-NIC resolver flag, which is what reaches the chassis")
@@ -532,11 +532,11 @@ struct ReconciliationProtocolTests {
             metadataEnabled: true, resolverEnabled: true)
         let data = try WireProtocol.makeEncoder().encode(spec)
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
-        #expect(decoded.resolverEnabled == true)
+        #expect(decoded._jsonResolverEnabled == true)
         // The resolver's upstreams and search domain ride fields that already
         // existed, so no other field was needed.
-        #expect(decoded.dnsServers == ["1.1.1.1"])
-        #expect(decoded.domainName == "corp.example.com")
+        #expect(decoded._jsonDnsServers == ["1.1.1.1"])
+        #expect(decoded._jsonDomainName == "corp.example.com")
     }
 
     @Test("A NetworkSpec with no resolver opinion decodes with a nil flag")
@@ -546,7 +546,7 @@ struct ReconciliationProtocolTests {
              "dhcpEnabled":false,"dnsServers":[],"metadataEnabled":false}
             """
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: Data(noOpinion.utf8))
-        #expect(decoded.resolverEnabled == nil)
+        #expect(decoded._jsonResolverEnabled == nil)
     }
 
     @Test("A record's TTL travels, which is what a zone file needs and OVN never did")
@@ -554,7 +554,7 @@ struct ReconciliationProtocolTests {
         let record = DesiredDNSRecord(name: "web.acme.internal", type: "A", values: ["10.0.0.5"], ttl: 60)
         let data = try WireProtocol.makeEncoder().encode(record)
         let decoded = try WireProtocol.makeDecoder().decode(DesiredDNSRecord.self, from: data)
-        #expect(decoded.ttl == 60)
+        #expect(decoded._jsonTtl == 60)
     }
 
     @Test("A record requires an explicit TTL")
@@ -579,13 +579,13 @@ struct ReconciliationProtocolTests {
                 availableDisk: 1),
             resolverCapable: true)
         let decoded = try MessageEnvelope(message: message).decode(as: AgentRegisterMessage.self)
-        #expect(decoded.resolverCapable == true)
+        #expect(decoded._jsonResolverCapable == true)
 
         let withoutCapability = """
             {"requestId":"r","timestamp":0,"agentId":"a","hostname":"h","version":"1",\
             "resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
             "availableCPU":1,"availableMemory":1,"availableDisk":1},\
-            "protocolVersion":\(WireProtocol.currentVersion),"dependencyObservations":[]}
+            "protocolVersion":\(Int(AgentProtocolCompatibility.major)),"dependencyObservations":[]}
             """
         #expect(throws: DecodingError.self) {
             try WireProtocol.makeDecoder().decode(
@@ -645,14 +645,14 @@ struct ReconciliationProtocolTests {
             resolverAddresses: addresses, generation: 1)
         let decoded = try MessageEnvelope(message: DesiredStateMessage(vms: [], networks: [network]))
             .decode(as: DesiredStateMessage.self)
-        #expect(decoded.networks.first?.resolverAddresses == addresses)
+        #expect(decoded._jsonNetworks.first?._jsonResolverAddresses == addresses)
 
         let spec = NetworkSpec(
             network: "default", networkId: UUID(), resolverEnabled: true,
             resolverAddresses: addresses)
         let data = try WireProtocol.makeEncoder().encode(spec)
         #expect(
-            try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data).resolverAddresses
+            try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)._jsonResolverAddresses
                 == addresses)
     }
 }

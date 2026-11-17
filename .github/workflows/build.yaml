@@ -1,11 +1,8 @@
 name: PR Validation
 
-# PRs are a COMPILE CHECK ONLY — nothing here runs `swift test`, and the test
-# targets are not even built (no `--build-tests`). The project has no customers
-# and no deployments yet, so PR turnaround was traded for that safety
-# deliberately: the control-plane suite alone was 342s of a 530s job, and its
-# test targets dominated the remaining compile. Running the suite before you
-# merge is a human responsibility now — see CLAUDE.md.
+# Broad Swift suites remain opt-in. The Agent Protocol Contract job runs the
+# focused wire compatibility tests because schema evolution must be checked
+# before merge, including when multiple branches add features concurrently.
 on:
   pull_request:
     branches:
@@ -141,6 +138,25 @@ jobs:
             # so changing either the rule or the test runs the shell job.
             docker_source_context:
               - '.dockerignore'
+
+  agent-protocol:
+    name: Agent Protocol Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: vapor/swiftly-action@v0.2
+        with:
+          toolchain: "6.4.0"
+      - name: Install pinned protocol tools
+        run: bash scripts/install-agent-protocol-tools.sh
+      - name: Check schemas, generated output, and independent peers
+        env:
+          PROTOCOL_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          source .build/agent-protocol-tools/env.sh
+          bash scripts/check-agent-protocol.sh "$PROTOCOL_BASE"
 
   swift-format:
     name: Swift Format Lint

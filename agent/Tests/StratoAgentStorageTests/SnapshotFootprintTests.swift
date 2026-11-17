@@ -45,7 +45,7 @@ struct SnapshotFootprintTests {
                     Issue.record("\(kind) must not be re-measured")
                     return 1
                 })
-            #expect(reported?.currentSizeBytes == nil, "\(kind)")
+            #expect(reported?.hasCurrentSizeBytes == false, "\(kind)")
             #expect(reported?.sizeBytes == 197_120, "\(kind)")
         }
     }
@@ -55,7 +55,7 @@ struct SnapshotFootprintTests {
         #expect(
             SnapshotFootprint.reported(
                 facts(storagePath: nil), kind: .volumeSnapshot, measure: { _ in 1 }
-            )?.currentSizeBytes == nil)
+            )?.hasCurrentSizeBytes == false)
         #expect(SnapshotFootprint.reported(nil, kind: .volumeSnapshot, measure: { _ in 1 }) == nil)
     }
 
@@ -63,7 +63,7 @@ struct SnapshotFootprintTests {
     func unmeasurableFootprintIsNil() {
         let reported = SnapshotFootprint.reported(
             facts(), kind: .volumeSnapshot, measure: { _ in nil })
-        #expect(reported?.currentSizeBytes == nil)
+        #expect(reported?.hasCurrentSizeBytes == false)
     }
 
     @Test("allocatedBytes measures a real file and refuses a missing one")

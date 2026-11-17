@@ -51,7 +51,8 @@ struct SandboxAdoptedFenceReleaseTests {
         let released = try JSONEncoder().encode(
             SandboxIdleGuestResponse(
                 type: .fence, sandboxId: id.uuidString, nonce: nonce,
-                operationId: fence.operationId, admissionToken: fence.admissionToken, state: .released))
+                operationId: try UUID(protocolString: fence.operationID),
+                admissionToken: try UUID(protocolString: fence.admissionToken), state: .released))
         let socketPath = root.path + "/guest.sock"
         let fixture = try AdoptedGuestSocketFixture(
             path: socketPath, replies: compatible ? [pong, released, released] : [pong])

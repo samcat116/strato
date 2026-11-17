@@ -1,4 +1,5 @@
 import Foundation
+import SwiftProtobuf
 
 // Shared IP address values used by the control plane (IPAM, validation), the
 // agent (OVN programming, guest provisioning), and the wire DTOs. Foundation
@@ -10,9 +11,8 @@ import Foundation
 /// Address family discriminator, stored alongside addresses in the database
 /// and used to split mixed lists (e.g. DNS servers) when programming
 /// family-specific config.
-public enum IPFamily: String, Codable, Sendable {
-    case ipv4
-    case ipv6
+public typealias IPFamily = Strato_Agent_V1_IPFamily
+extension Strato_Agent_V1_IPFamily: Codable {
 
     /// Returns whether `address` is valid for this family.
     public func matches(_ address: String) -> Bool {
@@ -21,7 +21,42 @@ public enum IPFamily: String, Codable, Sendable {
             IPv4Address(address) != nil
         case .ipv6:
             IPv6Address(address) != nil
+        case .unspecified, .UNRECOGNIZED:
+            false
         }
+    }
+
+    public var protocolValue: String {
+        switch self {
+        case .ipv4: return "ipv4"
+        case .ipv6: return "ipv6"
+        case .unspecified, .UNRECOGNIZED: return ""
+        }
+    }
+
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "ipv4": self = .ipv4
+        case "ipv6": self = .ipv6
+        default: return nil
+        }
+    }
+
+    public init(from decoder: any Swift.Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let value = Self(rawValue: try container.decode(String.self)) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown enum value")
+        }
+        self = value
+    }
+
+    public func encode(to encoder: any Swift.Encoder) throws {
+        guard !protocolValue.isEmpty else {
+            throw EncodingError.invalidValue(
+                self, .init(codingPath: encoder.codingPath, debugDescription: "Unknown enum value"))
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(protocolValue)
     }
 }
 

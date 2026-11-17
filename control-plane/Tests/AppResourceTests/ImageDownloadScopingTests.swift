@@ -60,8 +60,8 @@ final class ImageDownloadScopingTests {
             }
             let started = ContinuousClock.now
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentID)
-            #expect(sync.vms.count == 40)
-            #expect(sync.volumes.count == 40)
+            #expect(sync.vms.values.count == 40)
+            #expect(sync.volumes.values.count == 40)
             let batches = await store.batches
             #expect(batches.count == 1)
             #expect(batches.first == [CoordinationService.imageDownloadGrantKey(agentId: agentID, imageId: image.id!)])
@@ -100,10 +100,10 @@ final class ImageDownloadScopingTests {
     }
 
     private func registerAgent(
-        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
+        app: Application, named name: String, protocolMajor: Int = Int(AgentProtocolCompatibility.major)
     ) async throws -> String {
         try await TestDataBuilder(db: app.db).registerAgent(
-            on: app, named: name, hostname: "\(name).test", protocolVersion: protocolVersion)
+            on: app, named: name, hostname: "\(name).test", protocolMajor: protocolMajor)
     }
 
     private func hasGrant(app: Application, agentId: String, image: Image) async -> Bool {
@@ -125,14 +125,14 @@ final class ImageDownloadScopingTests {
             try await attachBootVolume(to: vm, on: placedAgent, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: placedAgent)
-            #expect(message.vms.first?.imageInfo?.imageId == image.id)
+            #expect(message.vms.values.first?.imageInfo.imageID == image.id?.uuidString)
 
             #expect(await self.hasGrant(app: app, agentId: placedAgent, image: image))
 
             // The agent the VM is not placed on assembles an empty sync, and
             // gets nothing — this is the isolation the issue asks for.
             let empty = try await app.desiredStateAssembler.assemble(agentId: otherAgent)
-            #expect(empty.vms.isEmpty)
+            #expect(empty.vms.values.isEmpty)
             #expect(await self.hasGrant(app: app, agentId: otherAgent, image: image) == false)
         }
     }
@@ -153,7 +153,7 @@ final class ImageDownloadScopingTests {
             try await attachBootVolume(to: vm, on: agentId, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.vms.first?.imageInfo == nil)
+            #expect(message.vms.values.first?.hasImageInfo == false)
             #expect(await self.hasGrant(app: app, agentId: agentId, image: image) == false)
         }
     }
@@ -186,7 +186,7 @@ final class ImageDownloadScopingTests {
             try await placeVolume(volume, on: agentId, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.volumes.first?.source?.kind == DesiredVolumeSource.image)
+            #expect(message.volumes.values.first?.source.kind == DesiredVolumeSource.image)
             #expect(await self.hasGrant(app: app, agentId: agentId, image: image))
         }
     }
@@ -214,7 +214,7 @@ final class ImageDownloadScopingTests {
             try await placeVolume(volume, on: owner, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: other)
-            #expect(message.volumes.isEmpty)
+            #expect(message.volumes.values.isEmpty)
             #expect(await self.hasGrant(app: app, agentId: other, image: image) == false)
         }
     }

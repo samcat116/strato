@@ -5,16 +5,16 @@ import StratoShared
 /// reintroducing a path-shaped production API on the sum type.
 extension DiskAttachment {
     var filePath: String {
-        guard case .file(let path, _) = self else {
+        guard case .file(let file) = value else {
             preconditionFailure("expected a file attachment, got \(self)")
         }
-        return path
+        return file.path
     }
 
     var fileFormat: DiskFormat {
-        guard case .file(_, let format) = self else {
+        guard case .file(let file) = value else {
             preconditionFailure("expected a file attachment, got \(self)")
         }
-        return format
+        return file.format
     }
 }

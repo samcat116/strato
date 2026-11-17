@@ -65,7 +65,7 @@ extension FirecrackerSandboxRuntime {
             activeExecSessions: execCount, pendingCommands: activity.pendingActivityCount,
             supportsFullSnapshot: managed.jail != nil && managed.warmHeldIdentity == nil
                 && managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
-                && managed.spec.network == nil,
+                && !managed.spec.hasNetwork,
             snapshotOrRestoreInProgress: checkpointing.contains(sandboxId))
     }
 
@@ -80,7 +80,7 @@ extension FirecrackerSandboxRuntime {
             idleSuspensionAdmissions.removeValue(forKey: sandboxId)
             return .unknownActivity
         }
-        guard managed.spec.network == nil else { return .unknownActivity }
+        guard !managed.spec.hasNetwork else { return .unknownActivity }
         do {
             guard try await managed.manager.getInstanceInfo().state == .running else { return .unknownActivity }
         } catch {

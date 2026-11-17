@@ -254,7 +254,7 @@ final class AgentManifestQuarantineTests {
             await app.agentService.applyObservedStateReport(
                 try MessageEnvelope(message: self.healthyReport(agentId: agentId)), fromAgentKey: agent.identity.key)
             for observation in observations {
-                #expect(try await VM.find(observation.vmId, on: app.db)?.status == .running)
+                #expect(try await VM.find(try UUID(protocolString: observation.vmID), on: app.db)?.status == .running)
             }
             var row = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(row.manifestStatusReason?.contains("more than 3 resources and 25%") == true)
@@ -271,7 +271,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(
                     message: self.healthyReport(agentId: agentId, vms: Array(observations.dropFirst()))),
                 fromAgentKey: agent.identity.key)
-            #expect(try await VM.find(observations[0].vmId, on: app.db)?.status == .error)
+            #expect(try await VM.find(try UUID(protocolString: observations[0].vmID), on: app.db)?.status == .error)
 
             // Registration resets the baseline even after a healthy session.
             try await app.agentService.beginObservedInventorySession(for: agent.identity.key)
@@ -279,7 +279,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(
                     message: self.healthyReport(agentId: agentId, vms: Array(observations.dropFirst(2)))),
                 fromAgentKey: agent.identity.key)
-            #expect(try await VM.find(observations[1].vmId, on: app.db)?.status == .running)
+            #expect(try await VM.find(try UUID(protocolString: observations[1].vmID), on: app.db)?.status == .running)
             row = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(row.manifestStatusReason?.contains("first authoritative inventory") == true)
         }
@@ -403,7 +403,7 @@ final class AgentManifestQuarantineTests {
                     agentId: agentID.uuidString, vms: [], resources: baseline.resources, snapshots: [])
                 // A different resource sample forces the post-admission save.
                 let changed = ObservedStateReport(
-                    agentId: agentID.uuidString, vms: baseline.vms,
+                    agentId: agentID.uuidString, vms: baseline.vms.values,
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 4,
                         totalMemory: 16_000_000_000, availableMemory: 7_000_000_000,
@@ -465,7 +465,7 @@ final class AgentManifestQuarantineTests {
                 try await vm.save(on: app.db)
                 workloads.append(ObservedVMState(vmId: try vm.requireID(), status: .running, observedGeneration: 0))
             }
-            let parentID = try #require(workloads.first?.vmId)
+            let parentID = try UUID(protocolString: #require(workloads.first?.vmID))
             var snapshots: [VMSnapshot] = []
             var observations: [ObservedSnapshotState] = []
             for index in 0..<4 {
@@ -544,7 +544,7 @@ final class AgentManifestQuarantineTests {
                 try MessageEnvelope(message: baseline), fromAgentKey: agent.identity.key)
             for section in [ObservedInventoryGuard.Section.volumes, .snapshots] {
                 let report = ObservedStateReport(
-                    agentId: agentId, vms: baseline.vms, resources: baseline.resources,
+                    agentId: agentId, vms: baseline.vms.values, resources: baseline.resources,
                     volumes: section == .volumes ? [] : nil, snapshots: section == .snapshots ? [] : nil)
                 await app.agentService.applyObservedStateReport(
                     try MessageEnvelope(message: report), fromAgentKey: agent.identity.key)

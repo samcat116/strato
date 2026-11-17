@@ -11,9 +11,13 @@ public enum FirecrackerDiskAttachment {
     }
 
     public static func hostPath(for attachment: DiskAttachment) throws -> String {
-        switch attachment {
-        case .file(let path, _), .blockDevice(let path):
-            return path
+        switch attachment.value {
+        case .file(let file):
+            return file.path
+        case .blockDevice(let device):
+            return device.path
+        case .none:
+            throw AgentProtocolDecodeError.invalidField
         case .rbd:
             throw Error.nativeRBD
         }

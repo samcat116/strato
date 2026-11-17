@@ -76,8 +76,8 @@ struct LibvirtGuestSeedRefusalTests {
     @Test func absentGuestSeedIntentAllowsDomainDefinition() async throws {
         try await fixture { root, id, requestedSpec, definitions in
             let spec = VMSpec(
-                cpus: requestedSpec.cpus, memoryBytes: requestedSpec.memoryBytes,
-                boot: requestedSpec.boot, volumes: requestedSpec.volumes)
+                cpus: Int(requestedSpec.cpus), memoryBytes: requestedSpec.memoryBytes,
+                boot: requestedSpec.boot, volumes: requestedSpec.volumes.values)
             var provisioner = CloudInitProvisioner(logger: Logger(label: "absent-seed"))
             provisioner.runISO = { _, _, _ in
                 Issue.record("A VM with no seed intent invoked ISO generation")

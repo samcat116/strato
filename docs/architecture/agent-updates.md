@@ -317,7 +317,8 @@ agent's existing assignment and reuses artifact resolution. It never assigns an
 update, enrolls an agent, or makes a disconnected agent eligible for a manual
 update. With no assignment it returns no artifact. Authentication errors and
 malformed exchanges fail closed. A missing route (404) on a prebridge control
-plane falls back only to the ordinary exact-version registration handshake.
+plane falls back only to ordinary workload registration with a matching protocol
+major.
 
 The agent authenticates the server's exact configured control-plane SPIFFE ID
 with the same chain-and-identity verifier as its WebSocket. Each probe derives
@@ -327,16 +328,16 @@ body to 64 KiB and the whole request to 15 seconds, and closes the connection on
 completion, cancellation or failure. An unverified 404 cannot enable fallback.
 
 Before registration the bridge agent probes this route. A failed probe during
-network capability refresh leaves the existing exact-version session and its
+network capability refresh leaves the existing workload session and its
 poller active; explicit skew stops polling before an update is applied.
-Matching workload versions retain ordinary registration, desired-state updates, and status
+A matching protocol major retains ordinary registration, desired-state updates, and status
 reports. Under skew, it stops workload polling, refuses to send a workload
 registration DTO or update status report, and applies only the staged artifact
 through `AgentUpdater`, including SHA-256 verification and the existing local
 restart gates. Every bridge desired-state poll also advertises
-`Strato-Workload-Wire-Version`; mismatches return 409 before workload assembly,
-including polls that survive a control-plane cutover. Legacy clients retain the
-registration-only contract while versions match; they are not supported across
+`Strato-Workload-Wire-Version`, which now carries the protocol major; a mismatch
+returns 409 before workload assembly, including polls that survive a control-plane
+cutover. Legacy clients retain the registration-only contract while majors match; they are not supported across
 wire cutover. No general workload DTO compatibility window is introduced.
 
 #### Upgrade order and bootstrap limit

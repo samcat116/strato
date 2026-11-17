@@ -141,7 +141,7 @@ public actor MockStorageBackend: StorageBackend {
         let path = volumePath(volumeId: volumeId, format: format)
         logger.info(
             "Creating mock volume from image (mock mode; image not downloaded)",
-            metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageId.uuidString)])
+            metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageID)])
         volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: sourceArtifact.size)
         persist()
         return .file(path: path, format: format)
@@ -159,8 +159,8 @@ public actor MockStorageBackend: StorageBackend {
             "Materializing mock disk (mock mode; image not downloaded)",
             metadata: [
                 "path": .string(path),
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "artifactKind": .string(artifactKind.rawValue),
+                "imageId": .string(imageInfo.imageID),
+                "artifactKind": .string(artifactKind.protocolValue),
             ])
         return .file(path: path, format: format)
     }
@@ -186,15 +186,15 @@ public actor MockStorageBackend: StorageBackend {
     }
 
     public func resizeVolume(attachment: DiskAttachment, newSizeBytes: Int64) async throws {
-        guard case .file(let volumePath, _) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             throw StorageBackendError.volumeNotFound(String(describing: attachment))
         }
-        guard let id = volumes.first(where: { $0.value.path == volumePath })?.key else {
-            throw StorageBackendError.volumeNotFound(volumePath)
+        guard let id = volumes.first(where: { $0.value.path == protocolFile.path })?.key else {
+            throw StorageBackendError.volumeNotFound(protocolFile.path)
         }
         logger.info(
             "Resizing mock volume (mock mode)",
-            metadata: ["volumePath": .string(volumePath), "newSizeBytes": .stringConvertible(newSizeBytes)])
+            metadata: ["volumePath": .string(protocolFile.path), "newSizeBytes": .stringConvertible(newSizeBytes)])
         volumes[id]?.sizeBytes = newSizeBytes
         persist()
     }
@@ -255,11 +255,11 @@ public actor MockStorageBackend: StorageBackend {
     }
 
     public func volumeInfo(attachment: DiskAttachment) async throws -> VolumeInfoResult {
-        guard case .file(let volumePath, _) = attachment else {
+        guard case .file(let protocolFile) = attachment.value else {
             throw StorageBackendError.volumeNotFound(String(describing: attachment))
         }
-        guard let volume = volumes.first(where: { $0.value.path == volumePath })?.value else {
-            throw StorageBackendError.volumeNotFound(volumePath)
+        guard let volume = volumes.first(where: { $0.value.path == protocolFile.path })?.value else {
+            throw StorageBackendError.volumeNotFound(protocolFile.path)
         }
         // A simulated volume consumes nothing, so actualSize is 0 — the honest
         // answer for a disk that does not exist, and it keeps a simulated fleet
@@ -267,7 +267,7 @@ public actor MockStorageBackend: StorageBackend {
         return VolumeInfoResult(
             actualSize: 0,
             virtualSize: volume.sizeBytes,
-            format: volume.format.rawValue,
+            format: volume.format.protocolValue,
             dirty: false,
             encrypted: false
         )

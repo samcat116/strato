@@ -197,7 +197,7 @@ final class VMResizeTests {
                 }
                 if let statusBeforeUnlock {
                     try await sql.raw(
-                        "UPDATE vms SET status = \(bind: statusBeforeUnlock.rawValue) WHERE id = \(bind: vmID)"
+                        "UPDATE vms SET status = \(bind: statusBeforeUnlock.protocolValue) WHERE id = \(bind: vmID)"
                     ).run()
                 }
             }
@@ -243,7 +243,7 @@ final class VMResizeTests {
         }
     }
 
-    @Test("Native Apple resize only accepts created and shutdown states", arguments: VMStatus.allCases)
+    @Test("Native Apple resize only accepts created and shutdown states", arguments: VMStatus.knownCases)
     func appleResizeStateGuard(status: VMStatus) async throws {
         try await withResizeTestApp { app, _, vm, project, token in
             vm.hypervisorType = .appleVirtualization

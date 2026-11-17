@@ -351,7 +351,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                     + "backendOverheadBytes=\(reservation.backendOverheadBytes)"
             }.joined(separator: "; ")
             return
-                "No agent has sufficient resources. Resource class=\(required.resourceClass?.policy.kind.rawValue ?? "guaranteed"), physicalCPUMicroUnits=\(required.effectiveCPU). Required CPU=\(required.cpu), Disk=\(required.disk). \(operands)"
+                "No agent has sufficient resources. Resource class=\(required.resourceClass?.policy.kind.protocolValue ?? "guaranteed"), physicalCPUMicroUnits=\(required.effectiveCPU). Required CPU=\(required.cpu), Disk=\(required.disk). \(operands)"
         }
     }
 }
@@ -516,10 +516,10 @@ final class SchedulerService: Sendable {
             span.attributes["scheduler.strategy"] = selectedStrategy.rawValue
             span.attributes["scheduler.candidate_count"] = agents.count
             span.attributes["vm.name"] = vmName
-            span.attributes["vm.hypervisor"] = requirements.hypervisorType.rawValue
+            span.attributes["vm.hypervisor"] = requirements.hypervisorType.protocolValue
             do {
                 logger.info(
-                    "Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.rawValue), arch: \(requirements.architecture?.rawValue ?? "any"))"
+                    "Scheduling VM '\(vmName)' using \(selectedStrategy.rawValue) strategy (hypervisor: \(requirements.hypervisorType.protocolValue), arch: \(requirements.architecture?.protocolValue ?? "any"))"
                 )
 
                 let eligibleAgents = try filterEligibleAgents(agents, for: requirements)
@@ -582,13 +582,15 @@ final class SchedulerService: Sendable {
                     "Resource class \(snapshot.classID) revision \(snapshot.revision): burstable placement requires verified STR272 runtime enforcement"
                 )
             }
-            if let siteID = requirements.siteID, siteID != snapshot.siteID {
+            if let siteID = requirements.siteID, siteID != UUID(uuidString: snapshot.siteID) {
                 throw SchedulerError.resourceClassAdmissionRefused(
                     "Resource class site conflicts with network site pinning")
             }
         }
         let classScoped =
-            requirements.resourceClass.map { snapshot in agents.filter { $0.siteID == snapshot.siteID } } ?? agents
+            requirements.resourceClass.map { snapshot in
+                agents.filter { $0.siteID == UUID(uuidString: snapshot.siteID) }
+            } ?? agents
         let online = classScoped.filter { $0.status == AgentStatus.online }
         guard !online.isEmpty else {
             throw SchedulerError.noAvailableAgents

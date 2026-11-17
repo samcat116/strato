@@ -69,24 +69,24 @@ struct InstanceMetadataTests {
         let message = DesiredStateMessage(syncId: "sync-imds", vms: [desiredState(metadata: Self.metadata)])
         let decoded = try throughEnvelope(message)
 
-        let metadata = try #require(decoded.vms.first?.metadata)
+        let metadata = try #require(decoded._jsonVms.first?._jsonMetadata)
         #expect(metadata == Self.metadata)
-        #expect(metadata.instanceId == Fixtures.uuidA)
-        #expect(metadata.hostname == "web-01")
-        #expect(metadata.projectId == Fixtures.uuidB)
-        #expect(metadata.environment == "production")
-        #expect(metadata.region == "sfo-1")
-        #expect(metadata.availabilityZone == "hv-03")
-        #expect(metadata.sshAuthorizedKeys == ["ssh-ed25519 AAAAC3Nz test@example"])
-        #expect(metadata.userData == "#cloud-config\npackages: [htop]\n")
-        #expect(metadata.vendorData == "#cloud-config\nruncmd: [echo strato]\n")
-        #expect(metadata.tags == ["role": "web", "tier": "frontend"])
-        #expect(metadata.noCloudSeedToken?.uuidString == "11111111-2222-4333-8444-555555555555")
+        #expect(metadata._jsonInstanceId == Fixtures.uuidA)
+        #expect(metadata._jsonHostname == "web-01")
+        #expect(metadata._jsonProjectId == Fixtures.uuidB)
+        #expect(metadata._jsonEnvironment == "production")
+        #expect(metadata._jsonRegion == "sfo-1")
+        #expect(metadata._jsonAvailabilityZone == "hv-03")
+        #expect(metadata._jsonSshAuthorizedKeys == ["ssh-ed25519 AAAAC3Nz test@example"])
+        #expect(metadata._jsonUserData == "#cloud-config\npackages: [htop]\n")
+        #expect(metadata._jsonVendorData == "#cloud-config\nruncmd: [echo strato]\n")
+        #expect(metadata._jsonTags == ["role": "web", "tier": "frontend"])
+        #expect(metadata._jsonNoCloudSeedToken?.uuidString == "11111111-2222-4333-8444-555555555555")
 
         // The rest of the desired entry is unaffected by riding alongside it.
-        #expect(decoded.vms.first?.generation == 9)
+        #expect(decoded._jsonVms.first?._jsonGeneration == 9)
         #expect(
-            decoded.vms.first?.imageInfo?.artifact(ofKind: .diskImage)?.filename
+            decoded._jsonVms.first?._jsonImageInfo?.artifact(ofKind: .diskImage)?._jsonFilename
                 == "debian-12.qcow2")
     }
 
@@ -101,9 +101,9 @@ struct InstanceMetadataTests {
         #expect(!keys.contains("metadata"))
 
         let decoded = try decodeJSON(DesiredVMState.self, from: encodeJSON(withoutMetadata))
-        #expect(decoded.metadata == nil)
-        #expect(decoded.generation == 9)
-        #expect(decoded.desiredStatus == .running)
+        #expect(decoded._jsonMetadata == nil)
+        #expect(decoded._jsonGeneration == 9)
+        #expect(decoded._jsonDesiredStatus == .running)
 
         // And the key is there — not silently dropped — when there is metadata.
         #expect(try encodedKeys(desiredState(metadata: Self.metadata)).contains("metadata"))
@@ -121,7 +121,7 @@ struct InstanceMetadataTests {
 
         let reparsed = try #require(JSONSerialization.jsonObject(with: withNull) as? [String: Any])
         #expect(reparsed["metadata"] is NSNull)
-        #expect(try decodeJSON(DesiredVMState.self, from: withNull).metadata == nil)
+        #expect(try decodeJSON(DesiredVMState.self, from: withNull)._jsonMetadata == nil)
     }
 
     @Test("Metadata carrying its required keys decodes optional collections as empty")
@@ -132,23 +132,23 @@ struct InstanceMetadataTests {
             {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)","serviceEnabled":true}
             """
         let decoded = try decodeJSON(InstanceMetadata.self, from: minimal)
-        #expect(decoded.nics.isEmpty)
-        #expect(decoded.sshAuthorizedKeys.isEmpty)
-        #expect(decoded.tags.isEmpty)
-        #expect(decoded.noCloudSeedToken == nil)
+        #expect(decoded._jsonNics.isEmpty)
+        #expect(decoded._jsonSshAuthorizedKeys.isEmpty)
+        #expect(decoded._jsonTags.isEmpty)
+        #expect(decoded._jsonNoCloudSeedToken == nil)
         // A VM predating `VM.hostname` (issue #770) has none, and nothing here
         // may invent one — it would disagree with the VM's DNS zone.
-        #expect(decoded.hostname == nil)
-        #expect(decoded.environment == nil)
-        #expect(decoded.region == nil)
-        #expect(decoded.availabilityZone == nil)
+        #expect(decoded._jsonHostname == nil)
+        #expect(decoded._jsonEnvironment == nil)
+        #expect(decoded._jsonRegion == nil)
+        #expect(decoded._jsonAvailabilityZone == nil)
         // Nil, not "": cloud-init treats an empty user-data document as
         // "provided, and does nothing", which is a different instruction.
-        #expect(decoded.userData == nil)
-        #expect(decoded.vendorData == nil)
+        #expect(decoded._jsonUserData == nil)
+        #expect(decoded._jsonVendorData == nil)
         // No policy means no identity is vended — the conservative reading.
-        #expect(decoded.identity == nil)
-        #expect(decoded.serviceEnabled)
+        #expect(decoded._jsonIdentity == nil)
+        #expect(decoded._jsonServiceEnabled)
         #expect(decoded.isServiceEnabled)
     }
 
@@ -160,7 +160,7 @@ struct InstanceMetadataTests {
                 "serviceEnabled":\(json)}
                 """
             let decoded = try decodeJSON(InstanceMetadata.self, from: payload)
-            #expect(decoded.serviceEnabled == enabled)
+            #expect(decoded._jsonServiceEnabled == enabled)
             #expect(decoded.isServiceEnabled == enabled)
         }
 
@@ -170,7 +170,7 @@ struct InstanceMetadataTests {
             instanceId: Fixtures.uuidA, projectId: Fixtures.uuidB, serviceEnabled: false)
         let encoded = try WireProtocol.makeEncoder().encode(off)
         let round = try WireProtocol.makeDecoder().decode(InstanceMetadata.self, from: encoded)
-        #expect(round.serviceEnabled == false)
+        #expect(round._jsonServiceEnabled == false)
         #expect(!round.isServiceEnabled)
     }
 
@@ -208,25 +208,25 @@ struct InstanceMetadataTests {
              "networkId":"\(Fixtures.uuidA.uuidString)","networkName":"default"}
             """
         let decoded = try decodeJSON(MetadataNIC.self, from: minimal)
-        #expect(decoded.deviceName == "net0")
-        #expect(decoded.dnsServers.isEmpty)
-        #expect(decoded.resolverAddresses.isEmpty)
-        #expect(!decoded.dhcpEnabled)
-        #expect(!decoded.metadataEnabled)
-        #expect(decoded.domainName == nil)
-        #expect(decoded.ipAddress == nil)
-        #expect(decoded.mtu == nil)
+        #expect(decoded._jsonDeviceName == "net0")
+        #expect(decoded._jsonDnsServers.isEmpty)
+        #expect(decoded._jsonResolverAddresses.isEmpty)
+        #expect(!decoded._jsonDhcpEnabled)
+        #expect(!decoded._jsonMetadataEnabled)
+        #expect(decoded._jsonDomainName == nil)
+        #expect(decoded._jsonIpAddress == nil)
+        #expect(decoded._jsonMtu == nil)
     }
 
     @Test("An identity policy carrying only its SPIFFE ID decodes to no audiences")
     func identityPolicyTolerantDecoding() throws {
         let decoded = try decodeJSON(
             IdentityPolicy.self, from: #"{"spiffeId":"spiffe://strato/vm/1"}"#)
-        #expect(decoded.spiffeId == "spiffe://strato/vm/1")
+        #expect(decoded._jsonSpiffeId == "spiffe://strato/vm/1")
         // Empty means none: a guest asking for an audience outside the list is
         // refused, so the fallback must not be mistaken for "any".
-        #expect(decoded.audiences.isEmpty)
-        #expect(decoded.ttlSeconds == nil)
+        #expect(decoded._jsonAudiences.isEmpty)
+        #expect(decoded._jsonTtlSeconds == nil)
     }
 
     @Test("An identity policy naming no SPIFFE ID fails rather than authorizing nothing")

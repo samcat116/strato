@@ -207,7 +207,7 @@ public enum HypervisorProbe {
                 supportsSnapshots: support.supportsSnapshots,
                 supportsVsock: support.supportsVsock,
                 supportsGuestExec: support.supportsGuestExec,
-                supportsVolumeIOLimits: support.supportsVolumeIOLimits,
+                supportsVolumeIOLimits: support.supportsVolumeIoLimits,
                 version: version
             )
         }

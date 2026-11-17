@@ -10,15 +10,17 @@ struct VMGuestConfigMutation {
 
     static func normalized(_ config: GuestConfig?) -> GuestConfig? {
         guard let config else { return nil }
-        guard !config.packages.isEmpty || !config.files.isEmpty || !config.services.isEmpty || !config.sysctls.isEmpty
+        guard
+            !config.packages.values.isEmpty || !config.files.values.isEmpty || !config.services.values.isEmpty
+                || !config.sysctls.values.isEmpty
         else {
             return nil
         }
         return GuestConfig(
-            packages: config.packages.sorted { $0.name < $1.name },
-            files: config.files.sorted { $0.path < $1.path },
-            services: config.services.sorted { $0.name < $1.name },
-            sysctls: config.sysctls.sorted { $0.key < $1.key })
+            packages: config.packages.values.sorted { $0.name < $1.name },
+            files: config.files.values.sorted { $0.path < $1.path },
+            services: config.services.values.sorted { $0.name < $1.name },
+            sysctls: config.sysctls.values.sorted { $0.key < $1.key })
     }
 
     static func equivalent(_ lhs: GuestConfig?, _ rhs: GuestConfig?) throws -> Bool {
@@ -63,7 +65,7 @@ struct VMGuestConfigMutation {
         _ config: GuestConfig?, retry: Bool = false, on vm: VM, actor: MutationActor,
         context: IdempotencyRequestContext?, db: any Database, app: Application
     ) async throws -> ResourceMutation.Accepted? {
-        try config?.validate()
+        try config?.validateProtocol()
         let requested = Self.normalized(config)
         let id = try vm.requireID()
         let accepted: ResourceMutation.Accepted? = try await db.transaction { db in

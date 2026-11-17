@@ -9,7 +9,7 @@ struct SandboxIdleSuspensionAdmissionTests {
     let now = Date(timeIntervalSince1970: 10_000)
 
     func policy() -> SandboxIdlePolicy {
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         return policy
     }
@@ -29,7 +29,7 @@ struct SandboxIdleSuspensionAdmissionTests {
         #expect(!admission.permitsDestruction(evidence: sample, at: now))
         #expect(admission.prepare(policy: policy(), evidence: nil, at: now) == .unknownActivity)
         #expect(!admission.permitsDestruction(evidence: sample, at: now))
-        #expect(admission.prepare(policy: SandboxIdlePolicy(), evidence: sample, at: now) == .disabled)
+        #expect(admission.prepare(policy: SandboxIdlePolicy.defaults, evidence: sample, at: now) == .disabled)
         #expect(!admission.permitsDestruction(evidence: sample, at: now))
     }
 
@@ -140,7 +140,7 @@ struct SandboxIdleActivityObservationTests {
     }
 
     func policy() -> SandboxIdlePolicy {
-        var policy = SandboxIdlePolicy()
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         return policy
     }
@@ -203,8 +203,9 @@ struct UnsupportedSandboxIdleRuntimeTests {
     @Test func simulationCannotAuthorizeAutomaticReclamation() async {
         let runtime = MockSandboxRuntime(logger: .init(label: "unsupported-idle-runtime"))
         #expect(
-            await runtime.prepareIdleSuspension(sandboxId: UUID().uuidString, policy: SandboxIdlePolicy()) == .disabled)
-        var policy = SandboxIdlePolicy()
+            await runtime.prepareIdleSuspension(sandboxId: UUID().uuidString, policy: SandboxIdlePolicy.defaults)
+                == .disabled)
+        var policy = SandboxIdlePolicy.defaults
         policy.enabled = true
         #expect(
             await runtime.prepareIdleSuspension(sandboxId: UUID().uuidString, policy: policy) == .unsupportedBackend)

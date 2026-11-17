@@ -80,7 +80,7 @@ actor FirecrackerService: HypervisorService {
         // transport is a UDS, so it never consumes this host-global lease.
         vsockCID: UInt32? = nil
     ) async throws {
-        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.optionalResourceClass)
         let bootArtifacts = try await resolveBootArtifacts(spec: spec, imageInfo: imageInfo)
         // A failed re-adoption can leave a provisional reference to a durable
         // mapping while proving that the old VMM is gone. Keep it alive until
@@ -132,14 +132,14 @@ actor FirecrackerService: HypervisorService {
         // The root filesystem is always the canonical managed boot volume. Its
         // image bytes are materialized by the volume reconciler; this driver
         // fetches only the direct-kernel artifacts it consumes itself.
-        guard let bootVolume = spec.volumes.first(where: { $0.bootOrder == 0 }),
-            let bootAttachment = bootVolume.attachment
+        guard let bootVolume = spec.volumes.values.first(where: { $0.hasBootOrder && $0.bootOrder == 0 }),
+            bootVolume.hasAttachment
         else {
             throw HypervisorServiceError.invalidConfiguration(
                 "Firecracker VM \(vmId) has no realized managed boot volume")
         }
         let realizedBoot = try await diskRealizer.realize(
-            bootAttachment, readOnly: bootVolume.readonly)
+            bootVolume.attachment, readOnly: bootVolume.readonly)
         // Track the canonical-to-host realization immediately. Any later
         // configuration failure must retain a failed unmap for delete/retry.
         realizedDisks[vmId, default: []].append(realizedBoot)
@@ -154,10 +154,10 @@ actor FirecrackerService: HypervisorService {
         guard FileManager.default.fileExists(atPath: bootPath) else {
             await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw HypervisorServiceError.diskError(
-                "boot volume \(bootVolume.volumeId) for VM \(vmId) has no file at \(bootPath) on this host")
+                "boot volume \(bootVolume.volumeID) for VM \(vmId) has no file at \(bootPath) on this host")
         }
         let rootDrive = (
-            id: bootVolume.volumeId.uuidString, path: bootPath, readOnly: bootVolume.readonly
+            id: bootVolume.volumeID, path: bootPath, readOnly: bootVolume.readonly
         )
 
         var processWasSpawned = false
@@ -176,7 +176,7 @@ actor FirecrackerService: HypervisorService {
 
             // Configure machine
             let machineConfig = MachineConfig(
-                vcpuCount: spec.cpus,
+                vcpuCount: Int(spec.cpus),
                 memSizeMib: Int(spec.memoryBytes / (1024 * 1024))
             )
             try await manager.configureMachine(machineConfig)
@@ -469,7 +469,7 @@ actor FirecrackerService: HypervisorService {
     /// the VM predates deterministic sockets — or cannot be connected because
     /// the process is gone.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
-        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass)
+        try BurstableRuntimeGate.requireSupport(resourceClass: spec.optionalResourceClass)
         if vmManagers[vmId] != nil {
             // Already managed (e.g. a replayed sync raced re-adoption): adoption
             // is satisfied, just report the current status.
@@ -527,22 +527,22 @@ actor FirecrackerService: HypervisorService {
         // MMDS from the network list. The agent's durable policy inventory is
         // authoritative for reconciliation; this fallback only suppresses
         // pointless data PUTs when no network could have been configured.
-        mmdsInterfaces[vmId] = FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks)
+        mmdsInterfaces[vmId] = FirecrackerMMDSInterfacePlan.interfaceIDs(for: spec.networks.values)
 
         return Self.vmStatus(from: info.state)
     }
 
     private func adoptBootDiskIfNeeded(vmId: String, spec: VMSpec) async throws {
         guard realizedDisks[vmId] == nil else { return }
-        guard let bootVolume = spec.volumes.first(where: { $0.bootOrder == 0 }),
-            let bootAttachment = bootVolume.attachment
+        guard let bootVolume = spec.volumes.values.first(where: { $0.hasBootOrder && $0.bootOrder == 0 }),
+            bootVolume.hasAttachment
         else {
             throw HypervisorServiceError.invalidConfiguration(
                 "Firecracker VM \(vmId) has no realized managed boot volume")
         }
 
         let realizedBoot = try await diskRealizer.adopt(
-            bootAttachment, readOnly: bootVolume.readonly)
+            bootVolume.attachment, readOnly: bootVolume.readonly)
         realizedDisks[vmId] = [realizedBoot]
         let bootPath: String
         do {
@@ -550,12 +550,12 @@ actor FirecrackerService: HypervisorService {
         } catch {
             await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw HypervisorServiceError.diskError(
-                "re-adopted boot volume \(bootVolume.volumeId) has no usable host block device")
+                "re-adopted boot volume \(bootVolume.volumeID) has no usable host block device")
         }
         guard FileManager.default.fileExists(atPath: bootPath) else {
             await releaseTrackedDiskAfterFailedCreate(realizedBoot, vmId: vmId)
             throw HypervisorServiceError.diskError(
-                "re-adopted boot volume \(bootVolume.volumeId) is missing at \(bootPath)")
+                "re-adopted boot volume \(bootVolume.volumeID) is missing at \(bootPath)")
         }
     }
 
@@ -686,7 +686,7 @@ actor FirecrackerService: HypervisorService {
         if let imageInfo {
             logger.info(
                 "Realizing boot artifacts from image",
-                metadata: ["imageId": .string(imageInfo.imageId.uuidString)])
+                metadata: ["imageId": .string(imageInfo.imageID)])
         }
         do {
             return try await FirecrackerBootArtifactResolver.resolve(

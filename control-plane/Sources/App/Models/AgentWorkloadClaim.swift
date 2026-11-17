@@ -139,6 +139,8 @@ extension WorkloadKind {
         case .volumeSnapshot: return .volumeSnapshot
         case .vmCheckpoint: return .vmCheckpoint
         case .sandboxSnapshot: return .sandboxSnapshot
+        case .unspecified, .UNRECOGNIZED:
+            preconditionFailure("Workload kind must be validated before resolving a resource kind")
         }
     }
 }

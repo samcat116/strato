@@ -27,13 +27,13 @@ actor LokiService {
                 (
                     [
                         "service_name": "strato-agent",
-                        "vm_id": message.vmId,
-                        "level": message.level.rawValue,
-                        "source": message.source.rawValue,
-                        "event_type": message.eventType.rawValue,
-                        "operation": message.operation ?? "",
+                        "vm_id": message.vmID,
+                        "level": message.level.protocolValue,
+                        "source": message.source.protocolValue,
+                        "event_type": message.eventType.protocolValue,
+                        "operation": message.hasOperation ? message.operation : "",
                     ].filter { !$0.value.isEmpty },
-                    message.timestamp, message.message
+                    message.timestamp.date, message.message
                 )
             })
     }
@@ -44,11 +44,11 @@ actor LokiService {
                 (
                     [
                         "service_name": "strato-agent",
-                        "sandbox_id": message.sandboxId,
+                        "sandbox_id": message.sandboxID,
                         "stream": message.stream,
                         "source": "workload",
                     ].filter { !$0.value.isEmpty },
-                    message.timestamp, message.message
+                    message.timestamp.date, message.message
                 )
             })
     }

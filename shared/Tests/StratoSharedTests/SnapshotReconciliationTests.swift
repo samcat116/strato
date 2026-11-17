@@ -28,13 +28,13 @@ struct SnapshotReconciliationTests {
             ]))
 
         let decoded = try roundTrip(entry)
-        #expect(decoded.snapshotId == Fixtures.uuidA)
-        #expect(decoded.kind == .sandboxSnapshot)
-        #expect(decoded.parentId == Fixtures.uuidB)
-        #expect(decoded.generation == 7)
-        #expect(decoded.capture?.sandboxMode == .stop)
-        #expect(decoded.export?.uploads.count == 1)
-        #expect(decoded.volumeStorage == nil)
+        #expect(decoded._jsonSnapshotId == Fixtures.uuidA)
+        #expect(decoded._jsonKind == .sandboxSnapshot)
+        #expect(decoded._jsonParentId == Fixtures.uuidB)
+        #expect(decoded._jsonGeneration == 7)
+        #expect(decoded._jsonCapture?._jsonSandboxMode == .stop)
+        #expect(decoded._jsonExport?._jsonUploads.count == 1)
+        #expect(decoded._jsonVolumeStorage == nil)
     }
 
     @Test("A volume snapshot carries its Ceph backend without a parent volume entry")
@@ -54,7 +54,7 @@ struct SnapshotReconciliationTests {
             snapshotId: UUID(), kind: .volumeSnapshot, parentId: UUID(),
             desiredStatus: .absent, generation: 8, volumeStorage: storage)
 
-        #expect(try roundTrip(entry).volumeStorage == storage)
+        #expect(try roundTrip(entry)._jsonVolumeStorage == storage)
 
         // Optional by design: a v53/pre-Ceph snapshot entry still decodes and
         // uses the agent's legacy parent-volume fallback.
@@ -62,7 +62,7 @@ struct SnapshotReconciliationTests {
             {"snapshotId":"\(UUID().uuidString)","kind":"VolumeSnapshot",
              "parentId":"\(UUID().uuidString)","desiredStatus":"Absent","generation":1}
             """
-        #expect(try decodeJSON(DesiredSnapshotState.self, from: legacyJSON).volumeStorage == nil)
+        #expect(try decodeJSON(DesiredSnapshotState.self, from: legacyJSON)._jsonVolumeStorage == nil)
     }
 
     /// The strict decode is deliberate and shared with `DesiredVMStatus`: an
@@ -93,7 +93,7 @@ struct SnapshotReconciliationTests {
         }
 
         let empty = DesiredStateMessage(syncId: "s", vms: [], snapshots: [])
-        #expect(try roundTrip(empty).snapshots.isEmpty)
+        #expect(try roundTrip(empty)._jsonSnapshots.isEmpty)
     }
 
     /// Unlike desired state, a current observation may omit snapshots when the
@@ -107,11 +107,11 @@ struct SnapshotReconciliationTests {
              "totalDisk":1,"availableDisk":1,"physicalFreeDisk":1},"unrecognized":[]}
             """
         let decoded = try decodeJSON(ObservedStateReport.self, from: unavailable)
-        #expect(decoded.snapshots == nil)
+        #expect(decoded._jsonSnapshots == nil)
 
         let empty = ObservedStateReport(
             agentId: "a", vms: [], resources: Fixtures.resources, snapshots: [])
-        #expect(try roundTrip(empty).snapshots?.isEmpty == true)
+        #expect(try roundTrip(empty)._jsonSnapshots?.isEmpty == true)
     }
 
     @Test("Snapshot fields actually reach the wire")
@@ -141,8 +141,8 @@ struct SnapshotReconciliationTests {
                 qemuVersion: "9.1.0"),
             observedGeneration: 3)
         let decoded = try roundTrip(full)
-        #expect(decoded.facts?.sizeBytes == 2_147_483_648)
-        #expect(decoded.facts?.qemuVersion == "9.1.0")
+        #expect(decoded._jsonFacts?._jsonSizeBytes == 2_147_483_648)
+        #expect(decoded._jsonFacts?._jsonQemuVersion == "9.1.0")
 
         // A QEMU build that reported no size for the tag it just wrote leaves
         // the field nil — the checkpoint is still valid.
@@ -154,8 +154,8 @@ struct SnapshotReconciliationTests {
             facts: ObservedSnapshotFacts(),
             observedGeneration: 3)
         let decodedSizeless = try roundTrip(sizeless)
-        #expect(decodedSizeless.facts?.sizeBytes == nil)
-        #expect(decodedSizeless.facts?.qemuVersion == nil)
+        #expect(decodedSizeless._jsonFacts?._jsonSizeBytes == nil)
+        #expect(decodedSizeless._jsonFacts?._jsonQemuVersion == nil)
     }
 
     /// `SnapshotArtifactKind` and `WorkloadKind` are in bijection, and both
@@ -163,7 +163,7 @@ struct SnapshotReconciliationTests {
     /// workload kind, and the control plane keys a claim on it.
     @Test("Artifact kinds map both ways to workload kinds")
     func kindBijection() {
-        for kind in SnapshotArtifactKind.allCases {
+        for kind in SnapshotArtifactKind.knownCases {
             #expect(SnapshotArtifactKind(kind.workloadKind) == kind)
             #expect(kind.workloadKind.isSnapshotArtifact)
         }

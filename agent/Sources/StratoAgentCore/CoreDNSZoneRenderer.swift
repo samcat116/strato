@@ -167,7 +167,7 @@ public enum CoreDNSZoneRenderer {
             if recordsByOrigin[origin] == nil { recordsByOrigin[origin] = [] }
             labelForOrigin[origin] = zone.zoneName
 
-            for record in zone.records {
+            for record in zone.records.values {
                 let type = record.type.uppercased()
                 guard supportedTypes.contains(type) else {
                     diagnostics.append("zone '\(zone.zoneName)': record type \(type) is not realized")
@@ -312,7 +312,7 @@ public enum CoreDNSZoneRenderer {
                 continue
             }
             let ttl = record.ttl
-            for value in record.values {
+            for value in record.values.values {
                 guard let rdata = validated(value, forType: type) else {
                     diagnostics.append(
                         "zone '\(zoneLabel)': \(type) value at '\(record.name)' is malformed; skipped")
@@ -382,7 +382,7 @@ public enum CoreDNSZoneRenderer {
     private static func serialSeed(_ records: [DesiredDNSRecord]) -> String {
         records
             .sorted { ($0.name, $0.type) < ($1.name, $1.type) }
-            .map { "\($0.name)|\($0.type)|\($0.ttl)|\($0.values.joined(separator: ","))" }
+            .map { "\($0.name)|\($0.type)|\($0.ttl)|\($0.values.values.joined(separator: ","))" }
             .joined(separator: ";")
     }
 

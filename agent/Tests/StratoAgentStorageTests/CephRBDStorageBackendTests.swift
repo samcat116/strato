@@ -398,22 +398,18 @@ struct CephRBDStorageBackendTests {
         let attachment = try await backend.createVolume(
             volumeId: Self.volumeId, sizeBytes: 1_048_577, format: .raw)
 
-        guard
-            case .rbd(
-                let pool, let image, let namespace, let user, let monitors, let cluster,
-                let credential, let configPath) = attachment
-        else {
+        guard case .rbd(let rbd) = attachment.value else {
             Issue.record("expected an RBD attachment")
             return
         }
-        #expect(pool == "volumes")
-        #expect(image == "strato-volume-\(Self.volumeId)")
-        #expect(namespace == "project-a")
-        #expect(user == "strato-project")
-        #expect(monitors == ["v2:mon-a.example:3300", "v2:[2001:db8::10]:3300"])
-        #expect(cluster == Self.clusterId)
-        #expect(credential == Self.credentialId)
-        #expect(configPath.hasSuffix("/ceph.conf"))
+        #expect(rbd.pool == "volumes")
+        #expect(rbd.image == "strato-volume-\(Self.volumeId)")
+        #expect(rbd.namespace == "project-a")
+        #expect(rbd.user == "strato-project")
+        #expect(rbd.monEndpoints.values == ["v2:mon-a.example:3300", "v2:[2001:db8::10]:3300"])
+        #expect(rbd.clusterID == Self.clusterId.uuidString)
+        #expect(rbd.credentialID == Self.credentialId.uuidString)
+        #expect(rbd.configPath.hasSuffix("/ceph.conf"))
         #expect(!String(describing: attachment).contains(Self.secret))
 
         let calls = await recorder.invocations
@@ -428,7 +424,7 @@ struct CephRBDStorageBackendTests {
         #expect(!create.arguments.contains(where: { $0.contains(Self.secret) }))
         #expect(!calls.contains { $0.executable.hasSuffix("virsh") })
 
-        let config = try String(contentsOfFile: configPath, encoding: .utf8)
+        let config = try String(contentsOfFile: rbd.configPath, encoding: .utf8)
         #expect(config.contains("ms_client_mode = secure"))
         #expect(config.contains("ms_mon_client_mode = secure"))
         #expect(
@@ -739,7 +735,7 @@ struct CephRBDStorageBackendTests {
             volumeId: Self.volumeId, sizeBytes: 2 * 1024 * 1024, format: .raw)
         let info = try await backend.volumeInfo(attachment: attachment)
         #expect(info.virtualSize == 2 * 1024 * 1024)
-        #expect(info.format == DiskFormat.raw.rawValue)
+        #expect(info.format == DiskFormat.raw.protocolValue)
 
         try await backend.resizeVolume(
             attachment: attachment, newSizeBytes: 3 * 1024 * 1024 + 1)
@@ -957,7 +953,7 @@ struct CephRBDStorageBackendTests {
         let desired = [first, second].map {
             DesiredVolumeState(
                 volumeId: $0, desiredStatus: .present, generation: 1,
-                sizeBytes: 1024 * 1024, format: DiskFormat.raw.rawValue,
+                sizeBytes: 1024 * 1024, format: DiskFormat.raw.protocolValue,
                 storage: .ceph(configuration))
         }
 
@@ -1198,7 +1194,7 @@ struct CephRBDStorageBackendTests {
         let attachment = DiskAttachment.rbd(
             pool: configuration.pool, image: "strato-volume-\(Self.volumeId)",
             namespace: configuration.namespace, user: "strato-project",
-            monEndpoints: configuration.monEndpoints, clusterId: Self.clusterId,
+            monEndpoints: configuration.monEndpoints.values, clusterId: Self.clusterId,
             credentialId: Self.credentialId,
             configPath: CephRBDStorageBackend.configPath(
                 root: root, clusterId: Self.clusterId, credentialId: Self.credentialId))
@@ -1251,13 +1247,13 @@ struct CephRBDStorageBackendTests {
         }
         let otherVolume = "44444444-4444-4444-8444-444444444444"
         let otherAttachment = try await backend.createVolume(volumeId: otherVolume, sizeBytes: 1024, format: .raw)
-        guard case .rbd = otherAttachment else { Issue.record("unrelated volume was blocked"); return }
+        guard case .rbd = otherAttachment.value else { Issue.record("unrelated volume was blocked"); return }
         // The controlled direct child is now killed; simulate established
         // operator recovery rather than treating age as permission to reuse.
         try FileManager.default.removeItem(atPath: marker)
         try Data().write(to: URL(fileURLWithPath: recovery))
         let attachment = try await backend.createVolume(volumeId: Self.volumeId, sizeBytes: 1024, format: .raw)
-        guard case .rbd = attachment else { Issue.record("RBD recovery failed"); return }
+        guard case .rbd = attachment.value else { Issue.record("RBD recovery failed"); return }
         #expect(!FileManager.default.fileExists(atPath: marker))
     }
 

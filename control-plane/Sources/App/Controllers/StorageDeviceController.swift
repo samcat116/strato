@@ -56,7 +56,7 @@ struct StorageDeviceEligibility: Sendable {
             switch device.state {
             case .inUse: blocker = .inUse
             case .draining: blocker = .draining
-            case .faulted: blocker = .faulted
+            case .faulted, .unspecified, .UNRECOGNIZED: blocker = .faulted
             case .available:
                 if !agentOnline {
                     blocker = .agentOffline

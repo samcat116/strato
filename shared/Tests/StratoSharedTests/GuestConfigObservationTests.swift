@@ -13,19 +13,19 @@ struct GuestConfigObservationTests {
             lastError: "channel unavailable", failedGeneration: 7, failureClassification: .permanent,
             guestConfigFailedGeneration: 7)
         let report = try decoder.decode(ObservedVMState.self, from: encoder.encode(observed))
-        #expect(report.guestConfigFailedGeneration == 7)
-        #expect(report.guestConfigObservation == nil)
+        #expect(report._jsonGuestConfigFailedGeneration == 7)
+        #expect(report._jsonGuestConfigObservation == nil)
         let desired = DesiredVMState(
             vmId: id, hypervisorType: .qemu,
             spec: VMSpec(cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil)),
             desiredStatus: .running, generation: 7, guestConfigFailedGeneration: 7)
         let data = try encoder.encode(desired)
-        #expect(try decoder.decode(DesiredVMState.self, from: data).guestConfigFailedGeneration == 7)
+        #expect(try decoder.decode(DesiredVMState.self, from: data)._jsonGuestConfigFailedGeneration == 7)
         var stored = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         stored.removeValue(forKey: "guestConfigFailedGeneration")
         #expect(
             try decoder.decode(DesiredVMState.self, from: JSONSerialization.data(withJSONObject: stored))
-                .guestConfigFailedGeneration == nil)
+                .hasGuestConfigFailedGeneration == false)
     }
 
     private func decode(_ facts: String, status: String = "converged", error: String = "null") throws

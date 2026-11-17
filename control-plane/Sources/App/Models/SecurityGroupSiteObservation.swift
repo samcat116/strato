@@ -50,11 +50,11 @@ final class SecurityGroupSiteObservation: Model, @unchecked Sendable {
 
     var observedStatus: ObservedNetworkFabricStatus? {
         get { status.flatMap(ObservedNetworkFabricStatus.init(rawValue:)) }
-        set { status = newValue?.rawValue }
+        set { status = newValue?.protocolValue }
     }
 
     var observedFailureClassification: ObservedFailureClassification? {
         get { failureClassification.flatMap(ObservedFailureClassification.init(rawValue:)) }
-        set { failureClassification = newValue?.rawValue }
+        set { failureClassification = newValue?.protocolValue }
     }
 }

@@ -137,12 +137,12 @@ public enum OVNDNSRecords {
             }
             switch type {
             case "A":
-                let valid = record.values.filter(IPFamily.ipv4.matches)
-                if valid.count != record.values.count { malformed.insert(record.name) }
+                let valid = record.values.values.filter(IPFamily.ipv4.matches)
+                if valid.count != record.values.values.count { malformed.insert(record.name) }
                 v4[name, default: []].append(contentsOf: valid)
             case "AAAA":
-                let valid = record.values.filter(IPFamily.ipv6.matches)
-                if valid.count != record.values.count { malformed.insert(record.name) }
+                let valid = record.values.values.filter(IPFamily.ipv6.matches)
+                if valid.count != record.values.values.count { malformed.insert(record.name) }
                 v6[name, default: []].append(contentsOf: valid)
             default:
                 // PTR. A reverse name answers with exactly one target — OVN's
@@ -150,8 +150,8 @@ public enum OVNDNSRecords {
                 // publishes its first target and the rest are unrepresentable.
                 // The control plane sorts the values, so which one wins is at
                 // least stable rather than assembly-order dependent.
-                let targets = record.values.map { $0.lowercased() }.filter(DNSNameSyntax.isValidDomainName)
-                if targets.count != record.values.count { malformed.insert(record.name) }
+                let targets = record.values.values.map { $0.lowercased() }.filter(DNSNameSyntax.isValidDomainName)
+                if targets.count != record.values.values.count { malformed.insert(record.name) }
                 guard let target = targets.first else { continue }
                 // Two ways to lose a target here, and both are the operator's
                 // to know about: values this call dropped, and a name a
@@ -308,9 +308,9 @@ public enum DNSZoneReconciler {
     /// is one mutation rather than a create. Each plan carries its own
     /// diagnostics, so the caller logs them for the zones it actually writes
     /// rather than on every pass.
-    public static func plan(zones: [DesiredDNSZone]) -> [DNSZonePlan] {
-        zones.sorted(by: { $0.zoneId.uuidString < $1.zoneId.uuidString }).map { zone in
-            let flattened = OVNDNSRecords.flatten(zone.records)
+    public static func plan(zones: [DesiredDNSZone]) throws -> [DNSZonePlan] {
+        try zones.sorted(by: { $0.zoneID < $1.zoneID }).map { zone in
+            let flattened = OVNDNSRecords.flatten(zone.records.values)
             var diagnostics: [String] = []
             if !flattened.unsupportedTypes.isEmpty {
                 diagnostics.append(
@@ -328,11 +328,13 @@ public enum DNSZoneReconciler {
                         + "(\(flattened.truncatedNames.joined(separator: ", ")))")
             }
             return DNSZonePlan(
-                zoneId: zone.zoneId,
+                zoneId: try UUID(protocolString: zone.zoneID),
                 zoneName: zone.zoneName,
                 recordsHash: zone.recordsHash,
                 records: flattened.records,
-                switchNames: Set(zone.networkIds.map { OVNNaming.switchName(networkId: $0) }).sorted(),
+                switchNames: Set(
+                    try zone.networkIds.values.map { OVNNaming.switchName(networkId: try UUID(protocolString: $0)) }
+                ).sorted(),
                 diagnostics: diagnostics)
         }
     }
@@ -418,10 +420,15 @@ extension DNSZoneReconciler {
         actuator: any NetworkActuator,
         logger: Logger
     ) async throws -> [ReconcileStepFailure] {
-        let plans = plan(zones: zones)
+        let plans = try plan(zones: zones)
         let observed = try await actuator.observeDNSZones()
         let networkIDsByZone = Dictionary(
-            uniqueKeysWithValues: zones.map { ($0.zoneId, Set($0.networkIds)) })
+            uniqueKeysWithValues: try zones.map {
+                (
+                    try UUID(protocolString: $0.zoneID),
+                    Set(try $0.networkIds.values.map { try UUID(protocolString: $0) })
+                )
+            })
         var failures: [ReconcileStepFailure] = []
 
         for write in writes(desired: plans, observed: observed) {

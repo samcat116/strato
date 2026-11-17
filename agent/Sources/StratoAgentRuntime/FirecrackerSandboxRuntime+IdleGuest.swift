@@ -9,7 +9,7 @@ extension FirecrackerSandboxRuntime {
         -> SandboxIdleGuestResponse
     {
         let id = context.sandboxId.uuidString
-        guard let managed = sandboxes[id], managed.spec.network == nil,
+        guard let managed = sandboxes[id], !managed.spec.hasNetwork,
             managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion,
             managed.identityNonce == context.fence.identityNonce
         else { throw SandboxSuspensionGuard.GateError.stale }
@@ -47,7 +47,7 @@ extension FirecrackerSandboxRuntime {
 #if os(Linux)
 extension FirecrackerSandboxRuntime {
     func noteSandboxIdleControlPlane(_ desired: DesiredSandboxState) async {
-        let id = desired.sandboxId.uuidString
+        let id = desired.sandboxID
         if let old = idleControlPlane[id], old.generation > desired.generation { return }
         // CP revisions fence destruction. Echoing a guest-derived CP revision
         // into the guest activity epoch would create a perpetual feedback loop.
@@ -66,13 +66,13 @@ extension FirecrackerSandboxRuntime {
         let probe = UUID()
         var guest: SandboxGuestIdleActivity?
         if managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion,
-            managed.spec.network == nil
+            !managed.spec.hasNetwork
         {
             let response = try? await exchangeIdleGuest(
                 SandboxIdleGuestRequest(type: .activity, probeId: probe),
                 sandboxId: id, nonce: managed.identityNonce, udsPath: managed.vsockUdsPath)
-            if response?.type == .activity, response?.activity?.probeId == probe,
-                response?.activity?.sandboxId == id, response?.activity?.nonce == managed.identityNonce
+            if response?.type == .activity, response?.activity?.probeID == probe.uuidString,
+                response?.activity?.sandboxID == id, response?.activity?.nonce == managed.identityNonce
             {
                 guest = response?.activity
             }
@@ -87,7 +87,7 @@ extension FirecrackerSandboxRuntime {
         idleSamplers[id] = sampler
         let sessions = execSessions.filter { $0.value.sandboxId == id }.keys.compactMap(UUID.init(uuidString:))
         let localPending = suspensionGuards[id]?.pendingActivityCount ?? 0
-        let known = sample.known && desired.idleControlPlaneRevision != nil && desired.idlePendingCommandCount != nil
+        let known = sample.known && desired.hasIdleControlPlaneRevision && desired.hasIdlePendingCommandCount
         let now = Date()
         let lastActive = sample.known ? (idleActivityObservations[id]?.lastActiveAt ?? now) : now
         let residentSince = idleResidentSince[id] ?? now
@@ -97,7 +97,8 @@ extension FirecrackerSandboxRuntime {
             observation: SandboxIdleActivityObservation(
                 observedAt: now, lastActiveAt: lastActive,
                 residentSince: residentSince,
-                activeUserStreams: 0, pendingUserCommands: desired.idlePendingCommandCount,
+                activeUserStreams: 0,
+                pendingUserCommands: desired.optionalIdlePendingCommandCount.map(Int.init),
                 guestAndNetworkActivityKnown: known))
         return SandboxIdleActivityReport(
             agentIncarnation: idleActivityIncarnation, connectionEpoch: connectionEpoch,
@@ -105,16 +106,17 @@ extension FirecrackerSandboxRuntime {
             activityEpoch: suspensionGuards[id]?.activityEpoch ?? 0, evidenceAgeMilliseconds: 0,
             residentForMilliseconds: sample.residentMilliseconds, guest: guest,
             activeExecSessionIds: sessions,
-            pendingCommandCount: desired.idlePendingCommandCount.map { $0 + localPending },
+            pendingCommandCount: desired.hasIdlePendingCommandCount
+                ? Int(desired.idlePendingCommandCount) + localPending : nil,
             snapshotOrRestoreInProgress: false,
             idleFenceSupported: managed.guestControlProtocolVersion == SandboxGuestControlProtocol.idlePolicyVersion
-                && managed.spec.network == nil && automaticSuspensionTransport != nil,
+                && !managed.spec.hasNetwork && automaticSuspensionTransport != nil,
             hostQuietMilliseconds: known
                 ? min(
                     sample.quietMilliseconds,
                     UInt64(min(86_400, max(0, now.timeIntervalSince(idleLastActivity[id] ?? now))) * 1000)) : nil,
             policy: idlePolicy, hostPendingCommandCount: localPending,
-            controlPlaneActivityRevision: desired.idleControlPlaneRevision)
+            controlPlaneActivityRevision: desired.optionalIdleControlPlaneRevision)
     }
 }
 #endif

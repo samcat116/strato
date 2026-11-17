@@ -23,7 +23,7 @@ struct MockStorageBackendTests {
                 ArtifactInfo(
                     kind: kind, filename: "test.qcow2",
                     checksum: String(repeating: "d", count: 64), size: size,
-                    downloadURL: "https://example.invalid/test.qcow2?artifact=\(kind.rawValue)")
+                    downloadURL: "https://example.invalid/test.qcow2?artifact=\(kind.protocolValue)")
             ]
         )
     }

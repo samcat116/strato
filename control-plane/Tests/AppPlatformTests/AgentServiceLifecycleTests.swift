@@ -56,7 +56,7 @@ final class AgentServiceLifecycleTests {
                 factory: metrics)
             let availability = try metrics.expectGauge(
                 "strato_agent_dependency_available",
-                [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.rawValue)])
+                [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.protocolValue)])
             #expect(availability.lastValue == 1)
 
             await app.agentMaintenance.checkStaleAgents(

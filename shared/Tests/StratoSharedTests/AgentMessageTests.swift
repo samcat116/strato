@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Agent registration and heartbeat messages")
 struct AgentMessageTests {
@@ -21,22 +21,22 @@ struct AgentMessageTests {
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentRegister)
-        #expect(decoded.requestId == message.requestId)
-        #expect(decoded.timestamp == message.timestamp)
-        #expect(decoded.agentId == "agent-1")
-        #expect(decoded.hostname == "hv-01.example")
-        #expect(decoded.version == "1.2.3")
-        #expect(decoded.hypervisors.map(\.type) == [.qemu])
-        #expect(decoded.hypervisors.first?.supportsVsock == true)
-        #expect(decoded.hypervisors.first?.supportsGuestExec == true)
-        #expect(decoded.hypervisors.first?.supportsVolumeIOLimits == true)
-        #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
-        #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
-        #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
-        #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
-        #expect(decoded.resources.totalDisk == Fixtures.resources.totalDisk)
-        #expect(decoded.resources.availableDisk == Fixtures.resources.availableDisk)
-        #expect(decoded.resources.physicalFreeDisk == Fixtures.resources.physicalFreeDisk)
+        #expect(decoded._jsonRequestId == message._jsonRequestId)
+        #expect(decoded._jsonTimestamp == message._jsonTimestamp)
+        #expect(decoded._jsonAgentId == "agent-1")
+        #expect(decoded._jsonHostname == "hv-01.example")
+        #expect(decoded._jsonVersion == "1.2.3")
+        #expect(decoded._jsonHypervisors.map(\._jsonType) == [.qemu])
+        #expect(decoded._jsonHypervisors.first?._jsonSupportsVsock == true)
+        #expect(decoded._jsonHypervisors.first?._jsonSupportsGuestExec == true)
+        #expect(decoded._jsonHypervisors.first?._jsonSupportsVolumeIOLimits == true)
+        #expect(decoded.resources._jsonTotalCPU == Fixtures.resources._jsonTotalCPU)
+        #expect(decoded.resources._jsonAvailableCPU == Fixtures.resources._jsonAvailableCPU)
+        #expect(decoded.resources._jsonTotalMemory == Fixtures.resources._jsonTotalMemory)
+        #expect(decoded.resources._jsonAvailableMemory == Fixtures.resources._jsonAvailableMemory)
+        #expect(decoded.resources._jsonTotalDisk == Fixtures.resources._jsonTotalDisk)
+        #expect(decoded.resources._jsonAvailableDisk == Fixtures.resources._jsonAvailableDisk)
+        #expect(decoded.resources._jsonPhysicalFreeDisk == Fixtures.resources._jsonPhysicalFreeDisk)
     }
 
     @Test("Agent resources from the previous wire version preserve disk availability")
@@ -47,8 +47,8 @@ struct AgentMessageTests {
             """
 
         let decoded = try decodeJSON(AgentResources.self, from: json)
-        #expect(decoded.availableDisk == 40)
-        #expect(decoded.physicalFreeDisk == 40)
+        #expect(decoded._jsonAvailableDisk == 40)
+        #expect(decoded._jsonPhysicalFreeDisk == 40)
     }
 
     @Test("Persisted hypervisor reports from before vsock probing still decode as unknown")
@@ -71,9 +71,9 @@ struct AgentMessageTests {
             """
 
         let decoded = try JSONDecoder().decode(HypervisorSupport.self, from: Data(json.utf8))
-        #expect(decoded.supportsVsock == nil)
-        #expect(decoded.supportsGuestExec == nil)
-        #expect(decoded.supportsVolumeIOLimits == nil)
+        #expect(decoded._jsonSupportsVsock == nil)
+        #expect(decoded._jsonSupportsGuestExec == nil)
+        #expect(decoded._jsonSupportsVolumeIOLimits == nil)
     }
 
     @Test("Sandbox capability defaults to false unless the runtime advertises it")
@@ -88,7 +88,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
-        #expect(decodedImplicit.sandboxCapable == false)
+        #expect(decodedImplicit._jsonSandboxCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -98,7 +98,7 @@ struct AgentMessageTests {
             sandboxCapable: true
         )
         let decodedCapable = try throughEnvelope(capable)
-        #expect(decodedCapable.sandboxCapable == true)
+        #expect(decodedCapable._jsonSandboxCapable == true)
     }
 
     /// Sandbox *networking* (STR-103) is a second flag on the same contract,
@@ -115,8 +115,8 @@ struct AgentMessageTests {
             sandboxCapable: true
         )
         let decodedRuntimeOnly = try throughEnvelope(runtimeOnly)
-        #expect(decodedRuntimeOnly.sandboxCapable == true)
-        #expect(decodedRuntimeOnly.sandboxNetworkingCapable == false)
+        #expect(decodedRuntimeOnly._jsonSandboxCapable == true)
+        #expect(decodedRuntimeOnly._jsonSandboxNetworkingCapable == false)
 
         let networked = AgentRegisterMessage(
             agentId: "agent-2",
@@ -126,7 +126,7 @@ struct AgentMessageTests {
             sandboxCapable: true,
             sandboxNetworkingCapable: true
         )
-        #expect(try throughEnvelope(networked).sandboxNetworkingCapable == true)
+        #expect(try throughEnvelope(networked)._jsonSandboxNetworkingCapable == true)
     }
 
     @Test("TPM capability defaults to false and is carried when advertised")
@@ -137,7 +137,7 @@ struct AgentMessageTests {
             version: "1.2.3",
             resources: Fixtures.resources
         )
-        #expect(try throughEnvelope(implicit).tpmCapable == false)
+        #expect(try throughEnvelope(implicit)._jsonTpmCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -146,7 +146,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources,
             tpmCapable: true
         )
-        #expect(try throughEnvelope(capable).tpmCapable == true)
+        #expect(try throughEnvelope(capable)._jsonTpmCapable == true)
     }
 
     @Test("Metadata service capability defaults to false")
@@ -157,7 +157,7 @@ struct AgentMessageTests {
             version: "1.2.3",
             resources: Fixtures.resources
         )
-        #expect(try throughEnvelope(implicit).metadataServiceCapable == false)
+        #expect(try throughEnvelope(implicit)._jsonMetadataServiceCapable == false)
 
         let capable = AgentRegisterMessage(
             agentId: "agent-2",
@@ -166,7 +166,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources,
             metadataServiceCapable: true
         )
-        #expect(try throughEnvelope(capable).metadataServiceCapable == true)
+        #expect(try throughEnvelope(capable)._jsonMetadataServiceCapable == true)
     }
 
     @Test("Operating system reporting defaults to the build platform")
@@ -178,7 +178,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
-        #expect(decodedImplicit.operatingSystem == .current)
+        #expect(decodedImplicit._jsonOperatingSystem == .current)
 
         let reporting = AgentRegisterMessage(
             agentId: "agent-2",
@@ -188,7 +188,7 @@ struct AgentMessageTests {
             operatingSystem: .linux
         )
         let decodedReporting = try throughEnvelope(reporting)
-        #expect(decodedReporting.operatingSystem == .linux)
+        #expect(decodedReporting._jsonOperatingSystem == .linux)
     }
 
     @Test("Host info: absent for old builds, carried field-by-field when reported")
@@ -200,7 +200,7 @@ struct AgentMessageTests {
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
-        #expect(decodedImplicit.hostInfo == nil)
+        #expect(decodedImplicit._jsonHostInfo == nil)
 
         let bootTime = Date(timeIntervalSince1970: 1_700_000_000)
         let hostInfo = HostInfo(
@@ -222,10 +222,10 @@ struct AgentMessageTests {
             hostInfo: hostInfo
         )
         let decoded = try throughEnvelope(reporting)
-        #expect(decoded.hostInfo == hostInfo)
-        #expect(decoded.hostInfo?.cpuModel == "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz")
-        #expect(decoded.hostInfo?.physicalCoreCount == 8)
-        #expect(decoded.hostInfo?.bootTime == bootTime)
+        #expect(decoded._jsonHostInfo == hostInfo)
+        #expect(decoded._jsonHostInfo?._jsonCpuModel == "Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz")
+        #expect(decoded._jsonHostInfo?._jsonPhysicalCoreCount == 8)
+        #expect(decoded._jsonHostInfo?._jsonBootTime == bootTime)
     }
 
     @Test("Artifact URL redaction strips credentials but keeps the shape")
@@ -264,9 +264,9 @@ struct AgentMessageTests {
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentHeartbeat)
-        #expect(decoded.agentId == "agent-1")
-        #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
-        #expect(decoded.dependencyObservations == [dependency])
+        #expect(decoded._jsonAgentId == "agent-1")
+        #expect(decoded.resources._jsonAvailableMemory == Fixtures.resources._jsonAvailableMemory)
+        #expect(decoded._jsonDependencyObservations == [dependency])
     }
 
     @Test func agentHeartbeatCarriesAvailabilityBearingHostTelemetry() throws {
@@ -300,9 +300,9 @@ struct AgentMessageTests {
                 resources: Fixtures.resources,
                 hostResourceTelemetry: host))
 
-        #expect(decoded.hostResourceTelemetry == host)
-        #expect(decoded.hostResourceTelemetry?.swapUsedBytes.value == 0)
-        #expect(decoded.hostResourceTelemetry?.zswapStoredBytes.availability == .unavailable)
+        #expect(decoded._jsonHostResourceTelemetry == host)
+        #expect(decoded._jsonHostResourceTelemetry?._jsonSwapUsedBytes._jsonValue == 0)
+        #expect(decoded._jsonHostResourceTelemetry?._jsonZswapStoredBytes._jsonAvailability == .unavailable)
     }
 
     @Test func agentUnregisterRoundTrip() throws {
@@ -312,7 +312,7 @@ struct AgentMessageTests {
             agentId: "agent-1")
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentUnregister)
-        #expect(decoded.agentId == "agent-1")
+        #expect(decoded._jsonAgentId == "agent-1")
     }
 
     @Test func agentRegisterResponseRoundTrip() throws {
@@ -320,14 +320,17 @@ struct AgentMessageTests {
             requestId: Fixtures.requestId,
             timestamp: Fixtures.timestamp,
             agentId: Fixtures.uuidA.uuidString,
-            name: "hv-01"
+            name: "hv-01",
+            agreement: try AgentProtocolCompatibility.negotiate(
+                local: AgentProtocolCompatibility.localOffer, remote: AgentProtocolCompatibility.localOffer,
+                inventorySessionID: Fixtures.uuidA)
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentRegisterResponse)
-        #expect(decoded.requestId == message.requestId)
-        #expect(decoded.agentId == Fixtures.uuidA.uuidString)
-        #expect(decoded.name == "hv-01")
-        #expect(decoded.protocolVersion == WireProtocol.currentVersion)
+        #expect(decoded._jsonRequestId == message._jsonRequestId)
+        #expect(decoded._jsonAgentId == Fixtures.uuidA.uuidString)
+        #expect(decoded._jsonName == "hv-01")
+        #expect(decoded.agreement.major == AgentProtocolCompatibility.major)
     }
 
     @Test func agentRegisterResponseRequiresProtocolVersion() throws {

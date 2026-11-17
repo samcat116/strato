@@ -128,7 +128,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     public func qemuBlockCapabilities(
         for attachment: DiskAttachment
     ) async -> StorageBlockDeviceCapabilities {
-        guard case .rbd = attachment else { return .unsupported }
+        guard case .rbd = attachment.value else { return .unsupported }
         return StorageBlockDeviceCapabilities(
             discardSupported: true,
             directIOSupported: false,
@@ -387,7 +387,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try requireSuccess(result, operation: "rbd info", error: StorageBackendError.infoFailed)
         let size = try validatedImageSize(result.standardOutput)
         return VolumeInfoResult(
-            actualSize: size, virtualSize: size, format: DiskFormat.raw.rawValue,
+            actualSize: size, virtualSize: size, format: DiskFormat.raw.protocolValue,
             dirty: false, encrypted: false)
     }
 
@@ -425,11 +425,11 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try validateConfiguration()
 
         let configPath = Self.configPath(
-            root: clientRoot, clusterId: configuration.clusterId,
-            credentialId: configuration.credentialId)
+            root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+            credentialId: validatedProtocolUUID(configuration.credentialID))
         let keyringPath = Self.keyringPath(
-            root: clientRoot, clusterId: configuration.clusterId,
-            credentialId: configuration.credentialId)
+            root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+            credentialId: validatedProtocolUUID(configuration.credentialID))
         let writer = DurableFileWriter()
         try writer.write(Data(renderConfig().utf8), to: configPath, permissions: 0o600)
         try writer.write(Data(configuration.keyring.utf8), to: keyringPath, permissions: 0o600)
@@ -462,8 +462,8 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         try await prepareClient()
         guard !isLibvirtSecretPrepared else { return }
         let configPath = Self.configPath(
-            root: clientRoot, clusterId: configuration.clusterId,
-            credentialId: configuration.credentialId)
+            root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+            credentialId: validatedProtocolUUID(configuration.credentialID))
         let directory = (configPath as NSString).deletingLastPathComponent
         let secretXMLPath = "\(directory)/libvirt-secret.xml"
         // Per-call ownership also isolates actor reentrancy and different pools
@@ -480,10 +480,10 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         var retainSecretInput = false
         defer { if !retainSecretInput { try? FileManager.default.removeItem(atPath: secretValuePath) } }
         let usage =
-            "strato-ceph-\(configuration.clusterId.uuidString.lowercased())-\(configuration.credentialId.uuidString.lowercased())"
+            "strato-ceph-\(configuration.clusterID.lowercased())-\(configuration.credentialID.lowercased())"
         let xml = """
             <secret ephemeral='no' private='yes'>
-              <uuid>\(configuration.credentialId.uuidString.lowercased())</uuid>
+              <uuid>\(configuration.credentialID.lowercased())</uuid>
               <description>Strato Ceph client credential</description>
               <usage type='ceph'><name>\(usage)</name></usage>
             </secret>
@@ -500,7 +500,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             set = try await runCommand(
                 URL(fileURLWithPath: virshPath),
                 [
-                    "secret-set-value", "--secret", configuration.credentialId.uuidString.lowercased(),
+                    "secret-set-value", "--secret", configuration.credentialID.lowercased(),
                     "--file", secretValuePath, "--plain",
                 ])
         } catch {
@@ -527,13 +527,13 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         }
         isRevoked = true
         configuration = CephVolumeStorage(
-            clusterId: configuration.clusterId,
+            clusterId: validatedProtocolUUID(configuration.clusterID),
             fsid: configuration.fsid,
             pool: configuration.pool,
             namespace: configuration.namespace,
             clientName: configuration.clientName,
-            monEndpoints: configuration.monEndpoints,
-            credentialId: configuration.credentialId,
+            monEndpoints: configuration.monEndpoints.values,
+            credentialId: validatedProtocolUUID(configuration.credentialID),
             keyring: "",
             messengerMode: configuration.messengerMode)
         guard activeOperations > 0 else { return }
@@ -574,6 +574,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     }
 
     private func validateConfiguration() throws {
+        try configuration.validateProtocol()
         guard configuration.messengerMode == .secure else {
             throw StorageBackendError.hostMisconfiguration("Ceph messenger mode must be secure")
         }
@@ -588,8 +589,8 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             throw StorageBackendError.hostMisconfiguration(
                 "Ceph pool, namespace, and client name must be non-empty")
         }
-        guard !configuration.monEndpoints.isEmpty,
-            configuration.monEndpoints.allSatisfy(Self.validate(monEndpoint:))
+        guard !configuration.monEndpoints.values.isEmpty,
+            configuration.monEndpoints.values.allSatisfy(Self.validate(monEndpoint:))
         else {
             throw StorageBackendError.hostMisconfiguration(
                 "Ceph monitor endpoints must be explicit v2 host:port values; bracket IPv6 literals")
@@ -603,7 +604,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     }
 
     private func renderConfig() -> String {
-        let monitorVectors = configuration.monEndpoints
+        let monitorVectors = configuration.monEndpoints.values
             .map { "[\($0)]" }
             .joined(separator: ",")
         return """
@@ -613,7 +614,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             ms_client_mode = secure
             ms_mon_client_mode = secure
             auth_client_required = cephx
-            keyring = \(Self.keyringPath(root: clientRoot, clusterId: configuration.clusterId, credentialId: configuration.credentialId))
+            keyring = \(Self.keyringPath(root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID), credentialId: validatedProtocolUUID(configuration.credentialID)))
             """
     }
 
@@ -622,17 +623,18 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         let common = [
             "--conf",
             Self.configPath(
-                root: clientRoot, clusterId: configuration.clusterId,
-                credentialId: configuration.credentialId),
+                root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+                credentialId: validatedProtocolUUID(configuration.credentialID)),
             "--name", configuration.clientName,
             "--keyring",
             Self.keyringPath(
-                root: clientRoot, clusterId: configuration.clusterId,
-                credentialId: configuration.credentialId),
+                root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+                credentialId: validatedProtocolUUID(configuration.credentialID)),
             "--namespace", configuration.namespace,
         ]
         let directory = Self.clientDirectory(
-            root: clientRoot, clusterId: configuration.clusterId, credentialId: configuration.credentialId)
+            root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+            credentialId: validatedProtocolUUID(configuration.credentialID))
         // Scope retry refusals to the images this command touches, including
         // both coordinates of clone/move. A hung image must not block other
         // volumes or add synchronized staging writes to read-only inventory.
@@ -684,7 +686,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         else {
             throw StorageBackendError.createFailed("qemu-img info returned malformed JSON")
         }
-        guard format != DiskFormat.raw.rawValue else { return (source, nil) }
+        guard format != DiskFormat.raw.protocolValue else { return (source, nil) }
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("strato-rbd-import-\(UUID().uuidString)", isDirectory: true)
@@ -695,7 +697,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
         do {
             let conversion = try await runCommand(
                 URL(fileURLWithPath: qemuImgPath),
-                ["convert", "-f", format, "-O", DiskFormat.raw.rawValue, source, converted],
+                ["convert", "-f", format, "-O", DiskFormat.raw.protocolValue, source, converted],
                 budget: .imageWork(bytes: (object["virtual-size"] as? NSNumber)?.int64Value))
             try requireNotRevoked()
             guard conversion.terminationStatus == 0 else {
@@ -728,12 +730,12 @@ public actor CephRBDStorageBackend: CephStorageBackend {
             image: image,
             namespace: configuration.namespace,
             user: cephUser,
-            monEndpoints: configuration.monEndpoints,
-            clusterId: configuration.clusterId,
-            credentialId: configuration.credentialId,
+            monEndpoints: configuration.monEndpoints.values,
+            clusterId: validatedProtocolUUID(configuration.clusterID),
+            credentialId: validatedProtocolUUID(configuration.credentialID),
             configPath: Self.configPath(
-                root: clientRoot, clusterId: configuration.clusterId,
-                credentialId: configuration.credentialId))
+                root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+                credentialId: validatedProtocolUUID(configuration.credentialID)))
     }
 
     private var cephUser: String {
@@ -926,8 +928,8 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     }
 
     private func image(of attachment: DiskAttachment) -> String {
-        guard case .rbd(_, let image, _, _, _, _, _, _) = attachment else { return "" }
-        return image
+        guard case .rbd(let protocolRbd) = attachment.value else { return "" }
+        return protocolRbd.image
     }
 
     /// Every deterministic image name is still untrusted cluster state: an
@@ -958,19 +960,17 @@ public actor CephRBDStorageBackend: CephStorageBackend {
 
     private func validate(attachment: DiskAttachment) throws {
         guard
-            case .rbd(
-                let pool, _, let namespace, let user, let monEndpoints, let clusterId,
-                let credentialId, let configPath) = attachment,
-            pool == configuration.pool,
-            namespace == configuration.namespace,
-            user == cephUser,
-            monEndpoints == configuration.monEndpoints,
-            clusterId == configuration.clusterId,
-            credentialId == configuration.credentialId,
-            configPath
+            case .rbd(let protocolRbd) = attachment.value,
+            protocolRbd.pool == configuration.pool,
+            protocolRbd.namespace == configuration.namespace,
+            protocolRbd.user == cephUser,
+            protocolRbd.monEndpoints.values == configuration.monEndpoints.values,
+            protocolRbd.clusterID == configuration.clusterID,
+            protocolRbd.credentialID == configuration.credentialID,
+            protocolRbd.configPath
                 == Self.configPath(
-                    root: clientRoot, clusterId: configuration.clusterId,
-                    credentialId: configuration.credentialId)
+                    root: clientRoot, clusterId: validatedProtocolUUID(configuration.clusterID),
+                    credentialId: validatedProtocolUUID(configuration.credentialID))
         else {
             throw StorageBackendError.infoFailed(
                 "RBD attachment does not belong to this cluster, namespace, and credential")
@@ -978,7 +978,7 @@ public actor CephRBDStorageBackend: CephStorageBackend {
     }
 
     private func requireRaw(_ format: DiskFormat) throws {
-        guard format == .raw else { throw StorageBackendError.unsupportedFormat(format.rawValue) }
+        guard format == .raw else { throw StorageBackendError.unsupportedFormat(format.protocolValue) }
     }
 
     private func beginOperation() throws {

@@ -1126,7 +1126,7 @@ final class ImageControllerTests {
             // Create actual file in storage
             let relativePath = ImageObjectKey.artifact(
                 projectId: project.id!, imageId: imageId,
-                kind: ArtifactKind.diskImage.rawValue, filename: "test.qcow2")
+                kind: ArtifactKind.diskImage.protocolValue, filename: "test.qcow2")
             let filePath = "\(tempStoragePath)/\(relativePath)"
             try FileManager.default.createDirectory(
                 atPath: (filePath as NSString).deletingLastPathComponent,
@@ -1524,8 +1524,8 @@ final class ImageControllerTests {
             try await image.$artifacts.load(on: app.db)
             let info = try VMSpecBuilder.buildImageInfo(from: image)
             // Only the two ready artifacts are offered; the pending disk-image is withheld.
-            #expect(info.artifacts.count == 2)
-            #expect(!info.artifacts.contains { $0.kind == .diskImage })
+            #expect(info.artifacts.values.count == 2)
+            #expect(!info.artifacts.values.contains { $0.kind == .diskImage })
         }
     }
 

@@ -1,5 +1,5 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 import Testing
 
 @Suite("Guest exec messages")
@@ -7,9 +7,9 @@ struct GuestExecMessageTests {
 
     @Test(
         "exec start round-trips both resource kinds and session kinds with every field",
-        arguments: GuestResourceKind.allCases)
+        arguments: GuestResourceKind.knownCases)
     func execStartRoundTrips(resourceKind: GuestResourceKind) throws {
-        for sessionKind in GuestExecSessionKind.allCases {
+        for sessionKind in GuestExecSessionKind.knownCases {
             let message = GuestExecStartMessage(
                 requestId: Fixtures.requestId,
                 timestamp: Fixtures.timestamp,
@@ -25,16 +25,16 @@ struct GuestExecMessageTests {
                 cols: 120
             )
             let decoded = try throughEnvelope(message)
-            #expect(decoded.resourceKind == resourceKind)
-            #expect(decoded.resourceId == message.resourceId)
-            #expect(decoded.sessionKind == sessionKind)
-            #expect(decoded.sessionId == message.sessionId)
-            #expect(decoded.command == ["/bin/sh", "-c", "echo hi"])
-            #expect(decoded.env == ["TERM": "xterm-256color"])
-            #expect(decoded.workingDir == "/app")
-            #expect(decoded.tty)
-            #expect(decoded.rows == 32)
-            #expect(decoded.cols == 120)
+            #expect(decoded._jsonResourceKind == resourceKind)
+            #expect(decoded._jsonResourceId == message._jsonResourceId)
+            #expect(decoded._jsonSessionKind == sessionKind)
+            #expect(decoded._jsonSessionId == message._jsonSessionId)
+            #expect(decoded._jsonCommand == ["/bin/sh", "-c", "echo hi"])
+            #expect(decoded._jsonEnv == ["TERM": "xterm-256color"])
+            #expect(decoded._jsonWorkingDir == "/app")
+            #expect(decoded._jsonTty)
+            #expect(decoded._jsonRows == 32)
+            #expect(decoded._jsonCols == 120)
             let keys = try encodedKeys(message)
             #expect(keys.contains("resourceKind"))
             #expect(keys.contains("resourceId"))
@@ -93,14 +93,14 @@ struct GuestExecMessageTests {
                 rawStderr: stderr,
                 truncated: false
             ))
-        #expect(running.status == .running)
-        #expect(running.revision == 4)
-        #expect(running.status.isTerminal == false)
+        #expect(running._jsonStatus == .running)
+        #expect(running._jsonRevision == 4)
+        #expect(running._jsonStatus.isTerminal == false)
         #expect(running.rawStdout == stdout)
         #expect(running.rawStderr == stderr)
-        #expect(running.exitCode == nil)
-        #expect(running.reason == nil)
-        #expect(running.truncated == false)
+        #expect(running._jsonExitCode == nil)
+        #expect(running._jsonReason == nil)
+        #expect(running._jsonTruncated == false)
 
         let exited = try throughEnvelope(
             GuestExecRecordedStateMessage(
@@ -112,10 +112,10 @@ struct GuestExecMessageTests {
                 exitCode: 17,
                 truncated: true
             ))
-        #expect(exited.status.isTerminal)
-        #expect(exited.exitCode == 17)
-        #expect(exited.reason == nil)
-        #expect(exited.truncated)
+        #expect(exited._jsonStatus.isTerminal)
+        #expect(exited._jsonExitCode == 17)
+        #expect(exited._jsonReason == nil)
+        #expect(exited._jsonTruncated)
 
         let closed = try throughEnvelope(
             GuestExecRecordedStateMessage(
@@ -127,10 +127,10 @@ struct GuestExecMessageTests {
                 reason: "guest channel closed",
                 truncated: true
             ))
-        #expect(closed.status.isTerminal)
-        #expect(closed.exitCode == nil)
-        #expect(closed.reason == "guest channel closed")
-        #expect(closed.truncated)
+        #expect(closed._jsonStatus.isTerminal)
+        #expect(closed._jsonExitCode == nil)
+        #expect(closed._jsonReason == "guest channel closed")
+        #expect(closed._jsonTruncated)
 
         #expect(GuestExecRecordedStateMessage.outputLimitBytes == 1_048_576)
         let keys = try encodedKeys(closed)
@@ -161,11 +161,11 @@ struct GuestExecMessageTests {
             truncated: false
         )
         let ack = try throughEnvelope(
-            GuestExecRecordedAckMessage(requestId: "ack-log-id", sessionId: state.sessionId))
+            GuestExecRecordedAckMessage(requestId: "ack-log-id", sessionId: state._jsonSessionId))
 
-        #expect(ack.sessionId == state.sessionId)
-        #expect(ack.requestId == "ack-log-id")
-        #expect(ack.requestId != state.requestId)
+        #expect(ack._jsonSessionId == state._jsonSessionId)
+        #expect(ack._jsonRequestId == "ack-log-id")
+        #expect(ack._jsonRequestId != state._jsonRequestId)
     }
 
     @Test("input carries raw bytes through base64")
@@ -174,15 +174,15 @@ struct GuestExecMessageTests {
         let message = GuestExecInputMessage(sessionId: "s-1", rawData: payload)
         let decoded = try throughEnvelope(message)
         #expect(decoded.rawData == payload)
-        #expect(!decoded.eof)
+        #expect(!decoded._jsonEof)
     }
 
     @Test("an EOF-only input has no data")
     func eofOnlyInput() throws {
         let decoded = try throughEnvelope(GuestExecInputMessage(sessionId: "s-1", eof: true))
-        #expect(decoded.data == nil)
+        #expect(decoded._jsonData == nil)
         #expect(decoded.rawData == nil)
-        #expect(decoded.eof)
+        #expect(decoded._jsonEof)
     }
 
     @Test("output carries raw bytes")
@@ -191,26 +191,26 @@ struct GuestExecMessageTests {
         let message = GuestExecOutputMessage(sessionId: "s-1", stream: "stdout", rawData: payload)
         let decoded = try throughEnvelope(message)
         #expect(decoded.rawData == payload)
-        #expect(decoded.stream == "stdout")
+        #expect(decoded._jsonStream == "stdout")
     }
 
     @Test("resize, exit, close, closed, started round-trip")
     func controlMessagesRoundTrip() throws {
         let resize = try throughEnvelope(GuestExecResizeMessage(sessionId: "s-1", rows: 40, cols: 132))
-        #expect(resize.rows == 40)
-        #expect(resize.cols == 132)
+        #expect(resize._jsonRows == 40)
+        #expect(resize._jsonCols == 132)
 
         let exit = try throughEnvelope(GuestExecExitMessage(sessionId: "s-1", exitCode: 137))
-        #expect(exit.exitCode == 137)
+        #expect(exit._jsonExitCode == 137)
 
         let close = try throughEnvelope(GuestExecCloseMessage(sessionId: "s-1", reason: "browser gone"))
-        #expect(close.reason == "browser gone")
+        #expect(close._jsonReason == "browser gone")
 
         let closed = try throughEnvelope(GuestExecClosedMessage(sessionId: "s-1", reason: "vsock died"))
-        #expect(closed.reason == "vsock died")
+        #expect(closed._jsonReason == "vsock died")
 
         let started = try throughEnvelope(GuestExecStartedMessage(sessionId: "s-1"))
-        #expect(started.sessionId == "s-1")
+        #expect(started._jsonSessionId == "s-1")
     }
 
     @Test("sandbox log round-trips")
@@ -218,8 +218,8 @@ struct GuestExecMessageTests {
         let message = SandboxLogMessage(
             sandboxId: Fixtures.uuidA.uuidString, stream: "stdout", message: "listening on :8080")
         let decoded = try throughEnvelope(message)
-        #expect(decoded.sandboxId == Fixtures.uuidA.uuidString)
-        #expect(decoded.stream == "stdout")
-        #expect(decoded.message == "listening on :8080")
+        #expect(decoded._jsonSandboxId == Fixtures.uuidA.uuidString)
+        #expect(decoded._jsonStream == "stdout")
+        #expect(decoded._jsonMessage == "listening on :8080")
     }
 }

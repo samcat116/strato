@@ -376,7 +376,7 @@ struct VMSpecBuilder {
                 filename: artifact.filename,
                 checksum: artifact.checksum,
                 size: artifact.size,
-                downloadURL: "\(downloadPath)?artifact=\(artifact.kind.rawValue)"
+                downloadURL: "\(downloadPath)?artifact=\(artifact.kind.protocolValue)"
             )
         }
 

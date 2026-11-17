@@ -190,7 +190,7 @@ struct GuestExecWebSocketController: RouteCollection {
                 req.logger.warning(
                     "\(resource.logName) exec attach rejected: \(error)",
                     metadata: [
-                        "resourceKind": .string(resource.kind.rawValue),
+                        "resourceKind": .string(resource.kind.protocolValue),
                         LogMetadata.guestResourceIDKey(for: resource.kind): .string(
                             resourceId.uuidString),
                         "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
@@ -220,7 +220,7 @@ struct GuestExecWebSocketController: RouteCollection {
             req.logger.info(
                 "\(resource.logName) exec WebSocket connection established",
                 metadata: [
-                    "resourceKind": .string(resource.kind.rawValue),
+                    "resourceKind": .string(resource.kind.protocolValue),
                     LogMetadata.guestResourceIDKey(for: resource.kind): .string(
                         resourceId.uuidString),
                     "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
@@ -345,7 +345,7 @@ struct GuestExecWebSocketController: RouteCollection {
                     req.logger.info(
                         "\(resource.logName) exec WebSocket connection closed",
                         metadata: [
-                            "resourceKind": .string(resource.kind.rawValue),
+                            "resourceKind": .string(resource.kind.protocolValue),
                             LogMetadata.guestResourceIDKey(for: resource.kind): .string(
                                 resourceId.uuidString),
                             "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
@@ -354,7 +354,7 @@ struct GuestExecWebSocketController: RouteCollection {
                     req.logger.error(
                         "\(resource.logName) exec WebSocket connection closed with error: \(error)",
                         metadata: [
-                            "resourceKind": .string(resource.kind.rawValue),
+                            "resourceKind": .string(resource.kind.protocolValue),
                             LogMetadata.guestResourceIDKey(for: resource.kind): .string(
                                 resourceId.uuidString),
                             "strato.session.kind": .string("guest_exec"), "strato.session.id": .string(sessionId),
@@ -474,7 +474,7 @@ struct GuestExecWebSocketController: RouteCollection {
                 req.logger.warning(
                     "\(resource.logName) exec access denied",
                     metadata: [
-                        "resourceKind": .string(resource.kind.rawValue),
+                        "resourceKind": .string(resource.kind.protocolValue),
                         LogMetadata.guestResourceIDKey(for: resource.kind): .string(
                             resourceId.uuidString),
                         "userId": .string(userId),

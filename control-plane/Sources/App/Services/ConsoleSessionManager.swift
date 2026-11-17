@@ -497,7 +497,7 @@ final class ConsoleSessionManager: @unchecked Sendable {
                 "strato.session.kind": .string("console"), "strato.session.id": .string(sessionId),
                 "strato.vm.id": .string(vmId),
                 "strato.agent.identity": .string(agentKey),
-                "stream": .string(stream.rawValue),
+                "stream": .string(stream.protocolValue),
             ])
 
         let message = ConsoleConnectMessage(

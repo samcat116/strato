@@ -186,7 +186,7 @@ extension SandboxController {
         // snapshot whose stored copy is still complete and valid.
         let recorded = Set(artifacts.map(\.kind))
         if current.exportedAt == nil,
-            SandboxSnapshotArtifactKind.allCases.allSatisfy({ recorded.contains($0) })
+            SandboxSnapshotArtifactKind.knownCases.allSatisfy({ recorded.contains($0) })
         {
             current.exportedAt = Date()
         }
@@ -196,7 +196,7 @@ extension SandboxController {
             "Sandbox snapshot artifact stored",
             metadata: [
                 "snapshot_id": .string(snapshotID.uuidString),
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "size": .stringConvertible(size),
             ])
         return .ok
@@ -210,7 +210,7 @@ extension SandboxController {
         let (snapshot, kind) = try await authenticatedSnapshotArtifactRequest(req: req)
         let snapshotID = try snapshot.requireID()
         guard snapshot.exportedArtifact(for: kind) != nil else {
-            throw Abort(.notFound, reason: "Artifact '\(kind.rawValue)' has not been exported")
+            throw Abort(.notFound, reason: "Artifact '\(kind.protocolValue)' has not been exported")
         }
         let key = SandboxSnapshotObjectKey.artifact(
             projectId: snapshot.$project.id, snapshotId: snapshotID, kind: kind)
@@ -251,7 +251,7 @@ extension SandboxController {
             metadata: [
                 "strato.agent.identity": .string(agent.identity.key),
                 "snapshot_id": .string(snapshotID.uuidString),
-                "kind": .string(kind.rawValue),
+                "kind": .string(kind.protocolValue),
                 "method": .string(req.method.rawValue),
             ])
         return (snapshot, kind)

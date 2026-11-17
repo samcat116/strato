@@ -73,7 +73,7 @@ extension Agent {
                         }.value
                     },
                     warnings: { [weak self] in
-                        await self?.hostResourceTelemetry?.memoryWarnings ?? []
+                        await self?.hostResourceTelemetry?.memoryWarnings.values ?? []
                     }))
             let libvirtVersionCache = NodeDependencyProbeCache<String?>()
             registry.append(

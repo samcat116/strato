@@ -379,7 +379,7 @@ public enum HostPreflight {
                     supportsSnapshots: hypervisor.supportsSnapshots,
                     supportsVsock: hypervisor.supportsVsock,
                     supportsGuestExec: hypervisor.supportsGuestExec,
-                    supportsVolumeIOLimits: hypervisor.supportsVolumeIOLimits,
+                    supportsVolumeIOLimits: hypervisor.supportsVolumeIoLimits,
                     version: hypervisor.version
                 )
             }

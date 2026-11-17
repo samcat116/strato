@@ -185,8 +185,8 @@ struct ImageCacheServiceTests {
         // Same image/project/artifact filename — so the same destination path — but new bytes.
         let originalDisk = try #require(original.artifact(ofKind: .diskImage))
         let replaced = ImageInfo(
-            imageId: original.imageId,
-            projectId: original.projectId,
+            imageId: try UUID(protocolString: original.imageID),
+            projectId: try UUID(protocolString: original.projectID),
             architecture: original.architecture,
             artifacts: [
                 ArtifactInfo(

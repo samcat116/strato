@@ -120,13 +120,11 @@ struct KRBDDiskRealizerTests {
             rbdPath: "/fake/rbd", mappingStatePath: state.path,
             deviceExists: { _ in true }, readTextFile: textReader(), runSubprocess: runner)
         await #expect(throws: (any Error).self) { try await first.realize(attachment, readOnly: false) }
-        guard
-            case .rbd(let pool, let image, let namespace, let user, let monitors, let cluster, _, let config) =
-                attachment
-        else { Issue.record("RBD fixture required"); return }
+        guard case .rbd(let rbd) = attachment.value else { Issue.record("RBD fixture required"); return }
         let otherCredential = DiskAttachment.rbd(
-            pool: pool, image: image, namespace: namespace, user: user, monEndpoints: monitors, clusterId: cluster,
-            credentialId: UUID(), configPath: config)
+            pool: rbd.pool, image: rbd.image, namespace: rbd.namespace,
+            user: rbd.user, monEndpoints: rbd.monEndpoints.values,
+            clusterId: try UUID(protocolString: rbd.clusterID), credentialId: UUID(), configPath: rbd.configPath)
         for (candidate, readOnly) in [(attachment, false), (attachment, true), (otherCredential, false)] {
             let restarted = KRBDDiskRealizer(
                 rbdPath: "/fake/rbd", mappingStatePath: state.path,

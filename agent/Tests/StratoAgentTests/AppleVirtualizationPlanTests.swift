@@ -153,7 +153,7 @@ struct AppleVirtualizationPlanTests {
         let replay = Reconciler.plan(
             desired: [desired], present: [id.uuidString: .managed(.running)], lastApplied: [id.uuidString: 2],
             appliedEdges: [id.uuidString: AppliedEdgeNonces(reboot: 2)],
-            presentNetworks: [id.uuidString: desired.spec.networks])
+            presentNetworks: [id.uuidString: desired.spec.networks.values])
         #expect(replay.items.isEmpty)
     }
 

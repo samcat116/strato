@@ -317,7 +317,7 @@ enum VMCreationWorkflow {
         if metadataSource == .imds, chosenHypervisor != .qemu {
             throw Abort(
                 .badRequest,
-                reason: "'metadataSource: imds' is not supported for \(chosenHypervisor.rawValue) VMs; use qemu")
+                reason: "'metadataSource: imds' is not supported for \(chosenHypervisor.protocolValue) VMs; use qemu")
         }
 
         let vm = VM(
@@ -349,11 +349,11 @@ enum VMCreationWorkflow {
         // Firecracker. An empty or incomplete set is an explicit failure.
         if !image.isUsable(by: vm.hypervisorType) {
             let available = image.compatibleHypervisors()
-                .map(\.rawValue).sorted().joined(separator: ", ")
+                .map(\.protocolValue).sorted().joined(separator: ", ")
             throw Abort(
                 .badRequest,
-                reason: "Image '\(image.name)' (\(image.architecture.rawValue)) is not usable by "
-                    + "\(vm.hypervisorType.rawValue). Compatible hypervisors: "
+                reason: "Image '\(image.name)' (\(image.architecture.protocolValue)) is not usable by "
+                    + "\(vm.hypervisorType.protocolValue). Compatible hypervisors: "
                     + (available.isEmpty ? "none" : available))
         }
 
@@ -381,7 +381,7 @@ enum VMCreationWorkflow {
         if vm.guestAgentEnabled, vm.hypervisorType != .qemu {
             throw Abort(
                 .badRequest,
-                reason: "'guestAgentEnabled' is not supported for \(vm.hypervisorType.rawValue) VMs; use qemu")
+                reason: "'guestAgentEnabled' is not supported for \(vm.hypervisorType.protocolValue) VMs; use qemu")
         }
 
         // Firecracker emulates no display device at all — it boots a kernel

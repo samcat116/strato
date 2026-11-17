@@ -29,7 +29,8 @@ Use Swift Testing (`@Test`, `#expect`), scenario names, and `*Tests.swift` files
 frontend tests use Vitest (`*.test.ts[x]`) and Playwright.
 Control-plane tests require disposable PostgreSQL and the template-clone harness.
 Cover affected consumers; broaden suites for shared-contract changes.
-PR CI neither compiles nor runs Swift tests.
+PR CI runs focused agent-protocol compatibility tests; complete Swift package
+suites remain a local/manual validation responsibility.
 
 ## Style and pull requests
 

@@ -10,8 +10,8 @@ struct AgentUpdateBridgeTests {
             #"{"exchangeVersion":1,"workloadWireVersion":69,"update":{"targetVersion":"bridge-target","artifactURL":"https://example.test/agent","sha256":"abc","artifactKind":"binary"}}"#
         let response = try JSONDecoder().decode(AgentUpdateBridgeResponse.self, from: Data(json.utf8))
         let update = try #require(try response.skewUpdate(agentWireVersion: version))
-        #expect(update.targetVersion == "bridge-target")
-        #expect(update.artifactKind == .binary)
+        #expect(update._jsonTargetVersion == "bridge-target")
+        #expect(update._jsonArtifactKind == .binary)
     }
 
     @Test("Matching versions keep updates on ordinary desired state")
@@ -25,7 +25,7 @@ struct AgentUpdateBridgeTests {
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredStateMessage.self,
             from: WireProtocol.makeEncoder().encode(ordinary))
-        #expect(decoded.desiredAgentUpdate?.targetVersion == "new")
+        #expect(decoded._jsonDesiredAgentUpdate?._jsonTargetVersion == "new")
     }
 
     @Test("No assignment grants no update; unknown exchange fails closed")

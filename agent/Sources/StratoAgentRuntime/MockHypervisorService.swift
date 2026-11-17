@@ -61,7 +61,7 @@ actor MockHypervisorService: HypervisorService {
         logger.warning(
             "Hypervisor running in mock mode - no real VMs will be created",
             metadata: [
-                "hypervisorType": .string(hypervisorType.rawValue)
+                "hypervisorType": .string(hypervisorType.protocolValue)
             ])
     }
 
@@ -129,7 +129,7 @@ actor MockHypervisorService: HypervisorService {
             // Only when the spec asked for one, so simulation mode reproduces
             // the real refusal for a headless VM rather than always offering a
             // display.
-            vncSocketPath: vm.spec.console?.effectiveGraphics == .vnc
+            vncSocketPath: vm.spec.optionalConsole?.effectiveGraphics == .vnc
                 ? "/var/run/strato/vm-\(vmId)-vnc.sock" : nil
         )
     }
@@ -142,13 +142,14 @@ actor MockHypervisorService: HypervisorService {
         guard var vm = vms[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
-        let volumes = vm.spec.volumes.map { volume in
-            guard volume.volumeId.uuidString == volumeId else { return volume }
-            return VolumeSpec(
-                volumeId: volume.volumeId, deviceName: volume.deviceName,
-                attachment: attachment, readonly: readonly,
-                bootOrder: volume.bootOrder, ioLimits: ioLimits,
-                blockMode: volume.blockMode, appliedBlockPolicy: blockPolicy)
+        let volumes = vm.spec.volumes.values.map { volume in
+            guard volume.volumeID == volumeId else { return volume }
+            var updated = volume
+            updated.attachment = attachment
+            updated.readonly = readonly
+            if let ioLimits { updated.ioLimits = ioLimits } else { updated.clearIoLimits() }
+            if let blockPolicy { updated.appliedBlockPolicy = blockPolicy } else { updated.clearAppliedBlockPolicy() }
+            return updated
         }
         vm.spec = vm.spec.withVolumes(volumes)
         vms[vmId] = vm
@@ -172,15 +173,12 @@ actor MockHypervisorService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
         var found = false
-        let volumes = vm.spec.volumes.map { volume in
-            guard volume.volumeId.uuidString == volumeId else { return volume }
+        let volumes = vm.spec.volumes.values.map { volume in
+            guard volume.volumeID == volumeId else { return volume }
             found = true
-            return VolumeSpec(
-                volumeId: volume.volumeId, deviceName: volume.deviceName,
-                attachment: volume.attachment, readonly: volume.readonly,
-                bootOrder: volume.bootOrder, ioLimits: limits,
-                blockMode: volume.blockMode,
-                appliedBlockPolicy: volume.appliedBlockPolicy)
+            var updated = volume
+            if let limits { updated.ioLimits = limits } else { updated.clearIoLimits() }
+            return updated
         }
         guard found else {
             throw HypervisorServiceError.diskError("volume \(volumeId) is not attached")
@@ -197,12 +195,10 @@ actor MockHypervisorService: HypervisorService {
         guard let vm = vms[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
-        guard let volume = vm.spec.volumes.first(where: { $0.volumeId.uuidString == volumeId }) else {
+        guard let volume = vm.spec.volumes.values.first(where: { $0.volumeID == volumeId }) else {
             throw HypervisorServiceError.diskError("volume \(volumeId) is not attached")
         }
-        return VolumeIOLimits(
-            iopsTotal: volume.ioLimits?.iopsTotal,
-            bpsTotal: volume.ioLimits?.bpsTotal)
+        return volume.hasIoLimits ? volume.ioLimits : VolumeIOLimits()
     }
 
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {

@@ -117,10 +117,10 @@ extension AgentService {
         await applyDoorbell(agentKey: agentKey)
     }
 
-    func deliverAgentEnvelope(_ envelope: MessageEnvelope, agentKey: String) async throws {
+    func deliverAgentFrame(_ frame: Data, agentKey: String) async throws {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
             throw ReplicaMessageBridge.DeliveryError.agentNotConnected(agentKey)
         }
-        websocket.send(try WireProtocol.makeEncoder().encode(envelope))
+        websocket.send(frame)
     }
 }

@@ -192,7 +192,7 @@ public enum EC2MetadataRenderer {
         insert(.mac, as: "mac", metadata: metadata, options: options, into: &metaData)
 
         var interfaces: [String: JSONValue] = [:]
-        for nic in metadata.nics {
+        for nic in metadata.nics.values {
             let macAddress = nic.macAddress.lowercased()
             var leaves: [String: JSONValue] = [:]
             for leaf in EC2MetadataPath.NetworkInterfaceLeaf.allCases {
@@ -232,7 +232,7 @@ public enum EC2MetadataRenderer {
                     }))
         }
 
-        let tags = servableTags(metadata.tags)
+        let tags = servableTags(metadata.tags.values)
         if !tags.isEmpty {
             metaData["tags"] = .object([
                 "instance": .object(tags.mapValues(JSONValue.string))
@@ -259,43 +259,43 @@ public enum EC2MetadataRenderer {
         for metadata: InstanceMetadata,
         options: EC2MetadataRenderOptions = .init()
     ) -> String? {
-        let primaryNIC = metadata.nics.first
+        let primaryNIC = metadata.nics.values.first
 
         switch path {
         case .index:
             var keys = ["instance-id"]
-            if metadata.hostname != nil { keys += ["hostname", "local-hostname"] }
-            if primaryNIC?.ipAddress != nil { keys.append("local-ipv4") }
-            if primaryNIC?.ipv6Address != nil { keys.append("ipv6") }
+            if metadata.hasHostname { keys += ["hostname", "local-hostname"] }
+            if primaryNIC?.hasIpAddress == true { keys.append("local-ipv4") }
+            if primaryNIC?.hasIpv6Address == true { keys.append("ipv6") }
             if primaryNIC != nil { keys.append("mac") }
-            if !metadata.nics.isEmpty { keys.append("network/") }
-            if options.disclosePlacement && (metadata.availabilityZone != nil || metadata.region != nil) {
+            if !metadata.nics.values.isEmpty { keys.append("network/") }
+            if options.disclosePlacement && (metadata.hasAvailabilityZone || metadata.hasRegion) {
                 keys.append("placement/")
             }
             if !servableSSHKeys(metadata).isEmpty { keys.append("public-keys/") }
-            if !servableTags(metadata.tags).isEmpty { keys.append("tags/") }
+            if !servableTags(metadata.tags.values).isEmpty { keys.append("tags/") }
             return listing(keys)
 
         case .hostname, .localHostname:
-            return metadata.hostname
+            return metadata.optionalHostname
         case .instanceID:
-            return metadata.instanceId.uuidString
+            return metadata.instanceID
         case .ipv6:
-            return primaryNIC?.ipv6Address
+            return primaryNIC.flatMap { $0.optionalIpv6Address }
         case .localIPv4:
-            return primaryNIC?.ipAddress
+            return primaryNIC.flatMap { $0.optionalIpAddress }
         case .mac:
             return primaryNIC?.macAddress.lowercased()
 
         case .network:
-            guard !metadata.nics.isEmpty else { return nil }
+            guard !metadata.nics.values.isEmpty else { return nil }
             return "interfaces/"
         case .networkInterfaces:
-            guard !metadata.nics.isEmpty else { return nil }
+            guard !metadata.nics.values.isEmpty else { return nil }
             return "macs/"
         case .networkMACs:
-            guard !metadata.nics.isEmpty else { return nil }
-            return listing(Set(metadata.nics.map { "\($0.macAddress.lowercased())/" }))
+            guard !metadata.nics.values.isEmpty else { return nil }
+            return listing(Set(metadata.nics.values.map { "\($0.macAddress.lowercased())/" }))
         case .networkInterface(let macAddress):
             guard let match = interface(macAddress, in: metadata) else { return nil }
             return listing(interfaceKeys(for: match.nic, metadata: metadata))
@@ -306,16 +306,16 @@ public enum EC2MetadataRenderer {
         case .placement:
             guard options.disclosePlacement else { return nil }
             var keys: [String] = []
-            if metadata.availabilityZone != nil { keys.append("availability-zone") }
-            if metadata.region != nil { keys.append("region") }
+            if metadata.hasAvailabilityZone { keys.append("availability-zone") }
+            if metadata.hasRegion { keys.append("region") }
             guard !keys.isEmpty else { return nil }
             return listing(keys)
         case .availabilityZone:
             guard options.disclosePlacement else { return nil }
-            return metadata.availabilityZone
+            return metadata.optionalAvailabilityZone
         case .region:
             guard options.disclosePlacement else { return nil }
-            return metadata.region
+            return metadata.optionalRegion
 
         case .publicKeys:
             let keys = servableSSHKeys(metadata)
@@ -334,14 +334,14 @@ public enum EC2MetadataRenderer {
             return keys[index]
 
         case .tags:
-            guard !servableTags(metadata.tags).isEmpty else { return nil }
+            guard !servableTags(metadata.tags.values).isEmpty else { return nil }
             return "instance/"
         case .instanceTags:
-            let tags = servableTags(metadata.tags)
+            let tags = servableTags(metadata.tags.values)
             guard !tags.isEmpty else { return nil }
             return listing(tags.keys)
         case .instanceTag(let key):
-            return servableTags(metadata.tags)[key]
+            return servableTags(metadata.tags.values)[key]
         }
     }
 
@@ -357,11 +357,14 @@ public enum EC2MetadataRenderer {
             return "document"
         case .instanceIdentityDocument:
             let document = InstanceIdentityDocument(
-                accountId: metadata.projectId.uuidString,
-                availabilityZone: options.disclosePlacement ? metadata.availabilityZone : nil,
-                instanceId: metadata.instanceId.uuidString,
-                privateIp: metadata.nics.first.flatMap { $0.ipAddress ?? $0.ipv6Address },
-                region: options.disclosePlacement ? metadata.region : nil,
+                accountId: metadata.projectID,
+                availabilityZone: options.disclosePlacement && metadata.hasAvailabilityZone
+                    ? metadata.availabilityZone : nil,
+                instanceId: metadata.instanceID,
+                privateIp: metadata.nics.values.first.flatMap {
+                    $0.hasIpAddress ? $0.ipAddress : $0.optionalIpv6Address
+                },
+                region: options.disclosePlacement && metadata.hasRegion ? metadata.region : nil,
                 version: "2017-09-30")
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -382,7 +385,7 @@ public enum EC2MetadataRenderer {
     private static func interface(
         _ macAddress: String, in metadata: InstanceMetadata
     ) -> (index: Int, nic: MetadataNIC)? {
-        metadata.nics.enumerated().first {
+        metadata.nics.values.enumerated().first {
             $0.element.macAddress.caseInsensitiveCompare(macAddress) == .orderedSame
         }.map { (index: $0.offset, nic: $0.element) }
     }
@@ -394,9 +397,9 @@ public enum EC2MetadataRenderer {
             EC2MetadataPath.NetworkInterfaceLeaf.ownerID.rawValue,
             EC2MetadataPath.NetworkInterfaceLeaf.subnetID.rawValue,
         ]
-        if nic.ipAddress != nil { keys.append(EC2MetadataPath.NetworkInterfaceLeaf.localIPv4s.rawValue) }
-        if nic.ipv6Address != nil { keys.append(EC2MetadataPath.NetworkInterfaceLeaf.ipv6s.rawValue) }
-        if metadata.hostname != nil, nic.ipAddress != nil || nic.ipv6Address != nil {
+        if nic.hasIpAddress { keys.append(EC2MetadataPath.NetworkInterfaceLeaf.localIPv4s.rawValue) }
+        if nic.hasIpv6Address { keys.append(EC2MetadataPath.NetworkInterfaceLeaf.ipv6s.rawValue) }
+        if metadata.hasHostname, nic.hasIpAddress || nic.hasIpv6Address {
             keys.append(EC2MetadataPath.NetworkInterfaceLeaf.localHostname.rawValue)
         }
         if ipv4Subnet(of: nic) != nil {
@@ -419,32 +422,32 @@ public enum EC2MetadataRenderer {
             let suffix = nic.deviceName.hasPrefix("net") ? String(nic.deviceName.dropFirst(3)) : ""
             guard let number = Int(suffix), suffix == String(number) else { return String(index) }
             return String(number)
-        case .ipv6s: return nic.ipv6Address
+        case .ipv6s: return nic.optionalIpv6Address
         case .localHostname:
-            guard nic.ipAddress != nil || nic.ipv6Address != nil else { return nil }
-            return metadata.hostname
-        case .localIPv4s: return nic.ipAddress
+            guard nic.hasIpAddress || nic.hasIpv6Address else { return nil }
+            return metadata.optionalHostname
+        case .localIPv4s: return nic.optionalIpAddress
         case .mac: return nic.macAddress.lowercased()
-        case .ownerID: return metadata.projectId.uuidString
-        case .subnetID: return nic.networkId.uuidString
+        case .ownerID: return metadata.projectID
+        case .subnetID: return nic.networkID
         case .subnetIPv4CIDRBlock: return ipv4Subnet(of: nic)
         case .subnetIPv6CIDRBlocks: return ipv6Subnet(of: nic)
         }
     }
 
     private static func ipv4Subnet(of nic: MetadataNIC) -> String? {
-        guard let address = nic.ipAddress.flatMap(IPv4Address.init), let prefix = nic.prefixLength,
-            (0...32).contains(prefix)
+        guard nic.hasIpAddress, let address = IPv4Address(nic.ipAddress), nic.hasPrefixLength,
+            (0...32).contains(nic.prefixLength)
         else { return nil }
-        let cidr = IPv4CIDR(base: address, prefix: prefix)
+        let cidr = IPv4CIDR(base: address, prefix: Int(nic.prefixLength))
         return "\(cidr.networkAddress)/\(cidr.prefix)"
     }
 
     private static func ipv6Subnet(of nic: MetadataNIC) -> String? {
-        guard let address = nic.ipv6Address.flatMap(IPv6Address.init), let prefix = nic.ipv6PrefixLength,
-            (0...128).contains(prefix)
+        guard nic.hasIpv6Address, let address = IPv6Address(nic.ipv6Address), nic.hasIpv6PrefixLength,
+            (0...128).contains(nic.ipv6PrefixLength)
         else { return nil }
-        return IPv6CIDR(base: address, prefix: prefix).description
+        return IPv6CIDR(base: address, prefix: Int(nic.ipv6PrefixLength)).description
     }
 
     /// EC2 restricts tag keys exposed through IMDS to a single safe path
@@ -455,7 +458,7 @@ public enum EC2MetadataRenderer {
     }
 
     private static func servableSSHKeys(_ metadata: InstanceMetadata) -> [String] {
-        metadata.sshAuthorizedKeys
+        metadata.sshAuthorizedKeys.values
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }

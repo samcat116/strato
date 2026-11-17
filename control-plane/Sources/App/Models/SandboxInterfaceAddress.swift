@@ -26,7 +26,7 @@ final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     @Parent(key: "logical_network_id")
     var logicalNetwork: LogicalNetwork
 
-    /// Address family, stored as `IPFamily.rawValue`.
+    /// Address family, stored as `IPFamily.protocolValue`.
     @Field(key: "family")
     var family: String
 
@@ -62,7 +62,7 @@ final class SandboxInterfaceAddress: Model, @unchecked Sendable {
         self.id = id
         self.$interface.id = interfaceID
         self.$logicalNetwork.id = logicalNetworkID
-        self.family = family.rawValue
+        self.family = family.protocolValue
         self.address = address
         self.prefixLength = prefixLength
         self.gateway = gateway

@@ -255,5 +255,6 @@ extension Application {
         migrations.add(AddVMGuestConfigEvidence())
         migrations.add(AddAppleVirtualizationBackend())
         migrations.add(RemoveReservedStoragePoolConfiguration())
+        migrations.add(AddAgentProtocolSupport())
     }
 }

@@ -1,0 +1,12 @@
+syntax = "proto3";
+package strato.agent.compat.v1;
+
+message PeerMessage {
+  optional uint32 protocol_major = 1;
+  repeated string capabilities = 2;
+  Inventory inventory = 3;
+  optional bytes output = 4;
+}
+message Inventory {
+  repeated string workload_ids = 1;
+}

@@ -19,6 +19,11 @@ updates:
       - "swift"
     assignees:
       - "samcat116"
+    # The SwiftProtobuf runtime must match the pinned protoc-gen-swift that
+    # produced shared/Sources/StratoShared/Generated (scripts/agent-protocol.sh
+    # enforces this). Bump the runtime, generator, and generated output together.
+    ignore:
+      - dependency-name: "github.com/apple/swift-protobuf"
   # Explicit ecosystems route security updates to the matching lockfile updater.
   # A zero version-update limit keeps JavaScript updates security-only.
   - package-ecosystem: "npm"

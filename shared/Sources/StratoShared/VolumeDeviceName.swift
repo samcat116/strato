@@ -79,7 +79,7 @@ public struct VolumeDeviceName: Sendable, Hashable, Comparable, Codable, CustomS
         lhs.rawValue < rhs.rawValue
     }
 
-    public init(from decoder: any Decoder) throws {
+    public init(from decoder: any Swift.Decoder) throws {
         let container = try decoder.singleValueContainer()
         let rawValue = try container.decode(String.self)
         guard let name = Self(rawValue) else {
@@ -90,7 +90,7 @@ public struct VolumeDeviceName: Sendable, Hashable, Comparable, Codable, CustomS
         self = name
     }
 
-    public func encode(to encoder: any Encoder) throws {
+    public func encode(to encoder: any Swift.Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
     }

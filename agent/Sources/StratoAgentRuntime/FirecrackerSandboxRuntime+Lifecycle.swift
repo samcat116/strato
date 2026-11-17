@@ -17,8 +17,9 @@ extension FirecrackerSandboxRuntime {
         registryCredential: RegistryCredential?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
-        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass, enforcement: burstableEnforcement)
-        if spec.resourceClass?.policy.kind == .burstable {
+        try BurstableRuntimeGate.requireSupport(
+            resourceClass: spec.optionalResourceClass, enforcement: burstableEnforcement)
+        if spec.resourceClass.policy.kind == .burstable {
             guard jailNewSandboxes else {
                 throw ConvergenceError.blocked("Burstable sandboxes require the jailer boundary")
             }
@@ -27,7 +28,7 @@ extension FirecrackerSandboxRuntime {
         // Idempotent: a replayed create for an already-defined sandbox is a
         // no-op (the Firecracker process is already configured).
         if let existing = sandboxes[sandboxId] {
-            if spec.resourceClass?.policy.kind == .burstable {
+            if spec.resourceClass.policy.kind == .burstable {
                 guard existing.spec.resourceClass == spec.resourceClass,
                     existing.spec.memoryBytes == spec.memoryBytes, existing.spec.cpus == spec.cpus
                 else { throw ConvergenceError.blocked("Existing sandbox does not match the admitted burstable grant") }
@@ -61,7 +62,8 @@ extension FirecrackerSandboxRuntime {
         // snapshot already contains a running workload, so restore, rotate its
         // identity, and report it healthy as one create operation. No registry
         // pull or cold/warm image provisioning belongs on this path.
-        if let restoreFrom = spec.restoreFrom {
+        if spec.hasRestoreFrom {
+            let restoreFrom = spec.restoreFrom
             try await provisionFromSandboxSnapshot(
                 sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom,
                 networkAttachments: networkAttachments)
@@ -75,7 +77,8 @@ extension FirecrackerSandboxRuntime {
         // give the workload a writable root, and the cache entry must never be
         // written. (An overlay would avoid the copy; that is future work.)
         let materialized = try await imageService.materializeRootfs(
-            image: spec.image, imageDigest: spec.imageDigest, credential: registryCredential)
+            image: spec.image, imageDigest: spec.optionalImageDigest, credential: registryCredential
+        )
 
         // Stage the config drive the guest init reads at boot. Every config
         // drive is padded to one standard capacity so a warm restore (below)
@@ -430,7 +433,8 @@ extension FirecrackerSandboxRuntime {
             )
 
             jailOptions = try makeJailerOptions(
-                plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass)
+                plan: plan, guestMemoryBytes: spec.memoryBytes,
+                resourceClass: spec.optionalResourceClass)
         } else {
             jailPlan = nil
             let dir = sandboxDirectory(vmId)
@@ -475,9 +479,9 @@ extension FirecrackerSandboxRuntime {
             // makes those snapshots portable across same-arch hosts.
             try await manager.configureMachine(
                 MachineConfig(
-                    vcpuCount: spec.cpus,
+                    vcpuCount: Int(spec.cpus),
                     memSizeMib: Int(spec.memoryBytes / (1024 * 1024)),
-                    cpuTemplate: spec.cpuTemplate))
+                    cpuTemplate: spec.optionalCpuTemplate))
 
             let bootSource = SwiftFirecracker.BootSource(
                 kernelImagePath: apiPaths.kernel,
@@ -605,7 +609,8 @@ extension FirecrackerSandboxRuntime {
             let manager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(
-                    plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
+                    plan: plan, guestMemoryBytes: spec.memoryBytes,
+                    resourceClass: spec.optionalResourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
@@ -649,14 +654,14 @@ extension FirecrackerSandboxRuntime {
         let overrides = try await requiredNetworkOverrides(
             forTAP: tapName, operation: "forking a networked sandbox")
 
-        let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
-        let snapshotId = restoreFrom.snapshotId.uuidString
+        let sourceSandboxId = restoreFrom.sourceSandboxID
+        let snapshotId = restoreFrom.snapshotID
         // Local artifacts when the source sandbox lives here; otherwise the
         // exported copy is staged into the import cache from the signed
         // download descriptors the sync carried (issue #428).
         let archiveDir = try await stageSnapshotArchive(
             sourceSandboxId: sourceSandboxId, snapshotId: snapshotId,
-            artifacts: restoreFrom.artifacts)
+            artifacts: restoreFrom.optionalArtifacts?.values)
         let archiveMemory = archiveDir + "/" + SnapshotFile.memory
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
@@ -727,11 +732,12 @@ extension FirecrackerSandboxRuntime {
             let manager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(
-                    plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
+                    plan: plan, guestMemoryBytes: spec.memoryBytes,
+                    resourceClass: spec.optionalResourceClass),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: spec.resourceClass?.policy.kind != .burstable,
+                    resumeVM: spec.resourceClass.policy.kind != .burstable,
                     networkOverrides: overrides),
                 validateCgroup: try resourceLimitValidator(sandboxId: sandboxId, spec: spec))
             try await validateRestoredGrant(manager: manager, sandboxId: sandboxId, spec: spec, resume: true)
@@ -880,7 +886,8 @@ extension FirecrackerSandboxRuntime {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
         }
         try BurstableRuntimeGate.requireSupport(
-            resourceClass: managed.spec.resourceClass, enforcement: burstableEnforcement)
+            resourceClass: managed.spec.optionalResourceClass,
+            enforcement: burstableEnforcement)
         guard !checkpointing.contains(sandboxId), !suspending.contains(sandboxId) else {
             throw SandboxRuntimeError.checkpointInProgress(sandboxId)
         }
@@ -1088,7 +1095,7 @@ extension FirecrackerSandboxRuntime {
 
         let guestImage = try SandboxGuestImage.resolve(atDirectory: guestImagePath)
         let materialized = try await imageService.materializeRootfs(
-            image: managed.spec.image, imageDigest: managed.spec.imageDigest,
+            image: managed.spec.image, imageDigest: managed.spec.optionalImageDigest,
             credential: managed.registryCredential)
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
@@ -1203,7 +1210,8 @@ extension FirecrackerSandboxRuntime {
     func adoptSandbox(
         sandboxId: String, spec: SandboxSpec, jailUID: UInt32?
     ) async throws -> SandboxStatus {
-        try BurstableRuntimeGate.requireSupport(resourceClass: spec.resourceClass, enforcement: burstableEnforcement)
+        try BurstableRuntimeGate.requireSupport(
+            resourceClass: spec.optionalResourceClass, enforcement: burstableEnforcement)
         if let managed = sandboxes[sandboxId] {
             try await validateResourceLimits(sandboxId: sandboxId, spec: spec)
             // A replayed sync can race adoption; if already managed, adoption is
@@ -1251,12 +1259,13 @@ extension FirecrackerSandboxRuntime {
                 (
                     plan,
                     try makeJailerOptions(
-                        plan: plan, guestMemoryBytes: spec.memoryBytes, resourceClass: spec.resourceClass),
+                        plan: plan, guestMemoryBytes: spec.memoryBytes,
+                        resourceClass: spec.optionalResourceClass),
                     jailedSocketPath
                 ))
         }
         let flatSocketPath = FirecrackerClient.socketPath(socketDirectory: socketDirectory, vmId: sandboxId)
-        if FileManager.default.fileExists(atPath: flatSocketPath), spec.resourceClass?.policy.kind != .burstable {
+        if FileManager.default.fileExists(atPath: flatSocketPath), spec.resourceClass.policy.kind != .burstable {
             candidates.append((nil, nil, flatSocketPath))
         }
         guard !candidates.isEmpty else {
@@ -1352,7 +1361,7 @@ extension FirecrackerSandboxRuntime {
         }
         logger.info(
             "Sandbox re-adopted",
-            metadata: ["strato.sandbox.id": .string(sandboxId), "status": .string(status.rawValue)])
+            metadata: ["strato.sandbox.id": .string(sandboxId), "status": .string(status.protocolValue)])
         return status
     }
 

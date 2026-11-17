@@ -43,11 +43,6 @@ struct MessageOrderingTests {
         }
     }
 
-    private func payload(_ object: [String: Any]) -> Data {
-        // swiftlint:disable:next force_try
-        try! JSONSerialization.data(withJSONObject: object)
-    }
-
     // MARK: - SerialTaskQueue
 
     @Test("Same key runs strictly in submission order despite adversarial delays")
@@ -140,69 +135,48 @@ struct MessageOrderingTests {
 
     // MARK: - serializationKey routing
 
-    @Test("Desired-state syncs route without decoding their payload")
-    func desiredStateUsesReconcileLane() {
-        let keys = MessageEnvelope.serializationKeys(type: .desiredState, payload: Data())
-        #expect(keys == [MessageEnvelope.reconcileLane])
+    @Test("Desired-state syncs use the reconciliation lane")
+    func desiredStateUsesReconcileLane() throws {
+        let envelope = try MessageEnvelope(message: DesiredStateMessage())
+        #expect(envelope.serializationKeys == [MessageEnvelope.reconcileLane])
     }
 
     @Test("Guest exec frames for one session share a per-session lane")
-    func guestExecFramesShareSessionLane() {
-        let resourceId = UUID().uuidString
-        let sessionId = UUID().uuidString
-        let startKeys = MessageEnvelope.serializationKeys(
-            type: .guestExecStart,
-            payload: payload([
-                "resourceKind": "virtual_machine", "resourceId": resourceId,
-                "sessionKind": "interactive", "sessionId": sessionId,
-                "command": ["/bin/sh"],
-            ])
-        )
-        let inputKeys = MessageEnvelope.serializationKeys(
-            type: .guestExecInput, payload: payload(["sessionId": sessionId, "eof": false])
-        )
-        let resizeKeys = MessageEnvelope.serializationKeys(
-            type: .guestExecResize, payload: payload(["sessionId": sessionId, "rows": 24, "cols": 80])
-        )
-        let closeKeys = MessageEnvelope.serializationKeys(
-            type: .guestExecClose, payload: payload(["sessionId": sessionId])
-        )
-        let recordedAckKeys = MessageEnvelope.serializationKeys(
-            type: .guestExecRecordedAck, payload: payload(["sessionId": sessionId])
-        )
-
-        // Input/resize/close are applied strictly after the session's start...
-        #expect(startKeys == ["exec:\(sessionId)"])
-        #expect(inputKeys == startKeys)
-        #expect(resizeKeys == startKeys)
-        #expect(closeKeys == startKeys)
-        #expect(recordedAckKeys == startKeys)
-        // ...while staying off the resource's own lifecycle lane and the unkeyed lane.
-        #expect(!startKeys.contains(resourceId))
-        #expect(!startKeys.contains(MessageEnvelope.unkeyedSerializationLane))
+    func guestExecFramesShareSessionLane() throws {
+        let sessionID = UUID().uuidString
+        var start = GuestExecStartMessage()
+        start.sessionID = sessionID
+        var input = GuestExecInputMessage()
+        input.sessionID = sessionID
+        var resize = GuestExecResizeMessage()
+        resize.sessionID = sessionID
+        var close = GuestExecCloseMessage()
+        close.sessionID = sessionID
+        var ack = GuestExecRecordedAckMessage()
+        ack.sessionID = sessionID
+        let envelopes = try [
+            MessageEnvelope(message: start), MessageEnvelope(message: input),
+            MessageEnvelope(message: resize), MessageEnvelope(message: close),
+            MessageEnvelope(message: ack),
+        ]
+        for envelope in envelopes {
+            #expect(envelope.serializationKeys == ["exec:" + sessionID])
+        }
     }
 
     @Test("Guest exec sessions get independent lanes")
-    func guestExecSessionsAreIndependent() {
-        let a = MessageEnvelope.serializationKeys(
-            type: .guestExecInput, payload: payload(["sessionId": UUID().uuidString])
-        )
-        let b = MessageEnvelope.serializationKeys(
-            type: .guestExecInput, payload: payload(["sessionId": UUID().uuidString])
-        )
-        #expect(a != b)
+    func guestExecSessionsAreIndependent() throws {
+        let a = try MessageEnvelope(message: GuestExecInputMessage(sessionId: UUID().uuidString))
+        let b = try MessageEnvelope(message: GuestExecInputMessage(sessionId: UUID().uuidString))
+        #expect(a.serializationKeys != b.serializationKeys)
     }
 
-    @Test("Frames without a resource id fall back to the shared unkeyed lane")
-    func unkeyedFramesShareLane() {
-        let successKeys = MessageEnvelope.serializationKeys(
-            type: .success, payload: payload(["requestId": "r1"])
-        )
-        let errorKeys = MessageEnvelope.serializationKeys(
-            type: .error, payload: payload(["requestId": "r2"])
-        )
-        #expect(successKeys == [MessageEnvelope.unkeyedSerializationLane])
-        #expect(errorKeys == [MessageEnvelope.unkeyedSerializationLane])
+    @Test("Frames without a resource ID use the shared unkeyed lane")
+    func unkeyedFramesShareLane() throws {
+        let success = try MessageEnvelope(message: SuccessMessage())
+        let error = try MessageEnvelope(message: ErrorMessage())
+        #expect(success.serializationKeys == [MessageEnvelope.unkeyedSerializationLane])
+        #expect(error.serializationKeys == [MessageEnvelope.unkeyedSerializationLane])
     }
 
     @Test("Public serializationKeys works end-to-end on a real encoded envelope")

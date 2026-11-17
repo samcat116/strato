@@ -88,7 +88,7 @@ final class VMSnapshot: Model, @unchecked Sendable {
 
     // Desired/observed state split (ADR 0001 stage 8, STR-150), mirroring the
     // volume columns exactly.
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredSnapshotStatus
 
     @Field(key: "generation")
@@ -240,16 +240,16 @@ extension VMSnapshot: SnapshotArtifactResource {
         // A QEMU build that reported no size for the tag it just wrote leaves
         // the admission estimate standing: an unknown footprint must not
         // silently become a free one in quota accounting.
-        if let sizeBytes = facts.sizeBytes, size != sizeBytes {
-            size = sizeBytes
+        if facts.hasSizeBytes, size != facts.sizeBytes {
+            size = facts.sizeBytes
             changed = true
         }
-        if let version = facts.qemuVersion, qemuVersion != version {
-            qemuVersion = version
+        if facts.hasQemuVersion, qemuVersion != facts.qemuVersion {
+            qemuVersion = facts.qemuVersion
             changed = true
         }
-        if let architecture = facts.architecture?.rawValue, self.architecture != architecture {
-            self.architecture = architecture
+        if facts.hasArchitecture, self.architecture != facts.architecture.protocolValue {
+            self.architecture = facts.architecture.protocolValue
             changed = true
         }
         return changed

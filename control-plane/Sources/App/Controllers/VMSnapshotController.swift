@@ -61,7 +61,7 @@ extension VMController {
             throw Abort(
                 .conflict,
                 reason:
-                    "VM cannot be checkpointed in state '\(vm.status.rawValue)'; it must be running or paused")
+                    "VM cannot be checkpointed in state '\(vm.status.protocolValue)'; it must be running or paused")
         }
         // Capture admission, not placement: an artifact inherits its parent's
         // host, so there is no scheduling decision to gate. With the imperative
@@ -235,7 +235,7 @@ extension VMController {
         guard vm.status != .error, vm.status != .unknown else {
             throw Abort(
                 .conflict,
-                reason: "VM cannot be restored in state '\(vm.status.rawValue)'")
+                reason: "VM cannot be restored in state '\(vm.status.protocolValue)'")
         }
         // Both signals: the wire version proves the agent applies the nonce,
         // the capability proves a QEMU backend that can load a checkpoint is

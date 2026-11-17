@@ -1,10 +1,7 @@
 import Foundation
-import StratoShared
+@testable import StratoShared
 
-// The wire protocol routes every message through WireProtocol.makeEncoder()/
-// makeDecoder() on both sides (see MessageEnvelope); tests must use the same
-// coders so they exercise the real contract — including the pinned date
-// strategy and its tolerant decode.
+// Explicit legacy JSON codecs preserve stored, public API, and guest payloads.
 func encodeJSON<T: Encodable>(_ value: T) throws -> Data {
     try WireProtocol.makeEncoder().encode(value)
 }
@@ -17,22 +14,19 @@ func decodeJSON<T: Decodable>(_ type: T.Type, from json: String) throws -> T {
     try WireProtocol.makeDecoder().decode(type, from: Data(json.utf8))
 }
 
-/// Encode a value and decode it back with the protocol's default coders.
+/// Round-trip the stored/public JSON representation; not the workload wire format.
 func roundTrip<T: Codable>(_ value: T) throws -> T {
     try decodeJSON(T.self, from: encodeJSON(value))
 }
 
-/// Wrap a message in a `MessageEnvelope`, push it through JSON both at the
-/// envelope layer and the payload layer, and hand back the decoded message —
-/// the exact path a message takes between control plane and agent.
+/// Round-trip the binary Protobuf envelope used between control plane and agent.
 func throughEnvelope<T: WebSocketMessage>(_ message: T) throws -> T {
-    let envelope = try MessageEnvelope(message: message)
-    let decodedEnvelope = try decodeJSON(MessageEnvelope.self, from: encodeJSON(envelope))
-    return try decodedEnvelope.decode(as: T.self)
+    let encoded = try WireProtocol.encodeEnvelope(message)
+    return try WireProtocol.decodeEnvelope(encoded).decode(as: T.self)
 }
 
 /// Top-level JSON keys of the encoded value, for asserting fields actually
-/// reach the wire (a round trip alone can't catch a field dropped by encoding).
+/// reach stored/public JSON (not the workload wire format).
 func encodedKeys<T: Encodable>(_ value: T) throws -> Set<String> {
     let object = try JSONSerialization.jsonObject(with: encodeJSON(value))
     guard let dictionary = object as? [String: Any] else { return [] }

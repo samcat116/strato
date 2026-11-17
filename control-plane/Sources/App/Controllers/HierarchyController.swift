@@ -82,7 +82,7 @@ struct HierarchyController: RouteCollection {
 
         for vm in allVMs {
             vmsByEnvironment[vm.environment, default: 0] += 1
-            vmsByStatus[vm.status.rawValue, default: 0] += 1
+            vmsByStatus[vm.status.protocolValue, default: 0] += 1
 
             if let projectName = projectNames[vm.$project.id] {
                 vmsByProject[projectName, default: 0] += 1

@@ -26,8 +26,9 @@ enum WorkloadResourceClassService {
         -> WorkloadResourceClassSnapshot
     {
         guard let sql = db as? any SQLDatabase else { throw Abort(.internalServerError) }
-        try await sql.raw("SELECT id FROM sites WHERE id = \(bind: snapshot.siteID) FOR SHARE").run()
-        guard let site = try await Site.find(snapshot.siteID, on: db),
+        let siteID = try UUID(protocolString: snapshot.siteID)
+        try await sql.raw("SELECT id FROM sites WHERE id = \(bind: siteID) FOR SHARE").run()
+        guard let site = try await Site.find(siteID, on: db),
             let current = try site.resourceClasses().first(where: { $0.classID == snapshot.classID }),
             current.policy.kind == snapshot.policy.kind
         else { throw Abort(.conflict, reason: "The admitted resource class no longer exists in its site") }
@@ -160,7 +161,7 @@ enum WorkloadResourceClassService {
         _ snapshot: WorkloadResourceClassSnapshot, backend: WorkloadResourceClassBackend, agent: Agent, now: Date
     ) -> String? {
         guard snapshot.policy.kind == .burstable else { return nil }
-        guard agent.$site.id == snapshot.siteID else {
+        guard agent.$site.id == UUID(uuidString: snapshot.siteID) else {
             return "Resource class does not belong to the selected agent's site"
         }
         let evidence = (agent.resourceClassEnforcement ?? []).filter { $0.backend == backend }
@@ -214,7 +215,10 @@ enum WorkloadResourceClassService {
         guard let projectRoot = try await projectScope?.rootOrganizationID(on: req.db),
             try await site.rootOrganizationID(on: req.db) == projectRoot
         else { throw Abort(.notFound, reason: "Resource class site not found") }
-        guard let snapshot = try site.resourceClasses().first(where: { $0.classID == reference.classID }) else {
+        guard
+            let snapshot = try site.resourceClasses().first(where: { UUID(uuidString: $0.classID) == reference.classID }
+            )
+        else {
             throw Abort(.notFound, reason: "Resource class not found")
         }
         // STR272 must replace this gate only after pre-execution enforcement,

@@ -59,7 +59,8 @@ struct ResourceAdmissionTests {
     func ack(_ f: Fixture, flaw: String = "") throws -> WorkloadEnforcementAcknowledgement {
         let desired = try f.snapshot.policy.runtimeLimits(guestBytes: 32768, backendOverheadBytes: 4096)
         let other = try WorkloadResourceClassSnapshot(
-            classID: f.snapshot.classID, siteID: flaw == "site" ? UUID() : f.snapshot.siteID,
+            classID: try UUID(protocolString: f.snapshot.classID),
+            siteID: flaw == "site" ? UUID() : try UUID(protocolString: f.snapshot.siteID),
             revision: f.snapshot.revision + 1,
             policy: f.snapshot.policy)
         return .init(
@@ -185,8 +186,8 @@ struct ResourceAdmissionTests {
                 ).0
             }
             let repeatedRequest = ObservedStateReport(
-                requestId: message.requestId,
-                agentId: message.agentId, vms: message.vms, resources: message.resources,
+                requestId: message.requestID,
+                agentId: message.agentID, vms: message.vms.values, resources: message.resources,
                 resourceEnforcement: .init(
                     agentBootID: boot, sequence: 11, sampledAt: Date(),
                     inventoryComplete: true, acknowledgements: [try ack(f)]))
@@ -373,7 +374,7 @@ struct ResourceAdmissionTests {
             }
             let row = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
             #expect(row.state.sequence == 4)
-            #expect(row.state.requestID == messages.last?.requestId)
+            #expect(row.state.requestID == messages.last?.requestID)
             #expect(row.state.pending.map(\.reservationID) == [f.key])
         }
     }
@@ -515,7 +516,7 @@ struct ResourceAdmissionTests {
                 do { try await app.agentService.beginObservedInventorySession(for: key, sessionID: predecessor) } catch
                 { Issue.record("Predecessor registration failed: \(error)") }
             }
-            #expect(processor.enqueue("register") == .accepted)
+            #expect(processor.enqueue(Data("register".utf8)) == .accepted)
             await entered.wait()
             let next = Task {
                 await processor.finishAndDrain()
@@ -529,7 +530,7 @@ struct ResourceAdmissionTests {
             #expect(await app.agentService.observedInventorySessions[key] == successor)
             let sqlSession = try await InventorySessionFence.current(agentID: try f.agent.requireID(), on: app.db)
             #expect(sqlSession == successor)
-            #expect(processor.enqueue("late register") == .closed)
+            #expect(processor.enqueue(Data("late register".utf8)) == .closed)
         }
     }
 
@@ -648,9 +649,9 @@ struct ResourceAdmissionTests {
             let stored = try #require(try await Agent.find(agentID, on: app.db))
             #expect(stored.hostname == message.hostname && stored.version == message.version)
             #expect(stored.cpuArchitecture == .arm64)
-            #expect(stored.hypervisors == message.hypervisors)
+            #expect(stored.hypervisors == message.hypervisors.values)
             #expect(
-                stored.networkCapability == NetworkCapability.overlay.rawValue && stored.sandboxCapable
+                stored.networkCapability == NetworkCapability.overlay.protocolValue && stored.sandboxCapable
                     && stored.resolverCapable)
             #expect(stored.dependencyObservations == [profile, overlay])
             #expect(stored.memoryAccounting?.qemuOverheadBytes == (Int64(1) << 30))

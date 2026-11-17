@@ -1,12 +1,12 @@
 import Foundation
 import Testing
-import StratoShared
+@testable import StratoShared
 
 @Suite("Console operation messages")
 struct ConsoleMessageTests {
     @Test func consoleConnectDefaultsToSerial() throws {
         let message = ConsoleConnectMessage(vmId: "vm-1", sessionId: "sess-1")
-        #expect(message.stream == .serial)
+        #expect(message._jsonStream == .serial)
         let json = String(decoding: try encodeJSON(message), as: UTF8.self)
         #expect(json.contains("\"stream\":\"Serial\""))
     }
@@ -17,7 +17,7 @@ struct ConsoleMessageTests {
                 requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", sessionId: "sess-1",
                 stream: .vnc)
         )
-        #expect(decoded.stream == .vnc)
+        #expect(decoded._jsonStream == .vnc)
     }
 
     @Test func consoleDataRoundTripPreservesBytes() throws {
@@ -33,7 +33,7 @@ struct ConsoleMessageTests {
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .consoleData)
-        #expect(decoded.data == bytes.base64EncodedString())
+        #expect(decoded._jsonData == bytes.base64EncodedString())
         #expect(decoded.rawData == bytes)
     }
 

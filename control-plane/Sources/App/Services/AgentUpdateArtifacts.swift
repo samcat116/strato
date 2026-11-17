@@ -205,7 +205,7 @@ enum AgentUpdateArtifacts {
     ) -> String? {
         guard hasReleaseAssets(targetVersion: targetVersion) else { return nil }
         let prefix = targetVersion.hasPrefix("main-") ? "strato-agent" : "strato"
-        let asset = "\(prefix)-\(operatingSystem.rawValue)-\(architecture.rawValue).tar.gz"
+        let asset = "\(prefix)-\(operatingSystem.protocolValue)-\(architecture.protocolValue).tar.gz"
         return "\(trimmedBase(baseURL))/\(releaseTag(for: targetVersion))/\(asset)"
     }
 
@@ -218,7 +218,7 @@ enum AgentUpdateArtifacts {
     ) -> ResolvedAgentArtifact? {
         guard
             let asset = manifest.assets.first(where: {
-                $0.os == operatingSystem.rawValue && $0.arch == architecture.rawValue
+                $0.os == operatingSystem.protocolValue && $0.arch == architecture.protocolValue
             }),
             let digest = parseChecksum(asset.sha256)
         else { return nil }
@@ -347,7 +347,7 @@ enum AgentUpdateArtifacts {
                 throw Abort(
                     .badGateway,
                     reason:
-                        "Release \(manifest.version) publishes no asset for \(operatingSystem.rawValue)/\(architecture.rawValue). Pass artifactUrl and sha256 to override."
+                        "Release \(manifest.version) publishes no asset for \(operatingSystem.protocolValue)/\(architecture.protocolValue). Pass artifactUrl and sha256 to override."
                 )
             }
             return resolved

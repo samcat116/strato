@@ -226,7 +226,7 @@ public struct MTLSArtifactDownloader: Sendable {
     /// control plane may park for its hold window before answering.
     ///
     /// Unlike the streaming adapters this buffers the whole body — a
-    /// desired-state sync is one JSON document sized by the agent's own
+    /// desired-state sync is one Protobuf envelope sized by the agent's own
     /// workload count, not a multi-gigabyte image — and returns `304` as an
     /// ordinary outcome rather than a failure, because "nothing changed" is
     /// the *expected* answer for a converged agent.
@@ -234,12 +234,14 @@ public struct MTLSArtifactDownloader: Sendable {
     /// `maximumBodyBytes` is a guard against a malformed or hostile response
     /// filling agent memory; it is far above any real sync.
     @Sendable
-    public func poll(url: URL, ifNoneMatch: String?, maximumBodyBytes: Int = 64 << 20) async throws
+    public func poll(url: URL, ifNoneMatch: String?, inventorySessionID: String, maximumBodyBytes: Int = 64 << 20)
+        async throws
         -> DesiredStatePollResponse
     {
         try await withClient(purpose: "poll") { client in
             try await pollWithClient(
-                client, url: url, ifNoneMatch: ifNoneMatch, maximumBodyBytes: maximumBodyBytes)
+                client, url: url, ifNoneMatch: ifNoneMatch, inventorySessionID: inventorySessionID,
+                maximumBodyBytes: maximumBodyBytes)
         }
     }
 
@@ -309,11 +311,13 @@ public struct MTLSArtifactDownloader: Sendable {
     }
 
     private func pollWithClient(
-        _ client: HTTPClient, url: URL, ifNoneMatch: String?, maximumBodyBytes: Int
+        _ client: HTTPClient, url: URL, ifNoneMatch: String?, inventorySessionID: String, maximumBodyBytes: Int
     ) async throws -> DesiredStatePollResponse {
         var request = HTTPClientRequest(url: url.absoluteString)
+        request.headers.add(name: "Accept", value: "application/protobuf")
+        request.headers.add(name: AgentProtocolCompatibility.sessionHeader, value: inventorySessionID)
         request.headers.add(
-            name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(WireProtocol.currentVersion))
+            name: AgentUpdateBridgeResponse.wireVersionHeader, value: String(AgentProtocolCompatibility.major))
         if let ifNoneMatch {
             request.headers.add(name: "If-None-Match", value: ifNoneMatch)
         }
@@ -337,6 +341,13 @@ public struct MTLSArtifactDownloader: Sendable {
         }
         guard response.status == .ok else {
             return DesiredStatePollResponse(status: response.status.code, etag: etag, body: Data())
+        }
+
+        guard
+            response.headers.first(name: "Content-Type")?.split(separator: ";").first?
+                .trimmingCharacters(in: .whitespaces).lowercased() == "application/protobuf"
+        else {
+            throw DownloadFailure(reason: "poll returned an unsupported content type", isTransient: false)
         }
 
         do {

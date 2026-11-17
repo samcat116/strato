@@ -114,7 +114,7 @@ final class Sandbox: Model, @unchecked Sendable {
 
     // Observed state, written only from agent reports (plus the diagnostic
     // escalations in the sweeps).
-    @Enum(key: "status")
+    @ProtocolEnum(key: "status")
     var status: SandboxStatus
 
     /// When `status` last changed. Used by the reconciliation sweep to detect
@@ -137,7 +137,7 @@ final class Sandbox: Model, @unchecked Sendable {
     // Desired state, written by API mutations. Same contract as VM:
     // `generation` bumps on every desired change and `observedGeneration`
     // records the last generation the owning agent confirmed converging to.
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredSandboxStatus
 
     @Field(key: "generation")
@@ -302,7 +302,7 @@ extension Sandbox {
             return evidence.verified && evidence.vmmDestroyed && evidence.generation == generation
                 && desiredStatus == .suspended && evidence.storageBytes > 0
                 && evidence.storageBytes <= suspensionStorageBytes && !suspensionComputeReserved
-        case .running, .starting, .stopping, .error, .unknown: return false
+        case .running, .starting, .stopping, .error, .unknown, .unspecified, .UNRECOGNIZED: return false
         }
     }
 
@@ -366,6 +366,8 @@ extension Sandbox {
             resting = .suspended
         case .stopped, .stopping, .exited, .error, .unknown:
             resting = .stopped
+        case .unspecified, .UNRECOGNIZED:
+            return false
         }
         guard desiredStatus != resting else { return false }
         setDesiredStatus(resting)

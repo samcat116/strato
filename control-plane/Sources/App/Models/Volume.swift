@@ -101,7 +101,7 @@ final class Volume: Model, @unchecked Sendable {
     // mutations, `generation` bumps on every desired change, and
     // `observedGeneration` records the last generation the owning agent
     // confirmed converging to.
-    @Enum(key: "desired_status")
+    @ProtocolEnum(key: "desired_status")
     var desiredStatus: DesiredVolumeStatus
 
     @Field(key: "generation")
@@ -209,7 +209,7 @@ final class Volume: Model, @unchecked Sendable {
 
     /// Requested QEMU host-cache behavior. Conservative remains the database
     /// default until the benchmark gate in STR-269 is satisfied.
-    @Enum(key: "block_mode")
+    @ProtocolEnum(key: "block_mode")
     var blockMode: VolumeBlockMode
 
     /// Exact policy last reported by the realizing agent. JSON keeps the

@@ -126,6 +126,7 @@ struct SandboxReconciliationTests {
             if let failWith { throw failWith }
             performed.append((item.kind, step, item.id))
             switch item.kind {
+            case .unspecified, .UNRECOGNIZED: throw ConvergenceError.unsupported("Invalid workload kind")
             case .vm:
                 switch step {
                 case .create: vmPresence[item.id] = .managed(.created)
@@ -207,9 +208,9 @@ struct SandboxReconciliationTests {
         #expect(plan.items.isEmpty)
         #expect(plan.unrecognized.count == 1)
         #expect(plan.unrecognized[0].kind == .sandbox)
-        #expect(plan.unrecognized[0].workloadId == sandboxId)
+        #expect(plan.unrecognized[0].workloadID == sandboxId.uuidString)
         #expect(plan.unrecognized[0].observedGeneration == 7)
-        #expect(plan.unrecognized[0].status == SandboxStatus.running.rawValue)
+        #expect(plan.unrecognized[0].status == SandboxStatus.running.protocolValue)
     }
 
     @Test("Tombstoned sandbox is deleted at the tombstone's generation")
@@ -312,6 +313,24 @@ struct SandboxReconciliationTests {
 
     // MARK: - Reconciler end to end
 
+    @Test("Invalid direct desired state cannot reach metadata or workload effects")
+    func malformedSnapshotIsRejectedBeforeEffects() async {
+        let sandboxID = UUID()
+        let actuator = MockActuator()
+        let metadata = MetadataStore()
+        let reconciler = Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: metadata)
+        var message = Self.sync(sandboxes: [Self.desiredSandbox(sandboxID, status: .running)])
+        message.sandboxes.values[0].sandboxID = "invalid-workload-id"
+
+        await reconciler.apply(message)
+
+        #expect(await metadata.origin() == .cold)
+        #expect(await actuator.performed.isEmpty)
+        #expect(await reconciler.observedGeneration(for: sandboxID.uuidString, kind: .sandbox) == 0)
+    }
+
     @Test("Sandbox sync converges create and boot; VM state is untouched")
     func sandboxSyncConverges() async {
         let sandboxId = UUID()
@@ -347,7 +366,7 @@ struct SandboxReconciliationTests {
         let afterAuthoritative = await actuator.sandboxPresence
         #expect(afterAuthoritative.count == 1)
         let held = await reconciler.unrecognizedWorkloads()
-        #expect(held.map(\.workloadId) == [sandboxId])
+        #expect(held.map(\.workloadID) == [sandboxId.uuidString])
 
         // Only the tombstone removes it.
         await reconciler.apply(

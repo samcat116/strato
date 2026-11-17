@@ -32,7 +32,8 @@ struct ResourceClassTransactionTests {
             let (site, vm) = try await fixture(app)
             let original = try #require(vm.resourceClass)
             site.burstableResourceClass = try .init(
-                classID: original.classID, siteID: original.siteID, revision: 2,
+                classID: try UUID(protocolString: original.classID), siteID: try UUID(protocolString: original.siteID),
+                revision: 2,
                 policy: .init(kind: .burstable, cpuAllocationRatio: 8, memoryAllocationRatio: 4, memoryHighPercent: 70))
             try await site.save(on: app.db)
             let id = try vm.requireID()
@@ -82,7 +83,8 @@ struct ResourceClassTransactionTests {
             let original = try #require(vm.resourceClass)
             let ledger = try #require(vm.admittedReservation)
             site.burstableResourceClass = try .init(
-                classID: original.classID, siteID: original.siteID, revision: 2, policy: .burstable)
+                classID: try UUID(protocolString: original.classID), siteID: try UUID(protocolString: original.siteID),
+                revision: 2, policy: .burstable)
             try await site.save(on: app.db)
             let id = try vm.requireID()
             do {
@@ -113,7 +115,8 @@ struct ResourceClassTransactionTests {
             let (site, vm) = try await fixture(app)
             let original = try #require(vm.resourceClass)
             let next = try WorkloadResourceClassSnapshot(
-                classID: original.classID, siteID: original.siteID, revision: 2, policy: .burstable)
+                classID: try UUID(protocolString: original.classID), siteID: try UUID(protocolString: original.siteID),
+                revision: 2, policy: .burstable)
             site.burstableResourceClass = next
             try await app.db.transaction { tx in
                 let pinned = try await WorkloadResourceClassService.currentPolicy(original, on: tx)
