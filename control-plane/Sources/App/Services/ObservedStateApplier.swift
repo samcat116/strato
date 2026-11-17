@@ -218,7 +218,7 @@ struct ObservedStateApplier {
     ) async throws -> UnrecognizedOutcome {
         try report.validateProtocol()
         var normalized = report
-        try normalized.normalizeProtocolIdentifiers()
+        try normalized.normalizeProtocolValues()
         let report = normalized
         let db = database ?? app.db
 

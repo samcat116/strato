@@ -9,8 +9,9 @@ Default idle policy remains disabled pending real VM acceptance.
 Wire version **68** adds desired and observed `Suspended`, a total internal
 checkpoint storage budget, an optional capture dependency and a retained
 checkpoint ID. Versions 64–67 are reserved for the parent's coordinated guest
-configuration, density, headroom and resource-class changes. Those branches must
-be integrated preserving the final exact version handshake.
+configuration, density, headroom and resource-class changes. These wire numbers
+belong to the former JSON protocol; all of them are part of the Protobuf protocol
+major 1 baseline.
 
 The control plane reserves checkpoint storage using the owning agent's actual
 rootfs/config plus guest-memory estimate. It retains CPU/memory until a settled,

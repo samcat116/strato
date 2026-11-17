@@ -80,7 +80,7 @@ enum ResourceAdmissionService {
     ) async throws -> ReportOutcome {
         try report.validateProtocol()
         var normalized = report
-        try normalized.normalizeProtocolIdentifiers()
+        try normalized.normalizeProtocolValues()
         let report = normalized
         return try await db.transaction { tx in
             let (agent, row) = try await lockedState(agentID: agentID, on: tx)
@@ -91,7 +91,7 @@ enum ResourceAdmissionService {
             let bootID = try UUID(protocolString: snapshot.agentBootID)
             guard snapshot.sequence >= 0 else { return .refused }
             if row.state.bootID == bootID {
-                guard snapshot.sequence > row.state.sequence, row.state.requestID != report.requestId else {
+                guard snapshot.sequence > row.state.sequence, row.state.requestID != report.requestID else {
                     return .refused
                 }
             } else if row.state.bootID != nil, row.state.sessionID == sessionID {
@@ -117,7 +117,7 @@ enum ResourceAdmissionService {
             row.state.sessionID = sessionID
             row.state.bootID = bootID
             row.state.sequence = snapshot.sequence
-            row.state.requestID = report.requestId
+            row.state.requestID = report.requestID
             row.state.resources = report.resources
             row.state.inventoryComplete =
                 snapshot.inventoryComplete && inventoryComplete && accountingConsistent(report)

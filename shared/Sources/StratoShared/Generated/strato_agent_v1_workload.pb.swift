@@ -338,6 +338,7 @@ public nonisolated enum Strato_Agent_V1_ConsoleStream: SwiftProtobuf.Enum, Swift
 
 }
 
+/// Open: an unrecognized value from a newer peer decodes as SANDBOX_GUEST_IDLE_COVERAGE_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_SandboxGuestIdleCoverage: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1093,6 +1094,7 @@ public nonisolated enum Strato_Agent_V1_NodeCapability: SwiftProtobuf.Enum, Swif
 
 }
 
+/// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_COMPATIBILITY_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_NodeDependencyCompatibility: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1255,6 +1257,7 @@ public nonisolated enum Strato_Agent_V1_NodeDependencyFailureCode: SwiftProtobuf
 
 }
 
+/// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_FUNCTIONAL_STATE_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_NodeDependencyFunctionalState: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1466,6 +1469,7 @@ public nonisolated enum Strato_Agent_V1_NodeDependencyRole: SwiftProtobuf.Enum, 
 
 }
 
+/// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_SUPERVISOR_STATE_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_NodeDependencySupervisorState: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1572,6 +1576,7 @@ public nonisolated enum Strato_Agent_V1_ObservedFailureClassification: SwiftProt
 
 }
 
+/// Open: an unrecognized value from a newer peer decodes as OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_ObservedLoadBalancerBackendHealth: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1749,6 +1754,7 @@ public nonisolated enum Strato_Agent_V1_OperatingSystem: SwiftProtobuf.Enum, Swi
 
 /// Operator-facing pressure summary. Raw signals remain the alert authority;
 /// this bounded state is the compact field later placement policy can consume.
+/// Open: an unrecognized value from a newer peer decodes as RESOURCE_PRESSURE_HEALTH_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_ResourcePressureHealth: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -1937,6 +1943,7 @@ public nonisolated enum Strato_Agent_V1_SandboxSnapshotMode: SwiftProtobuf.Enum,
 /// `VMStatus`, with one sandbox-specific case:
 /// `.exited`, because a sandbox's workload can finish on its own — something a
 /// VM never does from the control plane's point of view.
+/// Open: an unrecognized value from a newer peer decodes as SANDBOX_STATUS_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_SandboxStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2370,6 +2377,7 @@ public nonisolated enum Strato_Agent_V1_HostMemoryTier: SwiftProtobuf.Enum, Swif
 }
 
 /// Type of VM event
+/// Open: an unrecognized value from a newer peer decodes as VM_EVENT_TYPE_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_VMEventType: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2421,6 +2429,7 @@ public nonisolated enum Strato_Agent_V1_VMEventType: SwiftProtobuf.Enum, Swift.C
 }
 
 /// Log level for VM log messages
+/// Open: an unrecognized value from a newer peer decodes as VM_LOG_LEVEL_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_VMLogLevel: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2472,6 +2481,7 @@ public nonisolated enum Strato_Agent_V1_VMLogLevel: SwiftProtobuf.Enum, Swift.Ca
 }
 
 /// Source of the log message
+/// Open: an unrecognized value from a newer peer decodes as VM_LOG_SOURCE_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_VMLogSource: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0
@@ -2510,9 +2520,9 @@ public nonisolated enum Strato_Agent_V1_VMLogSource: SwiftProtobuf.Enum, Swift.C
 
 }
 
-/// Observed VM lifecycle state. UNKNOWN is an explicit observation; it differs
-/// from an unrecognized enum number, which fails binary validation. Legacy JSON
-/// decoding retains its historical fallback to UNKNOWN.
+/// Observed VM lifecycle state. Legacy JSON decoding retains its historical
+/// fallback to UNKNOWN.
+/// Open: an unrecognized value from a newer peer decodes as VM_STATUS_UNKNOWN.
 public nonisolated enum Strato_Agent_V1_VMStatus: SwiftProtobuf.Enum, Swift.CaseIterable {
   public typealias RawValue = Int
   case unspecified // = 0

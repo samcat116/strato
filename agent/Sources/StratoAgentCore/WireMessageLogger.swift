@@ -31,7 +31,7 @@ public enum WireMessageLogger {
             "direction": .string(direction.rawValue),
             "type": .string(message.type.rawValue),
         ]
-        addIdentifier(message.requestId, named: "requestId", to: &metadata)
+        addIdentifier(message.requestID, named: "requestId", to: &metadata)
         if let message = message as? any SessionCorrelatedWireMessage {
             addIdentifier(message.sessionID, named: "sessionId", to: &metadata)
         }

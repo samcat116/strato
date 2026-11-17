@@ -12,8 +12,8 @@ let package = Package(
     targets: [
         .target(name: "BaselinePeer", dependencies: [.product(name: "SwiftProtobuf", package: "swift-protobuf")]),
         .target(name: "NextPeer", dependencies: [.product(name: "SwiftProtobuf", package: "swift-protobuf")]),
-        .executableTarget(
-            name: "CompatibilityProbe",
+        .testTarget(
+            name: "AgentProtocolPeerTests",
             dependencies: ["BaselinePeer", "NextPeer", .product(name: "SwiftProtobuf", package: "swift-protobuf")]),
     ]
 )

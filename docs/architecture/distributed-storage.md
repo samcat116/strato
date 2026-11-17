@@ -197,9 +197,9 @@ enum DiskAttachment {
 ```
 
 Hypervisor drivers switch on it instead of opening a path. This shipped first
-against the filesystem backend in wire v51: the exact registration handshake
-is the protocol gate, while Ceph-client capability gating remains phase 2's
-host-readiness decision.
+against the filesystem backend in wire v51, gated by the former JSON protocol's
+exact registration handshake (it is now part of the protocol major 1 baseline),
+while Ceph-client capability gating remains phase 2's host-readiness decision.
 
 `CephRBDStorageBackend` then implements the protocol against `rbd`, and
 registers in the agent's driver registry alongside `FileSystemStorageBackend`
@@ -438,7 +438,7 @@ path is where all the value is.
 1. **Disk attachments as a sum type (shipped in wire v51).** Replaced the
    path-carrying `DiskAttachment` and threaded it through hypervisor drivers,
    observed volume state, replica persistence, and VM specs. Pure refactor, no
-   Ceph; the exact-version registration handshake gates the wire change.
+   Ceph; the former exact-version registration handshake gated the wire change.
 2. **Bring-your-own-Ceph client path.** `StoragePool.ceph` + `CephCluster`
    pointing at an existing cluster; `CephRBDStorageBackend`; QEMU `rbd`
    blockdev; agent advertises the Ceph-client capability; per-project RBD

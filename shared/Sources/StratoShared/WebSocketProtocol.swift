@@ -42,7 +42,7 @@ public enum MessageType: String, Codable, Sendable {
 
 public protocol WebSocketMessage: SwiftProtobuf.Message, Codable {
     var type: MessageType { get }
-    var requestId: String { get }
+    var requestID: String { get }
     var timestamp: Google_Protobuf_Timestamp { get }
 }
 

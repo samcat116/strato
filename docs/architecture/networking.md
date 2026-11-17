@@ -940,8 +940,9 @@ able to reach what its operator switched off. An unmanaged NIC
 (`securityGroupIds` nil) is in no port group and so gets no deny; the listener
 covers it, which is why that layer is the one that decides.
 
-`serviceEnabled` is required by the exact wire contract. Every registered agent
-therefore applies the switch; there is no placement or controller version gate.
+`serviceEnabled` is part of the protocol major 1 baseline. Every registered agent
+therefore applies the switch; there is no placement, capability, or controller
+version gate.
 
 Two things the switch deliberately does **not** cover:
 
@@ -1022,8 +1023,9 @@ begins only when an operator explicitly creates one.
 
 Wire v53 adds `DesiredNetworkState.networkACLs`. `nil` means the receiving agent
 has no opinion, `[]` authoritatively tears down managed switch ACLs, and the
-schema-enforced one-element list carries the full current policy. This is an
-exact-version payload change, not a `supportsNetworkACLs` capability. The site's
+schema-enforced one-element list carries the full current policy. It shipped as
+a former-JSON exact-version change and is part of the protocol major 1 baseline,
+not a `supportsNetworkACLs` capability. The site's
 live overlay topology authority is the only agent allowed to write the shared
 logical-switch rows.
 

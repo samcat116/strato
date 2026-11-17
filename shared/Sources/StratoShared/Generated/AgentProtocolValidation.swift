@@ -79,10 +79,11 @@ extension Strato_Agent_V1_ConsoleStream {
 
 extension Strato_Agent_V1_SandboxGuestIdleCoverage {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -223,10 +224,11 @@ extension Strato_Agent_V1_NodeCapability {
 
 extension Strato_Agent_V1_NodeDependencyCompatibility {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -250,10 +252,11 @@ extension Strato_Agent_V1_NodeDependencyFailureCode {
 
 extension Strato_Agent_V1_NodeDependencyFunctionalState {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -286,10 +289,11 @@ extension Strato_Agent_V1_NodeDependencyRole {
 
 extension Strato_Agent_V1_NodeDependencySupervisorState {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -304,10 +308,11 @@ extension Strato_Agent_V1_ObservedFailureClassification {
 
 extension Strato_Agent_V1_ObservedLoadBalancerBackendHealth {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -340,10 +345,11 @@ extension Strato_Agent_V1_OperatingSystem {
 
 extension Strato_Agent_V1_ResourcePressureHealth {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -376,10 +382,11 @@ extension Strato_Agent_V1_SandboxSnapshotMode {
 
 extension Strato_Agent_V1_SandboxStatus {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -457,37 +464,41 @@ extension Strato_Agent_V1_HostMemoryTier {
 
 extension Strato_Agent_V1_VMEventType {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
 extension Strato_Agent_V1_VMLogLevel {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
 extension Strato_Agent_V1_VMLogSource {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
 extension Strato_Agent_V1_VMStatus {
     func validateProtocol() throws {
-        switch self {
-        case .unspecified, .UNRECOGNIZED: throw AgentProtocolDecodeError.invalidField
-        default: break
-        }
+        try requireProtocolField(self != .unspecified)
+    }
+    /// Open enum: a newer peer's value degrades to the documented fallback.
+    mutating func normalizeProtocolValue() {
+        if case .UNRECOGNIZED = self { self = .unknown }
     }
 }
 
@@ -567,83 +578,83 @@ extension Strato_Agent_V1_AgentEnvelope {
         case nil: throw AgentProtocolDecodeError.missingBody
         }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         switch body {
         case .agentRegisterMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .agentRegisterMessage(value)
         case .agentHeartbeatMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .agentHeartbeatMessage(value)
         case .agentUnregisterMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .agentUnregisterMessage(value)
         case .agentRegisterResponseMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .agentRegisterResponseMessage(value)
         case .successMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .successMessage(value)
         case .errorMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .errorMessage(value)
         case .consoleConnectMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .consoleConnectMessage(value)
         case .consoleDisconnectMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .consoleDisconnectMessage(value)
         case .consoleDataMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .consoleDataMessage(value)
         case .consoleConnectedMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .consoleConnectedMessage(value)
         case .consoleDisconnectedMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .consoleDisconnectedMessage(value)
         case .vmLogMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .vmLogMessage(value)
         case .guestExecStartMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecStartMessage(value)
         case .guestExecRecordedStateMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecRecordedStateMessage(value)
         case .guestExecRecordedAckMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecRecordedAckMessage(value)
         case .guestExecStartedMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecStartedMessage(value)
         case .guestExecInputMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecInputMessage(value)
         case .guestExecOutputMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecOutputMessage(value)
         case .guestExecResizeMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecResizeMessage(value)
         case .guestExecExitMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecExitMessage(value)
         case .guestExecCloseMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecCloseMessage(value)
         case .guestExecClosedMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .guestExecClosedMessage(value)
         case .sandboxLogMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .sandboxLogMessage(value)
         case .desiredStateMessage(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .desiredStateMessage(value)
         case .observedStateReport(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.body = .observedStateReport(value)
         case nil: break
         }
@@ -662,11 +673,11 @@ extension Strato_Agent_V1_AgentHeartbeatMessage {
         try dependencyObservations.validateProtocol()
         if hasHostResourceTelemetry { try hostResourceTelemetry.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasResources { try resources.normalizeProtocolIdentifiers() }
-        if hasDependencyObservations { try dependencyObservations.normalizeProtocolIdentifiers() }
-        if hasHostResourceTelemetry { try hostResourceTelemetry.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasResources { try resources.normalizeProtocolValues() }
+        if hasDependencyObservations { try dependencyObservations.normalizeProtocolValues() }
+        if hasHostResourceTelemetry { try hostResourceTelemetry.normalizeProtocolValues() }
     }
 }
 
@@ -698,13 +709,13 @@ extension Strato_Agent_V1_AgentRegisterMessage {
         try requireProtocolField(hasDependencyObservations)
         try dependencyObservations.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasResources { try resources.normalizeProtocolIdentifiers() }
-        if hasHypervisors { try hypervisors.normalizeProtocolIdentifiers() }
-        if hasHostInfo { try hostInfo.normalizeProtocolIdentifiers() }
-        if hasResourceClassEnforcement { try resourceClassEnforcement.normalizeProtocolIdentifiers() }
-        if hasDependencyObservations { try dependencyObservations.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasResources { try resources.normalizeProtocolValues() }
+        if hasHypervisors { try hypervisors.normalizeProtocolValues() }
+        if hasHostInfo { try hostInfo.normalizeProtocolValues() }
+        if hasResourceClassEnforcement { try resourceClassEnforcement.normalizeProtocolValues() }
+        if hasDependencyObservations { try dependencyObservations.normalizeProtocolValues() }
     }
 }
 
@@ -717,8 +728,8 @@ extension Strato_Agent_V1_AgentRegisterResponseMessage {
         try requireProtocolField(hasName)
         try requireProtocolField(hasAgreement)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -733,9 +744,9 @@ extension Strato_Agent_V1_AgentResources {
         try requireProtocolField(hasAvailableDisk)
         try requireProtocolField(hasPhysicalFreeDisk)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasMemoryAccounting { try memoryAccounting.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasMemoryAccounting { try memoryAccounting.normalizeProtocolValues() }
     }
 }
 
@@ -746,8 +757,8 @@ extension Strato_Agent_V1_AgentUnregisterMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasAgentID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -761,8 +772,8 @@ extension Strato_Agent_V1_AppliedBlockDevicePolicy {
         try requireProtocolField(hasDiscard)
         try requireProtocolField(hasNonRotational)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -775,16 +786,16 @@ extension Strato_Agent_V1_ArtifactInfo {
         try requireProtocolField(hasSize)
         try requireProtocolField(hasDownloadURL)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_BootSourceDisk {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -792,8 +803,8 @@ extension Strato_Agent_V1_BootSourceDirectKernel {
     public func validateProtocol() throws {
         try requireProtocolField(hasKernel)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -805,14 +816,14 @@ extension Strato_Agent_V1_BootSource {
         case nil: throw AgentProtocolDecodeError.missingBody
         }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         switch value {
         case .disk(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .disk(value)
         case .directKernel(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .directKernel(value)
         case nil: break
         }
@@ -835,10 +846,10 @@ extension Strato_Agent_V1_CephVolumeStorage {
         try requireProtocolField(hasMessengerMode)
         try messengerMode.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasClusterID { clusterID = try UUID(protocolString: clusterID).uuidString }
-        if hasMonEndpoints { try monEndpoints.normalizeProtocolIdentifiers() }
+        if hasMonEndpoints { try monEndpoints.normalizeProtocolValues() }
         if hasCredentialID { credentialID = try UUID(protocolString: credentialID).uuidString }
     }
 }
@@ -853,8 +864,8 @@ extension Strato_Agent_V1_ConsoleConnectMessage {
         try requireProtocolField(hasStream)
         try stream.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -866,8 +877,8 @@ extension Strato_Agent_V1_ConsoleConnectedMessage {
         try requireProtocolField(hasVmID)
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -880,8 +891,8 @@ extension Strato_Agent_V1_ConsoleDataMessage {
         try requireProtocolField(hasSessionID)
         try requireProtocolField(hasData)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -893,8 +904,8 @@ extension Strato_Agent_V1_ConsoleDisconnectMessage {
         try requireProtocolField(hasVmID)
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -906,8 +917,8 @@ extension Strato_Agent_V1_ConsoleDisconnectedMessage {
         try requireProtocolField(hasVmID)
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -915,8 +926,8 @@ extension Strato_Agent_V1_ConsoleSpec {
     public func validateProtocol() throws {
         if hasGraphics { try graphics.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -928,8 +939,8 @@ extension Strato_Agent_V1_DesiredAgentUpdate {
         try requireProtocolField(hasArtifactKind)
         try artifactKind.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -940,8 +951,8 @@ extension Strato_Agent_V1_DesiredCephCredentialRevocation {
         try requireProtocolField(hasCredentialID)
         try requireProtocolField(UUID(uuidString: credentialID) != nil)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasClusterID { clusterID = try UUID(protocolString: clusterID).uuidString }
         if hasCredentialID { credentialID = try UUID(protocolString: credentialID).uuidString }
     }
@@ -955,9 +966,9 @@ extension Strato_Agent_V1_DesiredDNSRecord {
         try values.validateProtocol()
         try requireProtocolField(hasTtl)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasValues { try values.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasValues { try values.normalizeProtocolValues() }
     }
 }
 
@@ -973,12 +984,12 @@ extension Strato_Agent_V1_DesiredDNSZone {
         try records.validateProtocol()
         try requireProtocolField(hasRecordsHash)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasZoneID { zoneID = try UUID(protocolString: zoneID).uuidString }
-        if hasNetworkIds { try networkIds.normalizeProtocolIdentifiers() }
+        if hasNetworkIds { try networkIds.normalizeProtocolValues() }
         if hasNetworkIds { networkIds.values = try networkIds.values.map { try UUID(protocolString: $0).uuidString } }
-        if hasRecords { try records.normalizeProtocolIdentifiers() }
+        if hasRecords { try records.normalizeProtocolValues() }
     }
 }
 
@@ -988,8 +999,8 @@ extension Strato_Agent_V1_DesiredFloatingIP {
         try requireProtocolField(hasLogicalIp)
         if hasVmID { try requireProtocolField(UUID(uuidString: vmID) != nil) }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVmID { vmID = try UUID(protocolString: vmID).uuidString }
     }
 }
@@ -1009,12 +1020,12 @@ extension Strato_Agent_V1_DesiredLoadBalancer {
         try requireProtocolField(hasBackends)
         try backends.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
-        if hasHealthCheck { try healthCheck.normalizeProtocolIdentifiers() }
-        if hasListeners { try listeners.normalizeProtocolIdentifiers() }
-        if hasBackends { try backends.normalizeProtocolIdentifiers() }
+        if hasHealthCheck { try healthCheck.normalizeProtocolValues() }
+        if hasListeners { try listeners.normalizeProtocolValues() }
+        if hasBackends { try backends.normalizeProtocolValues() }
     }
 }
 
@@ -1026,8 +1037,8 @@ extension Strato_Agent_V1_DesiredLoadBalancerBackend {
         if hasVmID { try requireProtocolField(UUID(uuidString: vmID) != nil) }
         if hasNetworkID { try requireProtocolField(UUID(uuidString: networkID) != nil) }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
         if hasVmID { vmID = try UUID(protocolString: vmID).uuidString }
         if hasNetworkID { networkID = try UUID(protocolString: networkID).uuidString }
@@ -1042,8 +1053,8 @@ extension Strato_Agent_V1_DesiredLoadBalancerHealthCheck {
         try requireProtocolField(hasSuccessThreshold)
         try requireProtocolField(hasFailureThreshold)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1054,8 +1065,8 @@ extension Strato_Agent_V1_DesiredLoadBalancerListener {
         try requireProtocolField(hasPort)
         try requireProtocolField(hasBackendPort)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
     }
 }
@@ -1068,10 +1079,10 @@ extension Strato_Agent_V1_DesiredNetworkACL {
         try requireProtocolField(hasRules)
         try rules.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
-        if hasRules { try rules.normalizeProtocolIdentifiers() }
+        if hasRules { try rules.normalizeProtocolValues() }
     }
 }
 
@@ -1085,8 +1096,8 @@ extension Strato_Agent_V1_DesiredNetworkACLRule {
         try requireProtocolField(hasAction)
         try requireProtocolField(hasRemoteCidr)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
     }
 }
@@ -1111,14 +1122,14 @@ extension Strato_Agent_V1_DesiredNetworkState {
         try loadBalancers.validateProtocol()
         if hasNetworkAcLs { try networkAcLs.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasNetworkID { networkID = try UUID(protocolString: networkID).uuidString }
-        if hasDnsServers { try dnsServers.normalizeProtocolIdentifiers() }
-        if hasResolverAddresses { try resolverAddresses.normalizeProtocolIdentifiers() }
-        if hasFloatingIPs { try floatingIPs.normalizeProtocolIdentifiers() }
-        if hasLoadBalancers { try loadBalancers.normalizeProtocolIdentifiers() }
-        if hasNetworkAcLs { try networkAcLs.normalizeProtocolIdentifiers() }
+        if hasDnsServers { try dnsServers.normalizeProtocolValues() }
+        if hasResolverAddresses { try resolverAddresses.normalizeProtocolValues() }
+        if hasFloatingIPs { try floatingIPs.normalizeProtocolValues() }
+        if hasLoadBalancers { try loadBalancers.normalizeProtocolValues() }
+        if hasNetworkAcLs { try networkAcLs.normalizeProtocolValues() }
     }
 }
 
@@ -1129,10 +1140,10 @@ extension Strato_Agent_V1_DesiredRestore {
         try requireProtocolField(UUID(uuidString: snapshotID) != nil)
         if hasArtifacts { try artifacts.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSnapshotID { snapshotID = try UUID(protocolString: snapshotID).uuidString }
-        if hasArtifacts { try artifacts.normalizeProtocolIdentifiers() }
+        if hasArtifacts { try artifacts.normalizeProtocolValues() }
     }
 }
 
@@ -1151,15 +1162,15 @@ extension Strato_Agent_V1_DesiredSandboxState {
         if hasSuspensionCheckpointID { try requireProtocolField(UUID(uuidString: suspensionCheckpointID) != nil) }
         if hasAutomaticSuspensionFence { try automaticSuspensionFence.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSandboxID { sandboxID = try UUID(protocolString: sandboxID).uuidString }
-        if hasSpec { try spec.normalizeProtocolIdentifiers() }
-        if hasRegistryCredential { try registryCredential.normalizeProtocolIdentifiers() }
-        if hasRestore { try restore.normalizeProtocolIdentifiers() }
+        if hasSpec { try spec.normalizeProtocolValues() }
+        if hasRegistryCredential { try registryCredential.normalizeProtocolValues() }
+        if hasRestore { try restore.normalizeProtocolValues() }
         if hasSuspensionAfterSnapshotID { suspensionAfterSnapshotID = try UUID(protocolString: suspensionAfterSnapshotID).uuidString }
         if hasSuspensionCheckpointID { suspensionCheckpointID = try UUID(protocolString: suspensionCheckpointID).uuidString }
-        if hasAutomaticSuspensionFence { try automaticSuspensionFence.normalizeProtocolIdentifiers() }
+        if hasAutomaticSuspensionFence { try automaticSuspensionFence.normalizeProtocolValues() }
     }
 }
 
@@ -1171,10 +1182,10 @@ extension Strato_Agent_V1_DesiredSecurityGroup {
         try requireProtocolField(hasRules)
         try rules.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
-        if hasRules { try rules.normalizeProtocolIdentifiers() }
+        if hasRules { try rules.normalizeProtocolValues() }
     }
 }
 
@@ -1187,8 +1198,8 @@ extension Strato_Agent_V1_DesiredSecurityGroupRule {
         if hasRemoteGroupID { try requireProtocolField(UUID(uuidString: remoteGroupID) != nil) }
         try requireProtocolField(hasLog)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
         if hasRemoteGroupID { remoteGroupID = try UUID(protocolString: remoteGroupID).uuidString }
     }
@@ -1199,8 +1210,8 @@ extension Strato_Agent_V1_DesiredSnapshotCapture {
         if hasSandboxMode { try sandboxMode.validateProtocol() }
         if hasAttachedVmID { try requireProtocolField(UUID(uuidString: attachedVmID) != nil) }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasAttachedVmID { attachedVmID = try UUID(protocolString: attachedVmID).uuidString }
     }
 }
@@ -1210,9 +1221,9 @@ extension Strato_Agent_V1_DesiredSnapshotExport {
         try requireProtocolField(hasUploads)
         try uploads.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasUploads { try uploads.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasUploads { try uploads.normalizeProtocolValues() }
     }
 }
 
@@ -1231,13 +1242,13 @@ extension Strato_Agent_V1_DesiredSnapshotState {
         if hasVolumeStorage { try volumeStorage.validateProtocol() }
         if hasExport { try export.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSnapshotID { snapshotID = try UUID(protocolString: snapshotID).uuidString }
         if hasParentID { parentID = try UUID(protocolString: parentID).uuidString }
-        if hasCapture { try capture.normalizeProtocolIdentifiers() }
-        if hasVolumeStorage { try volumeStorage.normalizeProtocolIdentifiers() }
-        if hasExport { try export.normalizeProtocolIdentifiers() }
+        if hasCapture { try capture.normalizeProtocolValues() }
+        if hasVolumeStorage { try volumeStorage.normalizeProtocolValues() }
+        if hasExport { try export.normalizeProtocolValues() }
     }
 }
 
@@ -1266,18 +1277,18 @@ extension Strato_Agent_V1_DesiredStateMessage {
         try cephCredentialRevocations.validateProtocol()
         if hasDnsZones { try dnsZones.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasVms { try vms.normalizeProtocolIdentifiers() }
-        if hasSandboxes { try sandboxes.normalizeProtocolIdentifiers() }
-        if hasNetworks { try networks.normalizeProtocolIdentifiers() }
-        if hasDesiredAgentUpdate { try desiredAgentUpdate.normalizeProtocolIdentifiers() }
-        if hasSecurityGroups { try securityGroups.normalizeProtocolIdentifiers() }
-        if hasTombstones { try tombstones.normalizeProtocolIdentifiers() }
-        if hasVolumes { try volumes.normalizeProtocolIdentifiers() }
-        if hasSnapshots { try snapshots.normalizeProtocolIdentifiers() }
-        if hasCephCredentialRevocations { try cephCredentialRevocations.normalizeProtocolIdentifiers() }
-        if hasDnsZones { try dnsZones.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasVms { try vms.normalizeProtocolValues() }
+        if hasSandboxes { try sandboxes.normalizeProtocolValues() }
+        if hasNetworks { try networks.normalizeProtocolValues() }
+        if hasDesiredAgentUpdate { try desiredAgentUpdate.normalizeProtocolValues() }
+        if hasSecurityGroups { try securityGroups.normalizeProtocolValues() }
+        if hasTombstones { try tombstones.normalizeProtocolValues() }
+        if hasVolumes { try volumes.normalizeProtocolValues() }
+        if hasSnapshots { try snapshots.normalizeProtocolValues() }
+        if hasCephCredentialRevocations { try cephCredentialRevocations.normalizeProtocolValues() }
+        if hasDnsZones { try dnsZones.normalizeProtocolValues() }
     }
 }
 
@@ -1297,14 +1308,14 @@ extension Strato_Agent_V1_DesiredVMState {
         if hasRestore { try restore.validateProtocol() }
         if hasGuestConfig { try guestConfig.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVmID { vmID = try UUID(protocolString: vmID).uuidString }
-        if hasSpec { try spec.normalizeProtocolIdentifiers() }
-        if hasImageInfo { try imageInfo.normalizeProtocolIdentifiers() }
-        if hasMetadata { try metadata.normalizeProtocolIdentifiers() }
-        if hasRestore { try restore.normalizeProtocolIdentifiers() }
-        if hasGuestConfig { try guestConfig.normalizeProtocolIdentifiers() }
+        if hasSpec { try spec.normalizeProtocolValues() }
+        if hasImageInfo { try imageInfo.normalizeProtocolValues() }
+        if hasMetadata { try metadata.normalizeProtocolValues() }
+        if hasRestore { try restore.normalizeProtocolValues() }
+        if hasGuestConfig { try guestConfig.normalizeProtocolValues() }
     }
 }
 
@@ -1316,8 +1327,8 @@ extension Strato_Agent_V1_DesiredVolumeAttachment {
         try requireProtocolField(VolumeDeviceName.isValid(deviceName))
         try requireProtocolField(hasReadonly)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVmID { vmID = try UUID(protocolString: vmID).uuidString }
     }
 }
@@ -1330,9 +1341,9 @@ extension Strato_Agent_V1_DesiredVolumeSource {
         if hasSourceVolumeID { try requireProtocolField(UUID(uuidString: sourceVolumeID) != nil) }
         if hasSourceVmID { try requireProtocolField(UUID(uuidString: sourceVmID) != nil) }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasImageInfo { try imageInfo.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasImageInfo { try imageInfo.normalizeProtocolValues() }
         if hasSourceVolumeID { sourceVolumeID = try UUID(protocolString: sourceVolumeID).uuidString }
         if hasSourceVmID { sourceVmID = try UUID(protocolString: sourceVmID).uuidString }
     }
@@ -1355,21 +1366,21 @@ extension Strato_Agent_V1_DesiredVolumeState {
         try requireProtocolField(hasBlockMode)
         try blockMode.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVolumeID { volumeID = try UUID(protocolString: volumeID).uuidString }
-        if hasStorage { try storage.normalizeProtocolIdentifiers() }
-        if hasSource { try source.normalizeProtocolIdentifiers() }
-        if hasAttachment { try attachment.normalizeProtocolIdentifiers() }
-        if hasIoLimits { try ioLimits.normalizeProtocolIdentifiers() }
+        if hasStorage { try storage.normalizeProtocolValues() }
+        if hasSource { try source.normalizeProtocolValues() }
+        if hasAttachment { try attachment.normalizeProtocolValues() }
+        if hasIoLimits { try ioLimits.normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_DesiredVolumeStorageLocal {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1378,9 +1389,9 @@ extension Strato_Agent_V1_DesiredVolumeStorageCeph {
         try requireProtocolField(hasConfiguration)
         try configuration.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasConfiguration { try configuration.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasConfiguration { try configuration.normalizeProtocolValues() }
     }
 }
 
@@ -1392,14 +1403,14 @@ extension Strato_Agent_V1_DesiredVolumeStorage {
         case nil: throw AgentProtocolDecodeError.missingBody
         }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         switch value {
         case .local(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .local(value)
         case .ceph(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .ceph(value)
         case nil: break
         }
@@ -1414,8 +1425,8 @@ extension Strato_Agent_V1_DesiredWorkloadTombstone {
         try requireProtocolField(UUID(uuidString: workloadID) != nil)
         try requireProtocolField(hasGeneration)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasWorkloadID { workloadID = try UUID(protocolString: workloadID).uuidString }
     }
 }
@@ -1426,8 +1437,8 @@ extension Strato_Agent_V1_DiskAttachmentFile {
         try requireProtocolField(hasFormat)
         try format.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1435,8 +1446,8 @@ extension Strato_Agent_V1_DiskAttachmentBlockDevice {
     public func validateProtocol() throws {
         try requireProtocolField(hasPath)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1454,9 +1465,9 @@ extension Strato_Agent_V1_DiskAttachmentRbd {
         try requireProtocolField(UUID(uuidString: credentialID) != nil)
         try requireProtocolField(hasConfigPath)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasMonEndpoints { try monEndpoints.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasMonEndpoints { try monEndpoints.normalizeProtocolValues() }
         if hasClusterID { clusterID = try UUID(protocolString: clusterID).uuidString }
         if hasCredentialID { credentialID = try UUID(protocolString: credentialID).uuidString }
     }
@@ -1471,17 +1482,17 @@ extension Strato_Agent_V1_DiskAttachment {
         case nil: throw AgentProtocolDecodeError.missingBody
         }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         switch value {
         case .file(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .file(value)
         case .blockDevice(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .blockDevice(value)
         case .rbd(var value):
-            try value.normalizeProtocolIdentifiers()
+            try value.normalizeProtocolValues()
             self.value = .rbd(value)
         case nil: break
         }
@@ -1495,8 +1506,8 @@ extension Strato_Agent_V1_ErrorMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasError)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1504,8 +1515,8 @@ extension Strato_Agent_V1_GuestConfigFileObservation {
     public func validateProtocol() throws {
         try requireProtocolField(hasPath)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1515,8 +1526,8 @@ extension Strato_Agent_V1_GuestAgentObservation {
         try requireProtocolField(hasCheckedAt)
         try checkedAt.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1532,12 +1543,12 @@ extension Strato_Agent_V1_GuestConfig {
         try sysctls.validateProtocol()
         try validate()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasPackages { try packages.normalizeProtocolIdentifiers() }
-        if hasFiles { try files.normalizeProtocolIdentifiers() }
-        if hasServices { try services.normalizeProtocolIdentifiers() }
-        if hasSysctls { try sysctls.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasPackages { try packages.normalizeProtocolValues() }
+        if hasFiles { try files.normalizeProtocolValues() }
+        if hasServices { try services.normalizeProtocolValues() }
+        if hasSysctls { try sysctls.normalizeProtocolValues() }
     }
 }
 
@@ -1556,13 +1567,13 @@ extension Strato_Agent_V1_GuestConfigObservation {
         try requireProtocolField(hasSysctls)
         try sysctls.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasFailedItem { try failedItem.normalizeProtocolIdentifiers() }
-        if hasPackages { try packages.normalizeProtocolIdentifiers() }
-        if hasFiles { try files.normalizeProtocolIdentifiers() }
-        if hasServices { try services.normalizeProtocolIdentifiers() }
-        if hasSysctls { try sysctls.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasFailedItem { try failedItem.normalizeProtocolValues() }
+        if hasPackages { try packages.normalizeProtocolValues() }
+        if hasFiles { try files.normalizeProtocolValues() }
+        if hasServices { try services.normalizeProtocolValues() }
+        if hasSysctls { try sysctls.normalizeProtocolValues() }
     }
 }
 
@@ -1573,8 +1584,8 @@ extension Strato_Agent_V1_GuestExecCloseMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1585,8 +1596,8 @@ extension Strato_Agent_V1_GuestExecClosedMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1598,8 +1609,8 @@ extension Strato_Agent_V1_GuestExecExitMessage {
         try requireProtocolField(hasSessionID)
         try requireProtocolField(hasExitCode)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1611,8 +1622,8 @@ extension Strato_Agent_V1_GuestExecInputMessage {
         try requireProtocolField(hasSessionID)
         try requireProtocolField(hasEof)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1625,8 +1636,8 @@ extension Strato_Agent_V1_GuestExecOutputMessage {
         try requireProtocolField(hasStream)
         try requireProtocolField(hasData)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1637,8 +1648,8 @@ extension Strato_Agent_V1_GuestExecRecordedAckMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1655,8 +1666,8 @@ extension Strato_Agent_V1_GuestExecRecordedStateMessage {
         try requireProtocolField(hasStderr)
         try requireProtocolField(hasTruncated)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1669,8 +1680,8 @@ extension Strato_Agent_V1_GuestExecResizeMessage {
         try requireProtocolField(hasRows)
         try requireProtocolField(hasCols)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1690,10 +1701,10 @@ extension Strato_Agent_V1_GuestExecStartMessage {
         if hasEnv { try env.validateProtocol() }
         try requireProtocolField(hasTty)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasCommand { try command.normalizeProtocolIdentifiers() }
-        if hasEnv { try env.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasCommand { try command.normalizeProtocolValues() }
+        if hasEnv { try env.normalizeProtocolValues() }
     }
 }
 
@@ -1704,8 +1715,8 @@ extension Strato_Agent_V1_GuestExecStartedMessage {
         try timestamp.validateProtocol()
         try requireProtocolField(hasSessionID)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1715,8 +1726,8 @@ extension Strato_Agent_V1_GuestFile {
         try requireProtocolField(hasContent)
         try requireProtocolField(hasMode)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1726,8 +1737,8 @@ extension Strato_Agent_V1_GuestIPAddress {
         try family.validateProtocol()
         try requireProtocolField(hasAddress)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1737,9 +1748,9 @@ extension Strato_Agent_V1_GuestInfo {
         try requireProtocolField(hasInterfaces)
         try interfaces.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasInterfaces { try interfaces.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasInterfaces { try interfaces.normalizeProtocolValues() }
     }
 }
 
@@ -1749,9 +1760,9 @@ extension Strato_Agent_V1_GuestNetworkInterface {
         try requireProtocolField(hasAddresses)
         try addresses.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasAddresses { try addresses.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasAddresses { try addresses.normalizeProtocolValues() }
     }
 }
 
@@ -1761,8 +1772,8 @@ extension Strato_Agent_V1_GuestPackage {
         try requireProtocolField(hasState)
         try state.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1771,8 +1782,8 @@ extension Strato_Agent_V1_GuestService {
         try requireProtocolField(hasName)
         try requireProtocolField(hasEnabled)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1781,8 +1792,8 @@ extension Strato_Agent_V1_GuestSysctl {
         try requireProtocolField(hasKey)
         try requireProtocolField(hasValue)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1790,8 +1801,8 @@ extension Strato_Agent_V1_HostInfo {
     public func validateProtocol() throws {
         if hasBootTime { try bootTime.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1803,8 +1814,8 @@ extension Strato_Agent_V1_HostMemoryAccounting {
         try requireProtocolField(hasRemainingAllocatableBytes)
         try requireProtocolField(hasQemuOverheadBytes)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1816,8 +1827,8 @@ extension Strato_Agent_V1_HostMemoryProfileConfiguration {
         try tenantClass.validateProtocol()
         try requireProtocolField(hasNvmeSwap)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1826,9 +1837,9 @@ extension Strato_Agent_V1_HostMemoryProfileObservation {
         if hasConfigured { try configured.validateProtocol() }
         if hasEffectiveTier { try effectiveTier.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasConfigured { try configured.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasConfigured { try configured.normalizeProtocolValues() }
     }
 }
 
@@ -1870,26 +1881,27 @@ extension Strato_Agent_V1_HostResourceTelemetry {
         if hasZramOriginalBytes { try zramOriginalBytes.validateProtocol() }
         if hasMemoryWarnings { try memoryWarnings.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasCpuPressure { try cpuPressure.normalizeProtocolIdentifiers() }
-        if hasMemoryPressure { try memoryPressure.normalizeProtocolIdentifiers() }
-        if hasIoPressure { try ioPressure.normalizeProtocolIdentifiers() }
-        if hasSwapTotalBytes { try swapTotalBytes.normalizeProtocolIdentifiers() }
-        if hasSwapUsedBytes { try swapUsedBytes.normalizeProtocolIdentifiers() }
-        if hasZswapStoredBytes { try zswapStoredBytes.normalizeProtocolIdentifiers() }
-        if hasZswapPoolBytes { try zswapPoolBytes.normalizeProtocolIdentifiers() }
-        if hasZramUsedBytes { try zramUsedBytes.normalizeProtocolIdentifiers() }
-        if hasMajorFaultsTotal { try majorFaultsTotal.normalizeProtocolIdentifiers() }
-        if hasReclaimScannedPagesTotal { try reclaimScannedPagesTotal.normalizeProtocolIdentifiers() }
-        if hasReclaimReclaimedPagesTotal { try reclaimReclaimedPagesTotal.normalizeProtocolIdentifiers() }
-        if hasOomKillsTotal { try oomKillsTotal.normalizeProtocolIdentifiers() }
-        if hasMglruEnabled { try mglruEnabled.normalizeProtocolIdentifiers() }
-        if hasMemoryProfile { try memoryProfile.normalizeProtocolIdentifiers() }
-        if hasSwapInPagesTotal { try swapInPagesTotal.normalizeProtocolIdentifiers() }
-        if hasSwapOutPagesTotal { try swapOutPagesTotal.normalizeProtocolIdentifiers() }
-        if hasZramOriginalBytes { try zramOriginalBytes.normalizeProtocolIdentifiers() }
-        if hasMemoryWarnings { try memoryWarnings.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if case .UNRECOGNIZED = health { health.normalizeProtocolValue() }
+        if hasCpuPressure { try cpuPressure.normalizeProtocolValues() }
+        if hasMemoryPressure { try memoryPressure.normalizeProtocolValues() }
+        if hasIoPressure { try ioPressure.normalizeProtocolValues() }
+        if hasSwapTotalBytes { try swapTotalBytes.normalizeProtocolValues() }
+        if hasSwapUsedBytes { try swapUsedBytes.normalizeProtocolValues() }
+        if hasZswapStoredBytes { try zswapStoredBytes.normalizeProtocolValues() }
+        if hasZswapPoolBytes { try zswapPoolBytes.normalizeProtocolValues() }
+        if hasZramUsedBytes { try zramUsedBytes.normalizeProtocolValues() }
+        if hasMajorFaultsTotal { try majorFaultsTotal.normalizeProtocolValues() }
+        if hasReclaimScannedPagesTotal { try reclaimScannedPagesTotal.normalizeProtocolValues() }
+        if hasReclaimReclaimedPagesTotal { try reclaimReclaimedPagesTotal.normalizeProtocolValues() }
+        if hasOomKillsTotal { try oomKillsTotal.normalizeProtocolValues() }
+        if hasMglruEnabled { try mglruEnabled.normalizeProtocolValues() }
+        if hasMemoryProfile { try memoryProfile.normalizeProtocolValues() }
+        if hasSwapInPagesTotal { try swapInPagesTotal.normalizeProtocolValues() }
+        if hasSwapOutPagesTotal { try swapOutPagesTotal.normalizeProtocolValues() }
+        if hasZramOriginalBytes { try zramOriginalBytes.normalizeProtocolValues() }
+        if hasMemoryWarnings { try memoryWarnings.normalizeProtocolValues() }
     }
 }
 
@@ -1901,8 +1913,8 @@ extension Strato_Agent_V1_HypervisorSupport {
         try requireProtocolField(hasAccelerated)
         try requireProtocolField(hasSupportsSnapshots)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1912,9 +1924,9 @@ extension Strato_Agent_V1_IdentityPolicy {
         try requireProtocolField(hasAudiences)
         try audiences.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasAudiences { try audiences.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasAudiences { try audiences.normalizeProtocolValues() }
     }
 }
 
@@ -1929,11 +1941,11 @@ extension Strato_Agent_V1_ImageInfo {
         try requireProtocolField(hasArtifacts)
         try artifacts.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasImageID { imageID = try UUID(protocolString: imageID).uuidString }
         if hasProjectID { projectID = try UUID(protocolString: projectID).uuidString }
-        if hasArtifacts { try artifacts.normalizeProtocolIdentifiers() }
+        if hasArtifacts { try artifacts.normalizeProtocolValues() }
     }
 }
 
@@ -1953,14 +1965,14 @@ extension Strato_Agent_V1_InstanceMetadata {
         if hasNoCloudSeedToken { try requireProtocolField(UUID(uuidString: noCloudSeedToken) != nil) }
         try requireProtocolField(hasServiceEnabled)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasInstanceID { instanceID = try UUID(protocolString: instanceID).uuidString }
         if hasProjectID { projectID = try UUID(protocolString: projectID).uuidString }
-        if hasNics { try nics.normalizeProtocolIdentifiers() }
-        if hasSshAuthorizedKeys { try sshAuthorizedKeys.normalizeProtocolIdentifiers() }
-        if hasTags { try tags.normalizeProtocolIdentifiers() }
-        if hasIdentity { try identity.normalizeProtocolIdentifiers() }
+        if hasNics { try nics.normalizeProtocolValues() }
+        if hasSshAuthorizedKeys { try sshAuthorizedKeys.normalizeProtocolValues() }
+        if hasTags { try tags.normalizeProtocolValues() }
+        if hasIdentity { try identity.normalizeProtocolValues() }
         if hasNoCloudSeedToken { noCloudSeedToken = try UUID(protocolString: noCloudSeedToken).uuidString }
     }
 }
@@ -1972,8 +1984,8 @@ extension Strato_Agent_V1_GuestConfigItemFailure {
         try requireProtocolField(hasIdentity)
         try requireProtocolField(hasReason)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -1982,8 +1994,8 @@ extension Strato_Agent_V1_MachineProfile {
         try requireProtocolField(hasSecureBoot)
         try requireProtocolField(hasTpm)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2001,11 +2013,11 @@ extension Strato_Agent_V1_MetadataNIC {
         try requireProtocolField(hasResolverAddresses)
         try resolverAddresses.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasNetworkID { networkID = try UUID(protocolString: networkID).uuidString }
-        if hasDnsServers { try dnsServers.normalizeProtocolIdentifiers() }
-        if hasResolverAddresses { try resolverAddresses.normalizeProtocolIdentifiers() }
+        if hasDnsServers { try dnsServers.normalizeProtocolValues() }
+        if hasResolverAddresses { try resolverAddresses.normalizeProtocolValues() }
     }
 }
 
@@ -2022,14 +2034,14 @@ extension Strato_Agent_V1_NetworkSpec {
         try requireProtocolField(hasMetadataEnabled)
         if hasResolverAddresses { try resolverAddresses.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasInterfaceID { interfaceID = try UUID(protocolString: interfaceID).uuidString }
         if hasNetworkID { networkID = try UUID(protocolString: networkID).uuidString }
-        if hasDnsServers { try dnsServers.normalizeProtocolIdentifiers() }
-        if hasSecurityGroupIds { try securityGroupIds.normalizeProtocolIdentifiers() }
+        if hasDnsServers { try dnsServers.normalizeProtocolValues() }
+        if hasSecurityGroupIds { try securityGroupIds.normalizeProtocolValues() }
         if hasSecurityGroupIds { securityGroupIds.values = try securityGroupIds.values.map { try UUID(protocolString: $0).uuidString } }
-        if hasResolverAddresses { try resolverAddresses.normalizeProtocolIdentifiers() }
+        if hasResolverAddresses { try resolverAddresses.normalizeProtocolValues() }
     }
 }
 
@@ -2039,8 +2051,8 @@ extension Strato_Agent_V1_NodeDependencyFailureReason {
         try code.validateProtocol()
         try requireProtocolField(hasMessage)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2070,10 +2082,13 @@ extension Strato_Agent_V1_NodeDependencyObservation {
         try requireProtocolField(hasAffectedCapabilities)
         try affectedCapabilities.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasReason { try reason.normalizeProtocolIdentifiers() }
-        if hasAffectedCapabilities { try affectedCapabilities.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if case .UNRECOGNIZED = supervisorState { supervisorState.normalizeProtocolValue() }
+        if case .UNRECOGNIZED = compatibility { compatibility.normalizeProtocolValue() }
+        if case .UNRECOGNIZED = functionalState { functionalState.normalizeProtocolValue() }
+        if hasReason { try reason.normalizeProtocolValues() }
+        if hasAffectedCapabilities { try affectedCapabilities.normalizeProtocolValues() }
     }
 }
 
@@ -2083,8 +2098,8 @@ extension Strato_Agent_V1_ObservedAgentUpdateStatus {
         try requireProtocolField(hasDisposition)
         try requireProtocolField(hasReason)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2096,9 +2111,10 @@ extension Strato_Agent_V1_ObservedLoadBalancerBackend {
         try healthStatus.validateProtocol()
         if hasLastCheckedAt { try lastCheckedAt.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
+        if case .UNRECOGNIZED = healthStatus { healthStatus.normalizeProtocolValue() }
     }
 }
 
@@ -2112,10 +2128,10 @@ extension Strato_Agent_V1_ObservedLoadBalancerState {
         try requireProtocolField(hasBackends)
         try backends.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
-        if hasBackends { try backends.normalizeProtocolIdentifiers() }
+        if hasBackends { try backends.normalizeProtocolValues() }
     }
 }
 
@@ -2125,8 +2141,8 @@ extension Strato_Agent_V1_ObservedManifestStatus {
         try requireProtocolField(hasQuarantinedEntries)
         try requireProtocolField(hasReason)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2139,8 +2155,8 @@ extension Strato_Agent_V1_ObservedNetworkState {
         try status.validateProtocol()
         if hasFailureClassification { try failureClassification.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
     }
 }
@@ -2157,10 +2173,10 @@ extension Strato_Agent_V1_ObservedPortMembershipState {
         try status.validateProtocol()
         if hasFailureClassification { try failureClassification.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasInterfaceID { interfaceID = try UUID(protocolString: interfaceID).uuidString }
-        if hasSecurityGroupIds { try securityGroupIds.normalizeProtocolIdentifiers() }
+        if hasSecurityGroupIds { try securityGroupIds.normalizeProtocolValues() }
         if hasSecurityGroupIds { securityGroupIds.values = try securityGroupIds.values.map { try UUID(protocolString: $0).uuidString } }
     }
 }
@@ -2177,12 +2193,13 @@ extension Strato_Agent_V1_ObservedSandboxState {
         if hasIdleActivity { try idleActivity.validateProtocol() }
         if hasSuspension { try suspension.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSandboxID { sandboxID = try UUID(protocolString: sandboxID).uuidString }
-        if hasResourceTelemetry { try resourceTelemetry.normalizeProtocolIdentifiers() }
-        if hasIdleActivity { try idleActivity.normalizeProtocolIdentifiers() }
-        if hasSuspension { try suspension.normalizeProtocolIdentifiers() }
+        if case .UNRECOGNIZED = status { status.normalizeProtocolValue() }
+        if hasResourceTelemetry { try resourceTelemetry.normalizeProtocolValues() }
+        if hasIdleActivity { try idleActivity.normalizeProtocolValues() }
+        if hasSuspension { try suspension.normalizeProtocolValues() }
     }
 }
 
@@ -2195,8 +2212,8 @@ extension Strato_Agent_V1_ObservedSecurityGroupState {
         try status.validateProtocol()
         if hasFailureClassification { try failureClassification.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasID { id = try UUID(protocolString: id).uuidString }
     }
 }
@@ -2205,8 +2222,8 @@ extension Strato_Agent_V1_ObservedSnapshotFacts {
     public func validateProtocol() throws {
         if hasArchitecture { try architecture.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2224,11 +2241,11 @@ extension Strato_Agent_V1_ObservedSnapshotState {
         try requireProtocolField(hasObservedGeneration)
         if hasFailureClassification { try failureClassification.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSnapshotID { snapshotID = try UUID(protocolString: snapshotID).uuidString }
         if hasParentID { parentID = try UUID(protocolString: parentID).uuidString }
-        if hasFacts { try facts.normalizeProtocolIdentifiers() }
+        if hasFacts { try facts.normalizeProtocolValues() }
     }
 }
 
@@ -2259,24 +2276,24 @@ extension Strato_Agent_V1_ObservedStateReport {
         if hasPortMemberships { try portMemberships.validateProtocol() }
         if hasStorageDevices { try storageDevices.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasVms { try vms.normalizeProtocolIdentifiers() }
-        if hasSandboxes { try sandboxes.normalizeProtocolIdentifiers() }
-        if hasResources { try resources.normalizeProtocolIdentifiers() }
-        if hasResourceEnforcement { try resourceEnforcement.normalizeProtocolIdentifiers() }
-        if hasHostResourceTelemetry { try hostResourceTelemetry.normalizeProtocolIdentifiers() }
-        if hasAgentUpdateStatus { try agentUpdateStatus.normalizeProtocolIdentifiers() }
-        if hasUnrecognized { try unrecognized.normalizeProtocolIdentifiers() }
-        if hasTeardownRefusal { try teardownRefusal.normalizeProtocolIdentifiers() }
-        if hasManifestStatus { try manifestStatus.normalizeProtocolIdentifiers() }
-        if hasVolumes { try volumes.normalizeProtocolIdentifiers() }
-        if hasSnapshots { try snapshots.normalizeProtocolIdentifiers() }
-        if hasLoadBalancers { try loadBalancers.normalizeProtocolIdentifiers() }
-        if hasNetworks { try networks.normalizeProtocolIdentifiers() }
-        if hasSecurityGroups { try securityGroups.normalizeProtocolIdentifiers() }
-        if hasPortMemberships { try portMemberships.normalizeProtocolIdentifiers() }
-        if hasStorageDevices { try storageDevices.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasVms { try vms.normalizeProtocolValues() }
+        if hasSandboxes { try sandboxes.normalizeProtocolValues() }
+        if hasResources { try resources.normalizeProtocolValues() }
+        if hasResourceEnforcement { try resourceEnforcement.normalizeProtocolValues() }
+        if hasHostResourceTelemetry { try hostResourceTelemetry.normalizeProtocolValues() }
+        if hasAgentUpdateStatus { try agentUpdateStatus.normalizeProtocolValues() }
+        if hasUnrecognized { try unrecognized.normalizeProtocolValues() }
+        if hasTeardownRefusal { try teardownRefusal.normalizeProtocolValues() }
+        if hasManifestStatus { try manifestStatus.normalizeProtocolValues() }
+        if hasVolumes { try volumes.normalizeProtocolValues() }
+        if hasSnapshots { try snapshots.normalizeProtocolValues() }
+        if hasLoadBalancers { try loadBalancers.normalizeProtocolValues() }
+        if hasNetworks { try networks.normalizeProtocolValues() }
+        if hasSecurityGroups { try securityGroups.normalizeProtocolValues() }
+        if hasPortMemberships { try portMemberships.normalizeProtocolValues() }
+        if hasStorageDevices { try storageDevices.normalizeProtocolValues() }
     }
 }
 
@@ -2291,10 +2308,10 @@ extension Strato_Agent_V1_ObservedStorageDevice {
         try requireProtocolField(hasUses)
         try uses.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasIdentity { try identity.normalizeProtocolIdentifiers() }
-        if hasUses { try uses.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasIdentity { try identity.normalizeProtocolValues() }
+        if hasUses { try uses.normalizeProtocolValues() }
     }
 }
 
@@ -2305,8 +2322,8 @@ extension Strato_Agent_V1_ObservedTeardownRefusal {
         try requireProtocolField(hasPresentWorkloads)
         try requireProtocolField(hasReason)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2325,15 +2342,16 @@ extension Strato_Agent_V1_ObservedVMState {
         if hasResourceTelemetry { try resourceTelemetry.validateProtocol() }
         if hasAppliedNetworkInterfaceIds { try appliedNetworkInterfaceIds.validateProtocol(); for item in appliedNetworkInterfaceIds.values { try requireProtocolField(UUID(uuidString: item) != nil) } }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVmID { vmID = try UUID(protocolString: vmID).uuidString }
-        if hasGuestInfo { try guestInfo.normalizeProtocolIdentifiers() }
-        if hasGuestAgentObservation { try guestAgentObservation.normalizeProtocolIdentifiers() }
-        if hasGuestConfigObservation { try guestConfigObservation.normalizeProtocolIdentifiers() }
-        if hasMemoryStats { try memoryStats.normalizeProtocolIdentifiers() }
-        if hasResourceTelemetry { try resourceTelemetry.normalizeProtocolIdentifiers() }
-        if hasAppliedNetworkInterfaceIds { try appliedNetworkInterfaceIds.normalizeProtocolIdentifiers() }
+        if case .UNRECOGNIZED = status { status.normalizeProtocolValue() }
+        if hasGuestInfo { try guestInfo.normalizeProtocolValues() }
+        if hasGuestAgentObservation { try guestAgentObservation.normalizeProtocolValues() }
+        if hasGuestConfigObservation { try guestConfigObservation.normalizeProtocolValues() }
+        if hasMemoryStats { try memoryStats.normalizeProtocolValues() }
+        if hasResourceTelemetry { try resourceTelemetry.normalizeProtocolValues() }
+        if hasAppliedNetworkInterfaceIds { try appliedNetworkInterfaceIds.normalizeProtocolValues() }
         if hasAppliedNetworkInterfaceIds { appliedNetworkInterfaceIds.values = try appliedNetworkInterfaceIds.values.map { try UUID(protocolString: $0).uuidString } }
     }
 }
@@ -2351,14 +2369,14 @@ extension Strato_Agent_V1_ObservedVolumeState {
         if hasBlockPolicy { try blockPolicy.validateProtocol() }
         if hasIoObservedRate { try ioObservedRate.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVolumeID { volumeID = try UUID(protocolString: volumeID).uuidString }
-        if hasAttachment { try attachment.normalizeProtocolIdentifiers() }
+        if hasAttachment { try attachment.normalizeProtocolValues() }
         if hasAttachedVmID { attachedVmID = try UUID(protocolString: attachedVmID).uuidString }
-        if hasIoLimits { try ioLimits.normalizeProtocolIdentifiers() }
-        if hasBlockPolicy { try blockPolicy.normalizeProtocolIdentifiers() }
-        if hasIoObservedRate { try ioObservedRate.normalizeProtocolIdentifiers() }
+        if hasIoLimits { try ioLimits.normalizeProtocolValues() }
+        if hasBlockPolicy { try blockPolicy.normalizeProtocolValues() }
+        if hasIoObservedRate { try ioObservedRate.normalizeProtocolValues() }
     }
 }
 
@@ -2366,8 +2384,8 @@ extension Strato_Agent_V1_GuestConfigPackageObservation {
     public func validateProtocol() throws {
         try requireProtocolField(hasName)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2378,8 +2396,8 @@ extension Strato_Agent_V1_PressureStallSample {
         try requireProtocolField(hasAverage300)
         try requireProtocolField(hasTotalMicroseconds)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2390,10 +2408,10 @@ extension Strato_Agent_V1_PressureStallTelemetry {
         if hasSome { try some.validateProtocol() }
         if hasFull { try full.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasSome { try some.normalizeProtocolIdentifiers() }
-        if hasFull { try full.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasSome { try some.normalizeProtocolValues() }
+        if hasFull { try full.normalizeProtocolValues() }
     }
 }
 
@@ -2405,8 +2423,8 @@ extension Strato_Agent_V1_RegistryCredential {
         if hasExpiresAt { try expiresAt.validateProtocol() }
         try requireProtocolField(hasBearer)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2421,10 +2439,10 @@ extension Strato_Agent_V1_ResourceEnforcementSnapshot {
         try requireProtocolField(hasAcknowledgements)
         try acknowledgements.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasAgentBootID { agentBootID = try UUID(protocolString: agentBootID).uuidString }
-        if hasAcknowledgements { try acknowledgements.normalizeProtocolIdentifiers() }
+        if hasAcknowledgements { try acknowledgements.normalizeProtocolValues() }
     }
 }
 
@@ -2433,8 +2451,8 @@ extension Strato_Agent_V1_ResourceTelemetryFlag {
         try requireProtocolField(hasAvailability)
         try availability.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2443,8 +2461,8 @@ extension Strato_Agent_V1_ResourceTelemetryValue {
         try requireProtocolField(hasAvailability)
         try availability.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2458,8 +2476,8 @@ extension Strato_Agent_V1_SandboxAutomaticSuspensionFence {
         try requireProtocolField(UUID(uuidString: admissionToken) != nil)
         try requireProtocolField(hasGuestProtocolVersion)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasOperationID { operationID = try UUID(protocolString: operationID).uuidString }
         if hasAdmissionToken { admissionToken = try UUID(protocolString: admissionToken).uuidString }
     }
@@ -2480,11 +2498,12 @@ extension Strato_Agent_V1_SandboxGuestIdleActivity {
         try requireProtocolField(hasTrusted)
         if hasActiveExecSessionIds { try activeExecSessionIds.validateProtocol(); for item in activeExecSessionIds.values { try requireProtocolField(UUID(uuidString: item) != nil) } }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasProbeID { probeID = try UUID(protocolString: probeID).uuidString }
         if hasMonitorIncarnation { monitorIncarnation = try UUID(protocolString: monitorIncarnation).uuidString }
-        if hasActiveExecSessionIds { try activeExecSessionIds.normalizeProtocolIdentifiers() }
+        if case .UNRECOGNIZED = coverage { coverage.normalizeProtocolValue() }
+        if hasActiveExecSessionIds { try activeExecSessionIds.normalizeProtocolValues() }
         if hasActiveExecSessionIds { activeExecSessionIds.values = try activeExecSessionIds.values.map { try UUID(protocolString: $0).uuidString } }
     }
 }
@@ -2507,15 +2526,15 @@ extension Strato_Agent_V1_SandboxIdleActivityReport {
         try requireProtocolField(hasIdleFenceSupported)
         if hasPolicy { try policy.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasAgentIncarnation { agentIncarnation = try UUID(protocolString: agentIncarnation).uuidString }
         if hasConnectionEpoch { connectionEpoch = try UUID(protocolString: connectionEpoch).uuidString }
         if hasResidencyEpoch { residencyEpoch = try UUID(protocolString: residencyEpoch).uuidString }
-        if hasGuest { try guest.normalizeProtocolIdentifiers() }
-        if hasActiveExecSessionIds { try activeExecSessionIds.normalizeProtocolIdentifiers() }
+        if hasGuest { try guest.normalizeProtocolValues() }
+        if hasActiveExecSessionIds { try activeExecSessionIds.normalizeProtocolValues() }
         if hasActiveExecSessionIds { activeExecSessionIds.values = try activeExecSessionIds.values.map { try UUID(protocolString: $0).uuidString } }
-        if hasPolicy { try policy.normalizeProtocolIdentifiers() }
+        if hasPolicy { try policy.normalizeProtocolValues() }
     }
 }
 
@@ -2530,9 +2549,9 @@ extension Strato_Agent_V1_SandboxIdlePolicy {
         try excludedSandboxIDs.validateProtocol()
         for item in excludedSandboxIDs.values { try requireProtocolField(UUID(uuidString: item) != nil) }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasExcludedSandboxIDs { try excludedSandboxIDs.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasExcludedSandboxIDs { try excludedSandboxIDs.normalizeProtocolValues() }
         if hasExcludedSandboxIDs { excludedSandboxIDs.values = try excludedSandboxIDs.values.map { try UUID(protocolString: $0).uuidString } }
     }
 }
@@ -2546,8 +2565,8 @@ extension Strato_Agent_V1_SandboxLogMessage {
         try requireProtocolField(hasStream)
         try requireProtocolField(hasMessage)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2559,8 +2578,8 @@ extension Strato_Agent_V1_SandboxSnapshotArtifactDescriptor {
         try requireProtocolField(hasSizeBytes)
         try requireProtocolField(hasSha256)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2570,8 +2589,8 @@ extension Strato_Agent_V1_SandboxSnapshotArtifactUploadTarget {
         try kind.validateProtocol()
         try requireProtocolField(hasUploadURL)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2583,11 +2602,11 @@ extension Strato_Agent_V1_SandboxSnapshotRef {
         try requireProtocolField(UUID(uuidString: sourceSandboxID) != nil)
         if hasArtifacts { try artifacts.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasSnapshotID { snapshotID = try UUID(protocolString: snapshotID).uuidString }
         if hasSourceSandboxID { sourceSandboxID = try UUID(protocolString: sourceSandboxID).uuidString }
-        if hasArtifacts { try artifacts.normalizeProtocolIdentifiers() }
+        if hasArtifacts { try artifacts.normalizeProtocolValues() }
     }
 }
 
@@ -2605,15 +2624,15 @@ extension Strato_Agent_V1_SandboxSpec {
         if hasNetwork { try network.validateProtocol() }
         if hasRestoreFrom { try restoreFrom.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasAdmittedReservation { try admittedReservation.normalizeProtocolIdentifiers() }
-        if hasResourceClass { try resourceClass.normalizeProtocolIdentifiers() }
-        if hasEntrypoint { try entrypoint.normalizeProtocolIdentifiers() }
-        if hasCmd { try cmd.normalizeProtocolIdentifiers() }
-        if hasEnv { try env.normalizeProtocolIdentifiers() }
-        if hasNetwork { try network.normalizeProtocolIdentifiers() }
-        if hasRestoreFrom { try restoreFrom.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasAdmittedReservation { try admittedReservation.normalizeProtocolValues() }
+        if hasResourceClass { try resourceClass.normalizeProtocolValues() }
+        if hasEntrypoint { try entrypoint.normalizeProtocolValues() }
+        if hasCmd { try cmd.normalizeProtocolValues() }
+        if hasEnv { try env.normalizeProtocolValues() }
+        if hasNetwork { try network.normalizeProtocolValues() }
+        if hasRestoreFrom { try restoreFrom.normalizeProtocolValues() }
     }
 }
 
@@ -2626,8 +2645,8 @@ extension Strato_Agent_V1_SandboxSuspensionEvidence {
         try requireProtocolField(hasVmmDestroyed)
         try requireProtocolField(hasVerified)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasCheckpointID { checkpointID = try UUID(protocolString: checkpointID).uuidString }
     }
 }
@@ -2636,8 +2655,8 @@ extension Strato_Agent_V1_GuestConfigServiceObservation {
     public func validateProtocol() throws {
         try requireProtocolField(hasName)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2647,8 +2666,8 @@ extension Strato_Agent_V1_StorageDeviceIdentity {
         try kind.validateProtocol()
         try requireProtocolField(hasValue)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2658,8 +2677,8 @@ extension Strato_Agent_V1_SuccessMessage {
         try requireProtocolField(hasTimestamp)
         try timestamp.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2667,8 +2686,8 @@ extension Strato_Agent_V1_GuestConfigSysctlObservation {
     public func validateProtocol() throws {
         try requireProtocolField(hasKey)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2680,8 +2699,8 @@ extension Strato_Agent_V1_UnrecognizedWorkload {
         try requireProtocolField(UUID(uuidString: workloadID) != nil)
         try requireProtocolField(hasObservedGeneration)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasWorkloadID { workloadID = try UUID(protocolString: workloadID).uuidString }
     }
 }
@@ -2700,8 +2719,11 @@ extension Strato_Agent_V1_VMLogMessage {
         try eventType.validateProtocol()
         try requireProtocolField(hasMessage)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if case .UNRECOGNIZED = level { level.normalizeProtocolValue() }
+        if case .UNRECOGNIZED = source { source.normalizeProtocolValue() }
+        if case .UNRECOGNIZED = eventType { eventType.normalizeProtocolValue() }
     }
 }
 
@@ -2710,8 +2732,8 @@ extension Strato_Agent_V1_VMMemoryStats {
         try requireProtocolField(hasTotalBytes)
         try requireProtocolField(hasAvailableBytes)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2739,24 +2761,24 @@ extension Strato_Agent_V1_VMSpec {
         try requireProtocolField(hasMetadataSource)
         try metadataSource.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasAdmittedReservation { try admittedReservation.normalizeProtocolIdentifiers() }
-        if hasResourceClass { try resourceClass.normalizeProtocolIdentifiers() }
-        if hasBoot { try boot.normalizeProtocolIdentifiers() }
-        if hasMachine { try machine.normalizeProtocolIdentifiers() }
-        if hasVolumes { try volumes.normalizeProtocolIdentifiers() }
-        if hasNetworks { try networks.normalizeProtocolIdentifiers() }
-        if hasConsole { try console.normalizeProtocolIdentifiers() }
-        if hasSshAuthorizedKeys { try sshAuthorizedKeys.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if hasAdmittedReservation { try admittedReservation.normalizeProtocolValues() }
+        if hasResourceClass { try resourceClass.normalizeProtocolValues() }
+        if hasBoot { try boot.normalizeProtocolValues() }
+        if hasMachine { try machine.normalizeProtocolValues() }
+        if hasVolumes { try volumes.normalizeProtocolValues() }
+        if hasNetworks { try networks.normalizeProtocolValues() }
+        if hasConsole { try console.normalizeProtocolValues() }
+        if hasSshAuthorizedKeys { try sshAuthorizedKeys.normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_VolumeIOLimits {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2765,8 +2787,8 @@ extension Strato_Agent_V1_VolumeIOObservedRate {
         try requireProtocolField(hasIops)
         try requireProtocolField(hasBytesPerSecond)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2783,12 +2805,12 @@ extension Strato_Agent_V1_VolumeSpec {
         try blockMode.validateProtocol()
         if hasAppliedBlockPolicy { try appliedBlockPolicy.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasVolumeID { volumeID = try UUID(protocolString: volumeID).uuidString }
-        if hasAttachment { try attachment.normalizeProtocolIdentifiers() }
-        if hasIoLimits { try ioLimits.normalizeProtocolIdentifiers() }
-        if hasAppliedBlockPolicy { try appliedBlockPolicy.normalizeProtocolIdentifiers() }
+        if hasAttachment { try attachment.normalizeProtocolValues() }
+        if hasIoLimits { try ioLimits.normalizeProtocolValues() }
+        if hasAppliedBlockPolicy { try appliedBlockPolicy.normalizeProtocolValues() }
     }
 }
 
@@ -2800,8 +2822,8 @@ extension Strato_Agent_V1_WorkloadAdmittedReservation {
         try requireProtocolField(hasDiscountedGuestBytes)
         try requireProtocolField(hasBackendOverheadBytes)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2827,13 +2849,13 @@ extension Strato_Agent_V1_WorkloadEnforcementAcknowledgement {
         try requireProtocolField(hasCpuQuotaUnlimited)
         try requireProtocolField(hasOwnershipVerified)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasWorkloadID { workloadID = try UUID(protocolString: workloadID).uuidString }
-        if hasResourceClass { try resourceClass.normalizeProtocolIdentifiers() }
-        if hasAccountedReservation { try accountedReservation.normalizeProtocolIdentifiers() }
-        if hasDesiredLimits { try desiredLimits.normalizeProtocolIdentifiers() }
-        if hasAppliedLimits { try appliedLimits.normalizeProtocolIdentifiers() }
+        if hasResourceClass { try resourceClass.normalizeProtocolValues() }
+        if hasAccountedReservation { try accountedReservation.normalizeProtocolValues() }
+        if hasDesiredLimits { try desiredLimits.normalizeProtocolValues() }
+        if hasAppliedLimits { try appliedLimits.normalizeProtocolValues() }
     }
 }
 
@@ -2842,8 +2864,8 @@ extension Strato_Agent_V1_WorkloadMemoryEventsTelemetry {
         try requireProtocolField(hasAvailability)
         try availability.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2856,8 +2878,8 @@ extension Strato_Agent_V1_WorkloadResourceClassEnforcement {
         try requireProtocolField(hasPreExecutionEnforcement)
         try requireProtocolField(hasEffectiveReadback)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2875,8 +2897,8 @@ extension Strato_Agent_V1_WorkloadResourceClassPolicy {
         try requireProtocolField(hasMaxMemoryPressure10)
         try requireProtocolField(hasMaxTelemetryAgeSeconds)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2890,11 +2912,11 @@ extension Strato_Agent_V1_WorkloadResourceClassSnapshot {
         try requireProtocolField(hasPolicy)
         try policy.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
         if hasClassID { classID = try UUID(protocolString: classID).uuidString }
         if hasSiteID { siteID = try UUID(protocolString: siteID).uuidString }
-        if hasPolicy { try policy.normalizeProtocolIdentifiers() }
+        if hasPolicy { try policy.normalizeProtocolValues() }
     }
 }
 
@@ -2925,17 +2947,18 @@ extension Strato_Agent_V1_WorkloadResourceTelemetry {
         try requireProtocolField(hasGuestStealMicroseconds)
         try guestStealMicroseconds.validateProtocol()
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        if hasMemoryCurrentBytes { try memoryCurrentBytes.normalizeProtocolIdentifiers() }
-        if hasMemoryEvents { try memoryEvents.normalizeProtocolIdentifiers() }
-        if hasMemoryPressure { try memoryPressure.normalizeProtocolIdentifiers() }
-        if hasCpuPressure { try cpuPressure.normalizeProtocolIdentifiers() }
-        if hasIoPressure { try ioPressure.normalizeProtocolIdentifiers() }
-        if hasCpuUsageMicroseconds { try cpuUsageMicroseconds.normalizeProtocolIdentifiers() }
-        if hasCpuThrottledMicroseconds { try cpuThrottledMicroseconds.normalizeProtocolIdentifiers() }
-        if hasCpuThrottledPeriodsTotal { try cpuThrottledPeriodsTotal.normalizeProtocolIdentifiers() }
-        if hasGuestStealMicroseconds { try guestStealMicroseconds.normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        if case .UNRECOGNIZED = health { health.normalizeProtocolValue() }
+        if hasMemoryCurrentBytes { try memoryCurrentBytes.normalizeProtocolValues() }
+        if hasMemoryEvents { try memoryEvents.normalizeProtocolValues() }
+        if hasMemoryPressure { try memoryPressure.normalizeProtocolValues() }
+        if hasCpuPressure { try cpuPressure.normalizeProtocolValues() }
+        if hasIoPressure { try ioPressure.normalizeProtocolValues() }
+        if hasCpuUsageMicroseconds { try cpuUsageMicroseconds.normalizeProtocolValues() }
+        if hasCpuThrottledMicroseconds { try cpuThrottledMicroseconds.normalizeProtocolValues() }
+        if hasCpuThrottledPeriodsTotal { try cpuThrottledPeriodsTotal.normalizeProtocolValues() }
+        if hasGuestStealMicroseconds { try guestStealMicroseconds.normalizeProtocolValues() }
     }
 }
 
@@ -2945,8 +2968,8 @@ extension Strato_Agent_V1_WorkloadRuntimeLimits {
         try requireProtocolField(hasMemoryMaxBytes)
         try requireProtocolField(hasCpuWeight)
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -2954,9 +2977,9 @@ extension Strato_Agent_V1_AgentHeartbeatMessageDependencyObservationsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -2964,9 +2987,9 @@ extension Strato_Agent_V1_AgentRegisterMessageHypervisorsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -2974,9 +2997,9 @@ extension Strato_Agent_V1_AgentRegisterMessageResourceClassEnforcementSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -2984,33 +3007,33 @@ extension Strato_Agent_V1_AgentRegisterMessageDependencyObservationsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_CephVolumeStorageMonEndpointsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_DesiredDNSRecordValuesSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_DesiredDNSZoneNetworkIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3018,9 +3041,9 @@ extension Strato_Agent_V1_DesiredDNSZoneRecordsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3028,9 +3051,9 @@ extension Strato_Agent_V1_DesiredLoadBalancerListenersSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3038,9 +3061,9 @@ extension Strato_Agent_V1_DesiredLoadBalancerBackendsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3048,25 +3071,25 @@ extension Strato_Agent_V1_DesiredNetworkACLRulesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_DesiredNetworkStateDnsServersSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_DesiredNetworkStateResolverAddressesSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3074,9 +3097,9 @@ extension Strato_Agent_V1_DesiredNetworkStateFloatingIPsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3084,9 +3107,9 @@ extension Strato_Agent_V1_DesiredNetworkStateLoadBalancersSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3094,9 +3117,9 @@ extension Strato_Agent_V1_DesiredNetworkStateNetworkAcLsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3104,9 +3127,9 @@ extension Strato_Agent_V1_DesiredRestoreArtifactsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3114,9 +3137,9 @@ extension Strato_Agent_V1_DesiredSecurityGroupRulesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3124,9 +3147,9 @@ extension Strato_Agent_V1_DesiredSnapshotExportUploadsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3134,9 +3157,9 @@ extension Strato_Agent_V1_DesiredStateMessageVmsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3144,9 +3167,9 @@ extension Strato_Agent_V1_DesiredStateMessageSandboxesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3154,9 +3177,9 @@ extension Strato_Agent_V1_DesiredStateMessageNetworksSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3164,9 +3187,9 @@ extension Strato_Agent_V1_DesiredStateMessageSecurityGroupsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3174,9 +3197,9 @@ extension Strato_Agent_V1_DesiredStateMessageTombstonesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3184,9 +3207,9 @@ extension Strato_Agent_V1_DesiredStateMessageVolumesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3194,9 +3217,9 @@ extension Strato_Agent_V1_DesiredStateMessageSnapshotsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3204,9 +3227,9 @@ extension Strato_Agent_V1_DesiredStateMessageCephCredentialRevocationsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3214,17 +3237,17 @@ extension Strato_Agent_V1_DesiredStateMessageDnsZonesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_DiskAttachmentRbdMonEndpointsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3232,9 +3255,9 @@ extension Strato_Agent_V1_GuestConfigPackagesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3242,9 +3265,9 @@ extension Strato_Agent_V1_GuestConfigFilesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3252,9 +3275,9 @@ extension Strato_Agent_V1_GuestConfigServicesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3262,9 +3285,9 @@ extension Strato_Agent_V1_GuestConfigSysctlsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3272,9 +3295,9 @@ extension Strato_Agent_V1_GuestConfigObservationPackagesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3282,9 +3305,9 @@ extension Strato_Agent_V1_GuestConfigObservationFilesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3292,9 +3315,9 @@ extension Strato_Agent_V1_GuestConfigObservationServicesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3302,25 +3325,25 @@ extension Strato_Agent_V1_GuestConfigObservationSysctlsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_GuestExecStartMessageCommandSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_GuestExecStartMessageEnvSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3328,9 +3351,9 @@ extension Strato_Agent_V1_GuestInfoInterfacesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3338,25 +3361,25 @@ extension Strato_Agent_V1_GuestNetworkInterfaceAddressesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_HostResourceTelemetryMemoryWarningsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_IdentityPolicyAudiencesSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3364,9 +3387,9 @@ extension Strato_Agent_V1_ImageInfoArtifactsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3374,65 +3397,65 @@ extension Strato_Agent_V1_InstanceMetadataNicsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_InstanceMetadataSshAuthorizedKeysSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_InstanceMetadataTagsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_MetadataNICDnsServersSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_MetadataNICResolverAddressesSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_NetworkSpecDnsServersSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_NetworkSpecSecurityGroupIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_NetworkSpecResolverAddressesSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3440,8 +3463,8 @@ extension Strato_Agent_V1_NodeDependencyObservationAffectedCapabilitiesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3449,17 +3472,17 @@ extension Strato_Agent_V1_ObservedLoadBalancerStateBackendsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_ObservedPortMembershipStateSecurityGroupIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3467,9 +3490,9 @@ extension Strato_Agent_V1_ObservedStateReportVmsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3477,9 +3500,9 @@ extension Strato_Agent_V1_ObservedStateReportSandboxesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3487,9 +3510,9 @@ extension Strato_Agent_V1_ObservedStateReportUnrecognizedSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3497,9 +3520,9 @@ extension Strato_Agent_V1_ObservedStateReportVolumesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3507,9 +3530,9 @@ extension Strato_Agent_V1_ObservedStateReportSnapshotsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3517,9 +3540,9 @@ extension Strato_Agent_V1_ObservedStateReportLoadBalancersSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3527,9 +3550,9 @@ extension Strato_Agent_V1_ObservedStateReportNetworksSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3537,9 +3560,9 @@ extension Strato_Agent_V1_ObservedStateReportSecurityGroupsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3547,9 +3570,9 @@ extension Strato_Agent_V1_ObservedStateReportPortMembershipsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3557,9 +3580,9 @@ extension Strato_Agent_V1_ObservedStateReportStorageDevicesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3567,16 +3590,16 @@ extension Strato_Agent_V1_ObservedStorageDeviceUsesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_ObservedVMStateAppliedNetworkInterfaceIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3584,33 +3607,33 @@ extension Strato_Agent_V1_ResourceEnforcementSnapshotAcknowledgementsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_SandboxGuestIdleActivityActiveExecSessionIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_SandboxIdleActivityReportActiveExecSessionIdsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_SandboxIdlePolicyExcludedSandboxIDsSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3618,33 +3641,33 @@ extension Strato_Agent_V1_SandboxSnapshotRefArtifactsSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_SandboxSpecEntrypointSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_SandboxSpecCmdSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
 extension Strato_Agent_V1_SandboxSpecEnvSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }
 
@@ -3652,9 +3675,9 @@ extension Strato_Agent_V1_VMSpecVolumesSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
@@ -3662,16 +3685,16 @@ extension Strato_Agent_V1_VMSpecNetworksSection {
     public func validateProtocol() throws {
         for item in values { try item.validateProtocol() }
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
-        for index in values.indices { try values[index].normalizeProtocolIdentifiers() }
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
+        for index in values.indices { try values[index].normalizeProtocolValues() }
     }
 }
 
 extension Strato_Agent_V1_VMSpecSshAuthorizedKeysSection {
     public func validateProtocol() throws {
     }
-    /// Canonical UUID spelling preserves the identity semantics of the historical UUID models.
-    public mutating func normalizeProtocolIdentifiers() throws {
+    /// Canonicalizes UUID spelling (the historical UUID models' identity semantics) and open-enum fallbacks.
+    public mutating func normalizeProtocolValues() throws {
     }
 }

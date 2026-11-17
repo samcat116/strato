@@ -870,7 +870,7 @@ extension Agent {
             metadata: [
                 "strato.vm.id": .string(message.vmID),
                 "strato.session.kind": .string("console"), "strato.session.id": .string(message.sessionID),
-                "strato.request.id": .string(message.requestId),
+                "strato.request.id": .string(message.requestID),
                 "stream": .string(stream.protocolValue),
             ])
 
@@ -1000,7 +1000,7 @@ extension Agent {
 
         // Send connected confirmation
         let connectedMessage = ConsoleConnectedMessage(
-            requestId: message.requestId,
+            requestId: message.requestID,
             vmId: message.vmID,
             sessionId: message.sessionID
         )
@@ -1042,7 +1042,7 @@ extension Agent {
 
         // Send disconnected confirmation
         let disconnectedMessage = ConsoleDisconnectedMessage(
-            requestId: message.requestId,
+            requestId: message.requestID,
             vmId: message.vmID,
             sessionId: message.sessionID,
             reason: "User requested disconnect"

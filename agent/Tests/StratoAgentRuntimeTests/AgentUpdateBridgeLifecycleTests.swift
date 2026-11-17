@@ -107,7 +107,7 @@ struct AgentUpdateBridgeLifecycleTests {
                             guard envelope.type == .agentRegister else { return }
                             let registration = try envelope.decode(as: AgentRegisterMessage.self)
                             let response = AgentRegisterResponseMessage(
-                                requestId: registration.requestId, agentId: "registered-bridge-agent",
+                                requestId: registration.requestID, agentId: "registered-bridge-agent",
                                 name: "bridge-test",
                                 agreement: try AgentProtocolCompatibility.negotiate(
                                     local: AgentProtocolCompatibility.localOffer, remote: registration.protocolOffer,

@@ -186,7 +186,7 @@ struct ResourceAdmissionTests {
                 ).0
             }
             let repeatedRequest = ObservedStateReport(
-                requestId: message.requestId,
+                requestId: message.requestID,
                 agentId: message.agentID, vms: message.vms.values, resources: message.resources,
                 resourceEnforcement: .init(
                     agentBootID: boot, sequence: 11, sampledAt: Date(),
@@ -374,7 +374,7 @@ struct ResourceAdmissionTests {
             }
             let row = try #require(try await AgentResourceAdmission.find(try f.agent.requireID(), on: app.db))
             #expect(row.state.sequence == 4)
-            #expect(row.state.requestID == messages.last?.requestId)
+            #expect(row.state.requestID == messages.last?.requestID)
             #expect(row.state.pending.map(\.reservationID) == [f.key])
         }
     }

@@ -92,6 +92,24 @@ struct AgentProtobufWorkloadTests {
         #expect(throws: AgentProtocolDecodeError.self) { try UUID(protocolString: "invalid") }
     }
 
+    @Test("a newer agent's observed status degrades to unknown instead of rejecting the report")
+    func openObservedEnumsDegradeToUnknown() throws {
+        var vm = ObservedVMState(
+            vmId: UUID(), status: .running, observedGeneration: 1, convergencePhase: nil, lastError: nil)
+        vm.status = .UNRECOGNIZED(932)
+        let report = ObservedStateReport(agentId: "agent", vms: [vm], resources: Fixtures.resources)
+        let bytes = try MessageEnvelope(message: report).serializedData()
+        let decoded = try WireProtocol.decodeEnvelope(bytes).decode(as: ObservedStateReport.self)
+        let status = decoded.vms.values.first?.status
+        #expect(status == .unknown)
+        var unspecified = vm
+        unspecified.status = .unspecified
+        let unspecifiedBytes = try MessageEnvelope(
+            message: ObservedStateReport(agentId: "agent", vms: [unspecified], resources: Fixtures.resources)
+        ).serializedData()
+        #expect(throws: AgentProtocolDecodeError.self) { try WireProtocol.decodeEnvelope(unspecifiedBytes) }
+    }
+
     @Test("UUID spellings canonicalize throughout nested messages without losing future fields")
     func canonicalizesProtocolIdentifiers() throws {
         let id = UUID(uuidString: "ABCD1234-ABCD-4BCD-8BCD-ABCD1234ABCD")!

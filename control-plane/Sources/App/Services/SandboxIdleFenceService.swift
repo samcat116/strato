@@ -89,7 +89,7 @@ enum SandboxIdleFenceService {
     ) async throws {
         try report?.validateProtocol()
         var normalized = report
-        try normalized?.normalizeProtocolIdentifiers()
+        try normalized?.normalizeProtocolValues()
         let report = normalized
         guard let sql = db as? any SQLDatabase, let owner = sandbox.hypervisorId, let ownerID = UUID(uuidString: owner)
         else { return }

@@ -41,6 +41,15 @@ struct AgentProtocolSessionTests {
             let newerReplica = try await AgentProtocolSession.load(
                 agentID: id, sessionID: first, localOffer: offer, on: app.db)
             #expect(newerReplica.agreement.capabilities.isEmpty)
+            // A session's agreement is written once: repeating the same offer is
+            // idempotent, but a changed offer on the same session is refused.
+            try await AgentProtocolSession.persist(offer, agentID: id, sessionID: first, on: app.db)
+            await #expect(throws: Abort.self) {
+                try await AgentProtocolSession.persist(
+                    AgentProtocolCompatibility.localOffer, agentID: id, sessionID: first, on: app.db)
+            }
+            let unchanged = try await AgentProtocolSession.load(agentID: id, sessionID: first, on: app.db)
+            #expect(unchanged.offer.capabilities == ["future-feature.v1"])
 
             let second = UUID()
             try await InventorySessionFence.replace(second, agentID: id, on: app.db)

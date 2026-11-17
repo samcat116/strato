@@ -180,7 +180,7 @@ extension Agent {
                 throw AgentUpdateBridgeResponse.BridgeError.unsupportedExchange
             }
             if bridge.workloadWireVersion != Int(AgentProtocolCompatibility.major) {
-                // Preserve the established exact-version session on a failed
+                // Preserve the established workload session on a failed
                 // probe. Only verified skew can withdraw its workload poller.
                 await desiredStatePoller?.stop()
                 let update = try bridge.skewUpdate(agentWireVersion: Int(AgentProtocolCompatibility.major))

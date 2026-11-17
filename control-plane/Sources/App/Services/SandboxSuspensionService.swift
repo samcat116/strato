@@ -30,7 +30,7 @@ enum SandboxSuspensionService {
     static func apply(_ observed: ObservedSandboxState, to sandbox: Sandbox, on db: any Database) async throws -> Bool {
         try observed.validateProtocol()
         var normalized = observed
-        try normalized.normalizeProtocolIdentifiers()
+        try normalized.normalizeProtocolValues()
         let observed = normalized
         var changed = false
         if let estimate = observed.optionalSuspensionStorageEstimateBytes,

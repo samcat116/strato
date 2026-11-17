@@ -11,7 +11,10 @@ on SwiftProtobuf, while SPIFFE certificate verification remains a separate targe
 Agent WebSockets carry binary Protobuf envelopes with a typed `oneof` body.
 HTTP desired-state polling carries the same contract with `application/protobuf`.
 Console and exec payloads are bytes, not base64 text. The migration is a hard
-cutover: JSON/text workload frames are rejected.
+cutover: JSON/text workload frames are rejected. Deploy it as a whole-fleet
+restart, not replica by replica: the cross-replica delivery request also changed
+shape (it carries the encoded frame), so a pre-cutover replica and a Protobuf
+replica cannot forward agent frames to each other.
 
 The transport choice does not change reconciliation. Agents still pull complete,
 generation-guarded desired state. Contentless Valkey doorbells optimize latency;
@@ -30,6 +33,8 @@ fields excluded; raw Protobuf serialization is not a canonical hash input.
 Protocol **major 1** is the complete initial workload baseline. Compatible schema
 additions do not increment it. Registration advertises immutable capability IDs;
 peers negotiate their intersection and bind the result to a registration session.
+That binding is written once: re-registering on the same session with a different
+offer is refused, and every desired-state assembly re-reads the session's agreement.
 Protocol support does not imply that a host has the hardware or services required
 to realize a feature.
 
@@ -42,7 +47,12 @@ assembly, and delivery, including HTTP polls served by another replica.
 Collections with authority or optionality use message wrappers. A missing section
 means no opinion where allowed; an explicitly empty section is authoritative.
 Missing mandatory sections fail validation. Binary validators reject unspecified
-or unknown values in actionable enum fields. UUID strings are validated and
+enum values everywhere. Enums are closed by default: an unrecognized value fails
+the whole message, so a sender may use a new value only after a negotiated
+capability says the peer understands it. Observation-only enums with an explicit
+`UNKNOWN` case are marked `// Open:` in the schema; an unrecognized value from a
+newer peer decodes as that fallback instead of rejecting the report, so adding an
+observed status needs no capability. UUID strings are validated and
 canonicalized throughout nested messages at binary encode/decode boundaries,
 preserving the case-insensitive identity semantics of the former UUID models
 without dropping unknown Protobuf fields. Stored-manifest quarantine and salvage
@@ -621,7 +631,9 @@ metadata journal.
 bridge-capable binaries. It carries only the control plane's protocol
 major and an already authorized update artifact. It does not register a workload
 session. Workload desired-state polls carry the negotiated session ID in
-`Strato-Agent-Session`; stale or absent sessions are rejected before assembly.
+`Strato-Agent-Session`; stale or absent sessions are rejected before assembly,
+and so are polls from an administratively offline agent (`409`), matching how
+other agent writes treat an offline node.
 See [staging and bootstrap limits](./agent-updates.md#stable-bridge-exchange-str-340).
 
 ### Guest configuration terminal retry fence (STR-92, wire v71)

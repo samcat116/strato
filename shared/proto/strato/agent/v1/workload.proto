@@ -513,6 +513,7 @@ enum ConsoleStream {
   CONSOLE_STREAM_VNC = 2;
 }
 
+// Open: an unrecognized value from a newer peer decodes as SANDBOX_GUEST_IDLE_COVERAGE_UNKNOWN.
 enum SandboxGuestIdleCoverage {
   SANDBOX_GUEST_IDLE_COVERAGE_UNSPECIFIED = 0;
   SANDBOX_GUEST_IDLE_COVERAGE_COMPLETE = 1;
@@ -2867,6 +2868,7 @@ enum NodeCapability {
   NODE_CAPABILITY_CEPH_VOLUMES = 7;
 }
 
+// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_COMPATIBILITY_UNKNOWN.
 enum NodeDependencyCompatibility {
   NODE_DEPENDENCY_COMPATIBILITY_UNSPECIFIED = 0;
   NODE_DEPENDENCY_COMPATIBILITY_UNKNOWN = 1;
@@ -2904,6 +2906,7 @@ message NodeDependencyFailureReason {
   optional string message = 2;
 }
 
+// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_FUNCTIONAL_STATE_UNKNOWN.
 enum NodeDependencyFunctionalState {
   NODE_DEPENDENCY_FUNCTIONAL_STATE_UNSPECIFIED = 0;
   NODE_DEPENDENCY_FUNCTIONAL_STATE_UNKNOWN = 1;
@@ -2984,6 +2987,7 @@ enum NodeDependencyRole {
   NODE_DEPENDENCY_ROLE_STORAGE = 5;
 }
 
+// Open: an unrecognized value from a newer peer decodes as NODE_DEPENDENCY_SUPERVISOR_STATE_UNKNOWN.
 enum NodeDependencySupervisorState {
   NODE_DEPENDENCY_SUPERVISOR_STATE_UNSPECIFIED = 0;
   NODE_DEPENDENCY_SUPERVISOR_STATE_NOT_APPLICABLE = 1;
@@ -3037,6 +3041,7 @@ message ObservedLoadBalancerBackend {
   google.protobuf.Timestamp last_checked_at = 3;
 }
 
+// Open: an unrecognized value from a newer peer decodes as OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNKNOWN.
 enum ObservedLoadBalancerBackendHealth {
   OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNSPECIFIED = 0;
   OBSERVED_LOAD_BALANCER_BACKEND_HEALTH_UNKNOWN = 1;
@@ -3754,6 +3759,7 @@ message ResourceEnforcementSnapshot {
 
 // Operator-facing pressure summary. Raw signals remain the alert authority;
 // this bounded state is the compact field later placement policy can consume.
+// Open: an unrecognized value from a newer peer decodes as RESOURCE_PRESSURE_HEALTH_UNKNOWN.
 enum ResourcePressureHealth {
   RESOURCE_PRESSURE_HEALTH_UNSPECIFIED = 0;
   RESOURCE_PRESSURE_HEALTH_UNKNOWN = 1;
@@ -4088,6 +4094,7 @@ message SandboxSpec {
 // `VMStatus`, with one sandbox-specific case:
 // `.exited`, because a sandbox's workload can finish on its own — something a
 // VM never does from the control plane's point of view.
+// Open: an unrecognized value from a newer peer decodes as SANDBOX_STATUS_UNKNOWN.
 enum SandboxStatus {
   SANDBOX_STATUS_UNSPECIFIED = 0;
   // Exists agent-side (rootfs materialized) but not running.
@@ -4259,6 +4266,7 @@ message UnrecognizedWorkload {
 }
 
 // Type of VM event
+// Open: an unrecognized value from a newer peer decodes as VM_EVENT_TYPE_UNKNOWN.
 enum VMEventType {
   VM_EVENT_TYPE_UNSPECIFIED = 0;
   VM_EVENT_TYPE_STATUS_CHANGE = 1;
@@ -4269,6 +4277,7 @@ enum VMEventType {
 }
 
 // Log level for VM log messages
+// Open: an unrecognized value from a newer peer decodes as VM_LOG_LEVEL_UNKNOWN.
 enum VMLogLevel {
   VM_LOG_LEVEL_UNSPECIFIED = 0;
   VM_LOG_LEVEL_DEBUG = 1;
@@ -4301,6 +4310,7 @@ message VMLogMessage {
 }
 
 // Source of the log message
+// Open: an unrecognized value from a newer peer decodes as VM_LOG_SOURCE_UNKNOWN.
 enum VMLogSource {
   VM_LOG_SOURCE_UNSPECIFIED = 0;
   VM_LOG_SOURCE_AGENT = 1;
@@ -4441,9 +4451,9 @@ message VMSpec {
   optional MetadataSource metadata_source = 19;
 }
 
-// Observed VM lifecycle state. UNKNOWN is an explicit observation; it differs
-// from an unrecognized enum number, which fails binary validation. Legacy JSON
-// decoding retains its historical fallback to UNKNOWN.
+// Observed VM lifecycle state. Legacy JSON decoding retains its historical
+// fallback to UNKNOWN.
+// Open: an unrecognized value from a newer peer decodes as VM_STATUS_UNKNOWN.
 enum VMStatus {
   VM_STATUS_UNSPECIFIED = 0;
   VM_STATUS_CREATED = 1;

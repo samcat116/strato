@@ -23,7 +23,8 @@ struct AgentProtocolSession: Sendable {
                 """
                 SELECT inventory_session_id, protocol_major, protocol_capabilities::text AS capabilities,
                     protocol_agreed_capabilities::text AS agreed_capabilities
-                FROM agents WHERE id = \(bind: agentID) AND administratively_offline = FALSE
+                FROM agents WHERE id = \(bind: agentID) AND protocol_session_id = inventory_session_id
+                    AND administratively_offline = FALSE
                 """
             ).first(),
             let id = try row.decode(column: "inventory_session_id", as: UUID?.self),
@@ -47,6 +48,9 @@ struct AgentProtocolSession: Sendable {
     }
 
     /// Called inside the same transaction that replaces inventory_session_id.
+    /// A session's agreement is immutable: re-registering on the same session
+    /// with a different offer is refused, so an in-flight poll can never be
+    /// served against an agreement other than the one its session negotiated.
     static func persist(
         _ offer: Strato_Agent_V1_ProtocolOffer, agentID: UUID, sessionID: UUID, on database: any Database
     ) async throws {
@@ -59,11 +63,17 @@ struct AgentProtocolSession: Sendable {
             """
             UPDATE agents SET protocol_major = \(bind: Int(offer.major)),
                 protocol_capabilities = \(bind: capabilities)::jsonb,
-                protocol_agreed_capabilities = \(bind: agreedCapabilities)::jsonb
+                protocol_agreed_capabilities = \(bind: agreedCapabilities)::jsonb,
+                protocol_session_id = \(bind: sessionID)
             WHERE id = \(bind: agentID) AND inventory_session_id = \(bind: sessionID)
+                AND (protocol_session_id IS DISTINCT FROM \(bind: sessionID)
+                    OR (protocol_major = \(bind: Int(offer.major))
+                        AND protocol_capabilities = \(bind: capabilities)::jsonb))
             RETURNING id
             """
         ).first()
-        guard updated != nil else { throw Abort(.conflict, reason: "Agent registration was superseded") }
+        guard updated != nil else {
+            throw Abort(.conflict, reason: "Agent registration was superseded or changed its protocol offer")
+        }
     }
 }

@@ -258,8 +258,10 @@ struct AgentWebSocketController: RouteCollection {
         // bare name. `identity.name` is for display and the register response.
         let agentKey = agent.identity.key
         let agentName = agent.name
+        var messageType: String?
         do {
             let envelope = try WireProtocol.decodeEnvelope(data)
+            messageType = envelope.type.rawValue
             // Never render a decoded Protobuf message: descriptions include secrets.
             req.logger.trace(
                 "Processing WebSocket message",
@@ -298,7 +300,7 @@ struct AgentWebSocketController: RouteCollection {
 
                     // Send registration response with the assigned UUID
                     let response = AgentRegisterResponseMessage(
-                        requestId: message.requestId,
+                        requestId: message.requestID,
                         agentId: agentUUID.uuidString,
                         name: agentName,
                         agreement: try AgentProtocolCompatibility.negotiate(
@@ -337,37 +339,51 @@ struct AgentWebSocketController: RouteCollection {
                         errorCode = nil
                     }
                     self.sendErrorResponse(
-                        ws: ws, requestId: message.requestId,
+                        ws: ws, requestId: message.requestID,
                         error: "Failed to register agent: \(error.localizedDescription)",
                         code: errorCode, logger: req.logger)
                 }
 
             case .agentHeartbeat:
                 let message = try envelope.decode(as: AgentHeartbeatMessage.self)
-                do {
-                    try await req.agentService.updateAgentHeartbeat(
-                        message, fromAgentKey: agentKey, inventorySession: inventorySessionID)
-                    self.sendSuccessResponse(
-                        ws: ws, requestId: message.requestId, message: "Heartbeat acknowledged", logger: req.logger)
-                } catch {
-                    req.logger.error("Failed to update heartbeat: \(error)")
-                    self.sendErrorResponse(
-                        ws: ws, requestId: message.requestId, error: "Failed to update heartbeat",
-                        logger: req.logger)
+                // Off the serial frame lane: a slow heartbeat write must not
+                // hold console and exec frames behind it (and overflow the
+                // byte-bounded queue). The inventory-session fence makes a
+                // late heartbeat from a superseded session a no-op.
+                req.application.backgroundTasks.spawn {
+                    do {
+                        try await req.agentService.updateAgentHeartbeat(
+                            message, fromAgentKey: agentKey, inventorySession: inventorySessionID)
+                        self.sendSuccessResponse(
+                            ws: ws, requestId: message.requestID, message: "Heartbeat acknowledged",
+                            logger: req.logger)
+                    } catch {
+                        req.logger.error(
+                            "Failed to update heartbeat",
+                            metadata: ["strato.agent.name": .string(agentName), "error": .string("\(error)")])
+                        self.sendErrorResponse(
+                            ws: ws, requestId: message.requestID, error: "Failed to update heartbeat",
+                            logger: req.logger)
+                    }
                 }
 
             case .agentUnregister:
                 let message = try envelope.decode(as: AgentUnregisterMessage.self)
-                do {
-                    try await req.agentService.unregisterAgent(message.agentID, fromAgentKey: agentKey)
-                    self.sendSuccessResponse(
-                        ws: ws, requestId: message.requestId, message: "Agent unregistered successfully",
-                        logger: req.logger)
-                } catch {
-                    req.logger.error("Failed to unregister agent: \(error)")
-                    self.sendErrorResponse(
-                        ws: ws, requestId: message.requestId, error: "Failed to unregister agent",
-                        logger: req.logger)
+                // Off the serial frame lane for the same reason as heartbeats.
+                req.application.backgroundTasks.spawn {
+                    do {
+                        try await req.agentService.unregisterAgent(message.agentID, fromAgentKey: agentKey)
+                        self.sendSuccessResponse(
+                            ws: ws, requestId: message.requestID, message: "Agent unregistered successfully",
+                            logger: req.logger)
+                    } catch {
+                        req.logger.error(
+                            "Failed to unregister agent",
+                            metadata: ["strato.agent.name": .string(agentName), "error": .string("\(error)")])
+                        self.sendErrorResponse(
+                            ws: ws, requestId: message.requestID, error: "Failed to unregister agent",
+                            logger: req.logger)
+                    }
                 }
 
             case .success, .error:
@@ -535,7 +551,22 @@ struct AgentWebSocketController: RouteCollection {
                 ws.eventLoop.execute { _ = ws.close(code: .policyViolation) }
                 return
             }
-            req.logger.error("Failed to handle Protobuf WebSocket message")
+            // Protocol errors are value-free; for anything else log only the
+            // type, since rendering arbitrary errors could echo payload secrets.
+            let reason: String
+            switch error {
+            case let error as AgentProtocolDecodeError: reason = "\(error)"
+            case let error as AgentProtocolCompatibility.Failure: reason = "\(error)"
+            default: reason = String(reflecting: type(of: error))
+            }
+            req.logger.error(
+                "Failed to handle Protobuf WebSocket message",
+                metadata: [
+                    "strato.agent.name": .string(agentName),
+                    "type": .string(messageType ?? "undecoded"),
+                    "frameBytes": .stringConvertible(data.count),
+                    "reason": .string(reason),
+                ])
             sendErrorResponse(
                 ws: ws, requestId: "", error: "Failed to process Protobuf message",
                 logger: req.logger)

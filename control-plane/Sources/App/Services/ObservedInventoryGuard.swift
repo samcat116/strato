@@ -63,7 +63,7 @@ struct ObservedInventoryGuard {
     static func counts(for report: ObservedStateReport, on db: any Database) async throws -> [Section: Counts] {
         try report.validateProtocol()
         var normalized = report
-        try normalized.normalizeProtocolIdentifiers()
+        try normalized.normalizeProtocolValues()
         let report = normalized
         let vms = try await VM.query(on: db).filter(\.$hypervisorId == report.agentID).all()
         let sandboxes = try await Sandbox.query(on: db).filter(\.$hypervisorId == report.agentID).all()

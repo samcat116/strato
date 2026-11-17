@@ -73,15 +73,23 @@ public enum AgentProtocolCompatibility {
         try validateCapabilities(offer.capabilities)
     }
 
+    /// Lowercase ASCII letters, digits, and `-` `.` `/` `_`.
+    private static func isCapabilityByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "0")...UInt8(ascii: "9"),
+            UInt8(ascii: "-"), UInt8(ascii: "."), UInt8(ascii: "/"), UInt8(ascii: "_"):
+            return true
+        default:
+            return false
+        }
+    }
+
     private static func validateCapabilities(_ capabilities: [String]) throws {
         // Bound negotiation work and accept stable ASCII identifiers only.
         guard capabilities.count <= 256 else { throw Failure.invalidCapability }
         for capability in capabilities {
             guard !capability.isEmpty, capability.utf8.count <= 128,
-                capability.utf8.allSatisfy({ byte in
-                    (97...122).contains(byte) || (48...57).contains(byte)
-                        || byte == 45 || byte == 46 || byte == 47 || byte == 95
-                })
+                capability.utf8.allSatisfy(isCapabilityByte)
             else { throw Failure.invalidCapability }
         }
     }

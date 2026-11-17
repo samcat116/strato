@@ -252,7 +252,7 @@ public actor Reconciler {
         var message = message
         do {
             try message.validateProtocol()
-            try message.normalizeProtocolIdentifiers()
+            try message.normalizeProtocolValues()
         } catch {
             logger.error("Refusing invalid desired-state snapshot")
             return

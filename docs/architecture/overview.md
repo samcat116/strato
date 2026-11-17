@@ -55,7 +55,7 @@ The control plane is declarative, not imperative:
   contentless broadcast doorbell so a parked poll answers immediately; the
   agent also re-fetches unconditionally on a slow timer, which is the
   correctness invariant behind every optimization in the path. Registration
-  requires the current wire version, so there is no legacy push branch.
+  requires a matching protocol major, so there is no legacy push branch.
 - The agent-side reconciler diffs observed vs desired and converges via
   per-workload serial lanes, then reports observed state back — including
   the generation it converged toward and any convergence error. Absence

@@ -94,7 +94,9 @@ struct AgentDesiredStateController: RouteCollection {
             throw Abort(.forbidden, reason: "No agent is registered for this identity")
         }
 
-        let protocolSession = try await AgentProtocolSession.load(
+        // Refuse a superseded or administratively-offline session before any
+        // assembly side effect; each assembly below re-checks it.
+        _ = try await AgentProtocolSession.load(
             agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
 
         let agentKey = agent.identity.key
@@ -129,11 +131,11 @@ struct AgentDesiredStateController: RouteCollection {
             let message = try await req.application.desiredStateAssembler.assemble(agentId: agentId)
             // A parked poll cannot outlive the registration whose capabilities
             // authorized its assembly. Check again after every async assembly.
-            _ = try await AgentProtocolSession.load(
+            let currentSession = try await AgentProtocolSession.load(
                 agentID: agentRow.requireID(), sessionID: sessionID, on: req.db)
             let envelope = try MessageEnvelope(message: message)
             try AgentProtocolCompatibility.require(
-                envelope.requirements, agreement: protocolSession.agreement,
+                envelope.requirements, agreement: currentSession.agreement,
                 offered: AgentProtocolCompatibility.localOffer)
             let etag = try DesiredStateDigest.etag(for: message)
             assemblies += 1

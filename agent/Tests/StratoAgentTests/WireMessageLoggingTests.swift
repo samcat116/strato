@@ -240,7 +240,7 @@ struct WireMessageLoggingTests {
             message: message,
             envelope: envelope,
             encodedFrame: WireProtocol.encodeEnvelope(envelope),
-            requestId: message.requestId,
+            requestId: message.requestID,
             sentinels: sentinels,
             expectedCorrelation: expectedCorrelation)
     }
