@@ -88,7 +88,7 @@ struct CurrentSchemaBaselineTests {
             try await protocolSupport.prepare(on: app.db)
             #expect(try await catalogMD5(on: app.db) == upgradedMD5)
             #expect(upgradedCounts.tables == 85)
-            #expect(upgradedCounts.columns == 1100)
+            #expect(upgradedCounts.columns == 1101)
             #expect(upgradedCounts.constraints == 391)
             #expect(upgradedCounts.indexes == 256)
             #expect(upgradedCounts.enums == baselineCounts.enums)
