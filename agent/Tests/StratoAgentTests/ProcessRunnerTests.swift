@@ -75,6 +75,35 @@ struct ProcessRunnerTests {
         #expect(stdout == "ok")
     }
 
+    @Test("Quiet subprocess pipes do not starve another command's watchdog")
+    func quietPipesDoNotStarveWatchdog() async throws {
+        let started = ContinuousClock.now
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Unbounded callers must not occupy every global-queue worker:
+            // Swift's sleep wakeups and the bounded caller need that queue too.
+            for _ in 0..<32 {
+                group.addTask {
+                    let result = try await ProcessRunner.run(
+                        executableURL: URL(fileURLWithPath: "/bin/sleep"), arguments: ["12"])
+                    #expect(result.terminationStatus == 0)
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .milliseconds(500))
+                await #expect(throws: ProcessTimedOutError.self) {
+                    try await ProcessRunner.run(
+                        executableURL: URL(fileURLWithPath: "/bin/sh"),
+                        arguments: ["-c", "trap '' TERM; exec sleep 120"],
+                        timeout: .milliseconds(100))
+                }
+                // Include the initial sleep: starving its wakeup is already a
+                // failure, even if the subprocess launches quickly afterward.
+                #expect(ContinuousClock.now - started < .seconds(8))
+            }
+            try await group.waitForAll()
+        }
+    }
+
     @Test("A child crossing the combined output ceiling is terminated")
     func outputLimitTerminatesAndThrows() async {
         await #expect(throws: ProcessRunnerError.self) {
