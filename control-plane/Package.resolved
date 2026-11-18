@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
       "state" : {
-        "revision" : "eaad084d6c26ff1f2e96f9c2ab76ef84d7165ab6",
-        "version" : "2.9.2"
+        "revision" : "ff4420d7c33cc998a590b0761630d67f76bc291e",
+        "version" : "2.10.0"
       }
     },
     {
@@ -303,8 +303,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
-        "version" : "1.15.1"
+        "revision" : "e3da04078777e6a1b72ce19981fbd6539b0847d8",
+        "version" : "1.17.0"
       }
     },
     {
@@ -438,8 +438,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/swift-service-lifecycle.git",
       "state" : {
-        "revision" : "9829955b385e5bb88128b73f1b8389e9b9c3191a",
-        "version" : "2.11.0"
+        "revision" : "a18ee16b8039866fd919bdb4e8e906882d4ecc75",
+        "version" : "2.13.0"
       }
     },
     {
@@ -482,8 +482,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/valkey-io/valkey-swift.git",
       "state" : {
-        "revision" : "59d04ff34b513410e0a6d48d917e95bce7032ae3",
-        "version" : "1.5.0"
+        "revision" : "541f50f8cb89fe8e15dbb50331be45f60a1d2f98",
+        "version" : "1.6.0"
       }
     },
     {
@@ -491,8 +491,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/vapor.git",
       "state" : {
-        "revision" : "6f8091db7f159f966e028fbbc928cdcfa8597d59",
-        "version" : "4.122.1"
+        "revision" : "48852309b11230e62a89b41a9c578c93f4d2d916",
+        "version" : "4.122.3"
       }
     },
     {
