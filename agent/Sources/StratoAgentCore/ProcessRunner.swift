@@ -60,7 +60,7 @@ public struct ProcessTimedOutError: Error, CustomStringConvertible, Sendable {
 /// `Process.run()` + `waitUntilExit()` blocks the calling thread for the entire
 /// lifetime of the subprocess. Doing that directly inside an `async` method ties
 /// up a cooperative-pool thread, which can starve unrelated work. `ProcessRunner`
-/// moves pipe draining onto global dispatch queues and observes exit through the
+/// moves pipe draining onto dedicated dispatch queues and observes exit through the
 /// process's `terminationHandler`, so `await`ing it suspends rather than blocks.
 ///
 /// Exit is deliberately NOT observed via `waitUntilExit()`: on macOS
@@ -499,7 +499,12 @@ public enum ProcessRunner {
         deadlineExceeded: TimeoutFlag? = nil
     ) async -> Data {
         await withCheckedContinuation { continuation in
-            DispatchQueue.global().async {
+            // A drain can block for the child's entire lifetime. Global queues
+            // share workers with Swift's timer wakeups on Linux: enough quiet
+            // pipes can postpone the watchdog until an unrelated child exits.
+            // A private serial queue lets Dispatch compensate for its blocked
+            // worker. Use one per pipe so stderr never waits behind stdout.
+            DispatchQueue(label: "strato.process-runner.pipe-drain").async {
                 var data = Data()
                 let bufferSize = 4096
                 var buffer = [UInt8](repeating: 0, count: bufferSize)
