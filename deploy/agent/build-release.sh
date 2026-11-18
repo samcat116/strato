@@ -13,6 +13,10 @@ case "$(uname -m):$arch" in
   x86_64:x86_64|aarch64:arm64) ;;
   *) echo "native architecture does not match $arch" >&2; exit 1 ;;
 esac
+# The Protobuf major is also used by the update bridge and artifact downloader.
+# Validate it before the expensive release builds; never publish missing metadata.
+wire=$(python3 deploy/agent/package-release.py wire-version \
+  --source shared/Sources/StratoShared/AgentProtocolCompatibility.swift)
 cat > agent/Sources/StratoAgentRuntime/CompiledBuildInfo.swift <<EOF
 enum CompiledBuildInfo {
     static let version: String? = "main-${GITHUB_SHA::12}"
@@ -39,7 +43,6 @@ strip "$bin/StratoAgent"
 libraries=$(ldd "$bin/StratoAgent")
 printf '%s\n' "$libraries"
 if grep -E 'libswift|libFoundation|lib_Foundation|libdispatch|libBlocksRuntime|libjemalloc|libxml2|libicu|not found' <<< "$libraries"; then exit 1; fi
-wire=$(sed -n 's/.*public static let currentVersion = \([0-9]*\).*/\1/p' shared/Sources/StratoShared/WireProtocol.swift)
 python3 deploy/agent/package-release.py package --binary "$bin/StratoAgent" \
   --arch "$arch" --sha "$GITHUB_SHA" --wire-version "$wire" \
   --epoch "$(git -c safe.directory="$PWD" show -s --format=%ct HEAD)" --output "$output"
