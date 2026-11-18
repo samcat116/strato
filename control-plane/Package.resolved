@@ -482,8 +482,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/valkey-io/valkey-swift.git",
       "state" : {
-        "revision" : "59d04ff34b513410e0a6d48d917e95bce7032ae3",
-        "version" : "1.5.0"
+        "revision" : "541f50f8cb89fe8e15dbb50331be45f60a1d2f98",
+        "version" : "1.6.0"
       }
     },
     {
