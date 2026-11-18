@@ -11,6 +11,16 @@ import subprocess
 import tarfile
 
 
+def current_wire_version(source):
+    """Read the protocol major used by the agent's update bridge, failing closed."""
+    declarations = re.findall(
+        r"^\s*public static let major\s*:\s*UInt32\s*=\s*([0-9]+)\s*$",
+        source.read_text(), re.MULTILINE)
+    if len(declarations) != 1 or not 0 < int(declarations[0]) <= 0xFFFFFFFF:
+        raise ValueError("expected exactly one positive UInt32 AgentProtocolCompatibility.major")
+    return int(declarations[0])
+
+
 def package(binary, arch, sha, wire_version, epoch, output):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("expected a full lowercase commit SHA")
@@ -71,6 +81,8 @@ def manifest(directory, repository):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    wire = commands.add_parser("wire-version")
+    wire.add_argument("--source", type=Path, required=True)
     pack = commands.add_parser("package")
     pack.add_argument("--binary", type=Path, required=True)
     pack.add_argument("--arch", required=True)
@@ -83,4 +95,7 @@ if __name__ == "__main__":
     merge.add_argument("--repository", required=True)
     args = vars(parser.parse_args())
     command = args.pop("command")
-    (package if command == "package" else manifest)(**args)
+    if command == "wire-version":
+        print(current_wire_version(**args))
+    else:
+        (package if command == "package" else manifest)(**args)

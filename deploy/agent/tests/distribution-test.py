@@ -2,6 +2,8 @@
 import importlib.util
 import json
 import re
+import os
+import subprocess
 from pathlib import Path
 import tarfile
 import tempfile
@@ -33,6 +35,58 @@ class DistributionTests(unittest.TestCase):
 
     def package(self, arch="x86_64", sha=None, output=None):
         release.package(self.binary, arch, sha or self.sha, 72, 1000, output or self.root)
+
+    def test_packages_current_protocol_major_from_authoritative_source(self):
+        source = ROOT.parents[1] / "shared/Sources/StratoShared/AgentProtocolCompatibility.swift"
+        result = subprocess.run(
+            ["python3", str(ROOT / "package-release.py"), "wire-version", "--source", str(source)],
+            check=True, capture_output=True, text=True)
+        major = release.current_wire_version(source)
+        self.assertEqual(result.stdout, f"{major}\n")
+        release.package(self.binary, "arm64", self.sha, major, 1000, self.root)
+        metadata = json.loads((self.root / "agent-linux-arm64.json").read_text())
+        self.assertEqual(metadata["workloadWireVersion"], major)
+
+    def test_protocol_major_tracks_future_values(self):
+        source = self.root / "AgentProtocolCompatibility.swift"
+        source.write_text("public enum AgentProtocolCompatibility {\n    public static let major: UInt32 = 9\n}\n")
+        self.assertEqual(release.current_wire_version(source), 9)
+
+    def test_protocol_major_rejects_missing_ambiguous_and_invalid_values(self):
+        source = self.root / "AgentProtocolCompatibility.swift"
+        declaration = "    public static let major: UInt32 = 1\n"
+        for content in ("", "public static let currentVersion = 72\n", declaration * 2,
+                        declaration.replace("= 1", "= 0"), declaration.replace("= 1", "= -1"),
+                        declaration.replace("= 1", "= 4294967296"),
+                        declaration.replace("= 1", "= otherConstant")):
+            with self.subTest(content=content):
+                source.write_text(content)
+                with self.assertRaises(ValueError):
+                    release.current_wire_version(source)
+
+    def test_release_script_rejects_missing_major_before_building(self):
+        # Execute the production shell entry point with only identity commands
+        # stubbed. The obsolete WireProtocol sed lookup would continue to build.
+        checkout = self.root / "checkout"
+        tools = self.root / "tools"
+        tools.mkdir()
+        (checkout / "deploy/agent").mkdir(parents=True)
+        (checkout / "agent/Sources/StratoAgentRuntime").mkdir(parents=True)
+        source_dir = checkout / "shared/Sources/StratoShared"
+        source_dir.mkdir(parents=True)
+        (source_dir / "AgentProtocolCompatibility.swift").write_text("// missing major\n")
+        (checkout / "deploy/agent/package-release.py").write_text((ROOT / "package-release.py").read_text())
+        for name, output in (("git", self.sha), ("uname", "x86_64")):
+            tool = tools / name
+            tool.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+            tool.chmod(0o755)
+        result = subprocess.run(["bash", str(ROOT / "build-release.sh"), "x86_64", "out"],
+                                cwd=checkout, capture_output=True, text=True,
+                                env={**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                                     "GITHUB_SHA": self.sha, "SWIFTPM_CACHE_PATH": str(self.root / "cache")})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("expected exactly one positive UInt32", result.stderr)
+        self.assertFalse((checkout / "agent/Sources/StratoAgentRuntime/CompiledBuildInfo.swift").exists())
 
     def test_deterministic_archive_and_manifest_contract(self):
         self.package()
